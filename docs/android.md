@@ -47,5 +47,6 @@ the app to change keys removes its wallets, so write the seed phrases down first
 Run by hand on a Galaxy Note 2 and a Pixel 6 over the project's life: sync, receive by receipt, send, a signing
 request, restore. After the last change to the build (finding 49) a copy holding a read-only wallet was driven
 over adb on a Galaxy Note 2 (Android 7.1.2) and a Pixel 6 (Android 17): sync, Receive and its Copy button, the
-Boxes list, the back button. Nothing that needs the screen lock has been run since: create, restore, send, sign
-and consolidate are built and compile, and want trying before they are relied on.
+Boxes list, the back button. The build released as v0.0.1 was then tried by hand on the Note 2 by
+the maintainer, who reports that most of the app was tried and that everything tried worked; which screens was
+not written down, and no log was kept. It has not been run on the Pixel 6 or any other phone.

@@ -14,9 +14,12 @@ Both rest on the same thing: a wallet that asks the network for little and belie
 learns the chain tip from what peers push, accepts it on work and on agreement among network groups, and counts
 a coin as its own only with a proof that the box is unspent under that tip.
 
-**Experimental.** No person outside the project has reviewed it (the reviews in the findings log were by other
-AI models given the code cold), it has no warranty, and it will change. The default network is mainnet, which
-is real money: use `--network testnet`, or amounts you can afford to lose. What it trusts is said plainly [below](#what-it-trusts).
+**Experimental, and not yet a wallet for funds that matter.** "It works" here means it has worked in the runs the
+findings log records, not that it is safe to hold money. No person outside the project has reviewed it (the
+reviews in the findings log were by other AI models given the code cold), no forged chain has been run against
+it, it has no warranty, and it will change. The default network is mainnet, which is real money: use
+`--network testnet`, or amounts you can afford to lose. What it trusts is said plainly [below](#what-it-trusts);
+what stands between it and real funds is listed in `docs/roadmap.md`. Review is what it most needs.
 
 ## For agents
 
@@ -60,10 +63,11 @@ panic, as the phone's does, a malformed proof can still take the caller down wit
 
 `android/` is the app: several wallets, send and receive with ERG and tokens, receipts as QR codes, payments
 signed offline and sent later, signing requests from other sites, all on the same core. It has run on a Galaxy
-Note 2 from 2012; the core is 2.7 MB and starts in 16 ms there. See `docs/android.md` for what has been tried on a
-phone since the last changes (sync, receive and the box list have; sending, signing and restoring have not).
-A release carries an APK for each kind of phone, signed with the project's key, and the Linux program; the
-checksums are beside them. Building your own is as good.
+Note 2 from 2012; the core is 2.7 MB and starts in 16 ms there. `docs/android.md` says what has been tried
+on a phone and what has not: the released build was tried by hand on the Note 2 by the maintainer, and on no
+other phone. A release carries an APK for each kind of phone, signed with the project's key (`SECURITY.md` gives
+its fingerprint), and the Linux program; the checksums are beside them. They are the maintainer's builds, not
+reproducible ones: building your own is as good, and for money, better.
 
 ## The payments it was designed around
 

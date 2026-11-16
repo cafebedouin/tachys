@@ -10,8 +10,15 @@ coins, forge a balance, or get a false chain tip accepted. Expect an answer with
 in a report or anywhere else. A wallet file can hold the seed phrase in plain text. What a report needs: the
 commit, the network, the command you ran, its JSON answer and exit code.
 
-What is supported: the newest commit on the main branch, built from source. No binaries are published by this
-project; one you were given is someone else's build.
+What is supported: the newest commit on the main branch, built from source, and the newest release on this
+repository's Releases page. A release carries the Linux program, two APKs and `SHA256SUMS`, built by the
+maintainer on their own machine: there is no reproducible build and no build attestation yet, so the checksums
+show that a download is what was uploaded here, not what source it came from. The APKs are signed with the
+project's key; its certificate's SHA-256 is
+
+    6501129cab8edd4a7ea74a693ba77c16e1b1799ff966c191d794c3719d20ff7b
+
+(`apksigner verify --print-certs FILE.apk` shows it). A binary from anywhere else is someone else's build.
 
 Known and accepted, so not news: RUSTSEC-2026-0387 (`crypto-bigint`, through the signing library; what was checked
 is in `.cargo/audit.toml` and finding 48 of `docs/research/findings.md`), and the open items listed in
