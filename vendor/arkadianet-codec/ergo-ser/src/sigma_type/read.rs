@@ -1,0 +1,662 @@
+//! Deserialization direction of the sigma type-descriptor codec:
+//! [`read_type`] / [`decode_type`] and the depth-tracked recursive
+//! decoders enforcing `MAX_TYPE_DEPTH`.
+
+use ergo_primitives::reader::{ReadError, VlqReader};
+
+use super::{
+    embeddable_gate_version, prim_from_code, SigmaType, FUNC_CODE, MAX_TYPE_DEPTH, PRIM_RANGE,
+    SANY_CODE, SAVL_TREE_CODE, SBOX_CODE, SCONTEXT_CODE, SGLOBAL_CODE, SHEADER_CODE,
+    SPREHEADER_CODE, SSTRING_CODE, STYPEVAR_CODE, SUNIT_CODE, TUPLE_CODE,
+};
+
+/// Deserialize a Sigma type descriptor. Public entry — starts the
+/// recursion-depth counter at 0; nested calls go through
+/// `read_type_at_depth` which enforces `MAX_TYPE_DEPTH`.
+pub fn read_type(r: &mut VlqReader) -> Result<SigmaType, ReadError> {
+    read_type_at_depth(r, 0)
+}
+
+/// Internal: decoding entry that propagates the recursion-depth
+/// counter. All recursive `read_type` calls inside `decode_type` and
+/// `decode_constructor` use this so the depth check fires before a
+/// malicious payload exhausts the stack.
+fn read_type_at_depth(r: &mut VlqReader, depth: usize) -> Result<SigmaType, ReadError> {
+    if depth > MAX_TYPE_DEPTH {
+        return Err(ReadError::InvalidData(format!(
+            "type recursion depth exceeds maximum ({MAX_TYPE_DEPTH})"
+        )));
+    }
+    let byte = r.get_u8()?;
+    decode_type_at_depth(r, byte, depth)
+}
+
+/// Decode a type descriptor given the first byte already consumed.
+/// Public so the opcode parser can decode inline constant types.
+/// Starts a fresh depth counter; for nested decodes within an
+/// already-recursing parse, use `decode_type_at_depth` (private).
+pub fn decode_type(r: &mut VlqReader, byte: u8) -> Result<SigmaType, ReadError> {
+    decode_type_at_depth(r, byte, 0)
+}
+
+fn decode_type_at_depth(r: &mut VlqReader, byte: u8, depth: usize) -> Result<SigmaType, ReadError> {
+    let next = depth + 1;
+    match byte {
+        // Scala `TypeSerializer.deserialize` guards `if (c <= 0) throw new
+        // InvalidTypePrefix(...)` on EVERY type byte it reads (`getUByte`, so
+        // `c <= 0` is exactly `c == 0`). `InvalidTypePrefix` extends
+        // `SerializerException`, NOT `ValidationException`, so
+        // `deserializeErgoTree`'s catch does not cover it: a size-delimited tree
+        // whose body carries a zero type byte is REJECTED outright, never wrapped
+        // as `UnparsedErgoTree`. Returning a soft `InvalidData` here funneled it
+        // into the generic body-error wrap and accepted a tree the reference
+        // rejects (cargo-fuzz #305). Every OTHER unknown type code is a rule-1016
+        // `ValidationException` in the reference and stays soft (`InvalidData`)
+        // below, so a size-delimited tree still wraps for those.
+        0 => Err(ReadError::HardReject(
+            "type prefix 0 is not a valid type code (Scala InvalidTypePrefix)".to_string(),
+        )),
+
+        // Primitive embeddable types (1..=11), version-gated exactly like Scala's
+        // `getEmbeddableType` (embeddableV5 = codes 1..=8 pre-v3; embeddableV6 adds
+        // SUnsignedBigInt = code 9 at v3+).
+        1..=11 => prim_from_code(byte, embeddable_gate_version(r)),
+
+        // Special non-embeddable
+        SANY_CODE => Ok(SigmaType::SAny),
+        SUNIT_CODE => Ok(SigmaType::SUnit),
+        SBOX_CODE => Ok(SigmaType::SBox),
+        SAVL_TREE_CODE => Ok(SigmaType::SAvlTree),
+        SCONTEXT_CODE => Ok(SigmaType::SContext),
+        SSTRING_CODE => Ok(SigmaType::SString),
+        STYPEVAR_CODE => {
+            // Scala TypeSerializer.scala:203-204 reads the name length as an
+            // unsigned byte (anything 0..=255) and decodes the bytes with
+            // `new String(bytes, UTF_8)` — the JVM's LOSSY decoder. A strict
+            // `from_utf8` here rejected ill-formed names the Scala node
+            // accepts (reject-valid on sizeless trees; a too-broad soft-fork
+            // placeholder on size-delimited ones), so we mirror the JVM byte
+            // for byte. See [`crate::jvm_utf8`].
+            let name_len = r.get_u8()? as usize;
+            let name_bytes = r.get_bytes(name_len)?;
+            Ok(SigmaType::STypeVar(crate::jvm_utf8::decode(name_bytes)))
+        }
+        SHEADER_CODE => Ok(SigmaType::SHeader),
+        SPREHEADER_CODE => Ok(SigmaType::SPreHeader),
+        SGLOBAL_CODE => Ok(SigmaType::SGlobal),
+
+        // ConstrId-based ranges (12..=95)
+        b @ 12..=95 => decode_constructor_at_depth(r, b, depth),
+
+        // General tuple. Scala TypeSerializer.scala:189-192 reads count as a
+        // single unsigned byte (max 255) and then reads exactly that many
+        // item types — with NO arity check on the way in. Two bugs traced to
+        // the same missing-item-read-order root cause here (cargo-fuzz #305
+        // follow-up):
+        //
+        //   - reject-valid: an earlier version of this arm rejected
+        //     `count < 2` with a soft `InvalidData` BEFORE reading any item
+        //     type. Scala's reader has no such floor — a size-1 (or size-0)
+        //     `STuple` type is a normal accept (e.g. `sigmaProp((0,) == (0,))`
+        //     embeds `STuple[SInt]`, count=1). Rejecting it diverged from a
+        //     tree the reference accepts (a chain-stall class of bug: a block
+        //     containing such a tree would be wrongly rejected).
+        //   - accept-invalid: because that same check fired before the item
+        //     loop ran, a zero type-prefix inside a 1-element (or 0-element)
+        //     tuple never reached the per-item `read_type_at_depth` call that
+        //     hard-rejects byte 0 (see the `0 =>` arm above), so it fell
+        //     through as a soft `InvalidData` — accepted-and-wrapped on a
+        //     size-delimited tree the reference hard-rejects
+        //     (`InvalidTypePrefix`, a `SerializerException` outside
+        //     `deserializeErgoTree`'s catch).
+        //
+        // Reading every item unconditionally, with no arity floor, fixes
+        // both at once: `count` in 0..=255 is always accepted structurally,
+        // and a zero prefix at ANY item position (including the only item of
+        // a 1-tuple) hits the hard reject via the recursive call before this
+        // arm ever returns `Ok`.
+        //
+        // The writer (`write_tuple`) keeps its own `count >= 2` floor — Scala
+        // is asymmetric here: `TypeSerializer.serialize` itself throws
+        // writing back a 0- or 1-element `STuple`, so parity requires the
+        // node to accept such a type on READ (it can appear inside an
+        // existing tree) while still refusing to ORIGINATE one on WRITE.
+        TUPLE_CODE => {
+            let count = r.get_u8()? as usize;
+            let mut elems = Vec::with_capacity(count);
+            for _ in 0..count {
+                elems.push(read_type_at_depth(r, next)?);
+            }
+            Ok(SigmaType::STuple(elems))
+        }
+
+        // SFunc: 0x70 + 1-byte domain count + domain types + range type
+        // + 1-byte tpeParams count + STypeVar idents. Scala
+        // TypeSerializer.scala:212-224 reads counts as unsigned bytes
+        // and requires each tpeParam ident to be an STypeVar
+        // (`require(ident.isInstanceOf[STypeVar])`).
+        FUNC_CODE => {
+            let dom_count = r.get_u8()? as usize;
+            let mut t_dom = Vec::with_capacity(dom_count);
+            for _ in 0..dom_count {
+                t_dom.push(read_type_at_depth(r, next)?);
+            }
+            let t_range = read_type_at_depth(r, next)?;
+            let params_count = r.get_u8()? as usize;
+            let mut tpe_params = Vec::with_capacity(params_count);
+            for _ in 0..params_count {
+                let ident = read_type_at_depth(r, next)?;
+                if !matches!(ident, SigmaType::STypeVar(_)) {
+                    return Err(ReadError::InvalidData(format!(
+                        "SFunc tpeParam must be an STypeVar, got {ident:?}"
+                    )));
+                }
+                tpe_params.push(ident);
+            }
+            Ok(SigmaType::SFunc {
+                t_dom,
+                t_range: Box::new(t_range),
+                tpe_params,
+            })
+        }
+
+        _ => Err(ReadError::InvalidData(format!(
+            "unknown type code: 0x{byte:02X}"
+        ))),
+    }
+}
+
+fn decode_constructor_at_depth(
+    r: &mut VlqReader,
+    byte: u8,
+    depth: usize,
+) -> Result<SigmaType, ReadError> {
+    let constr_id = byte / PRIM_RANGE;
+    let prim_id = byte % PRIM_RANGE;
+    let next = depth + 1;
+    let gate_v = embeddable_gate_version(r);
+
+    match constr_id {
+        // constrId 1: Coll[T]
+        1 => {
+            let elem = if prim_id == 0 {
+                read_type_at_depth(r, next)?
+            } else {
+                prim_from_code(prim_id, gate_v)?
+            };
+            Ok(SigmaType::SColl(Box::new(elem)))
+        }
+
+        // constrId 2: Coll[Coll[T]]
+        2 => {
+            let inner = if prim_id == 0 {
+                read_type_at_depth(r, next)?
+            } else {
+                prim_from_code(prim_id, gate_v)?
+            };
+            Ok(SigmaType::SColl(Box::new(SigmaType::SColl(Box::new(
+                inner,
+            )))))
+        }
+
+        // constrId 3: Option[T]
+        3 => {
+            let elem = if prim_id == 0 {
+                read_type_at_depth(r, next)?
+            } else {
+                prim_from_code(prim_id, gate_v)?
+            };
+            Ok(SigmaType::SOption(Box::new(elem)))
+        }
+
+        // constrId 4: Option[Coll[T]]
+        4 => {
+            let inner = if prim_id == 0 {
+                read_type_at_depth(r, next)?
+            } else {
+                prim_from_code(prim_id, gate_v)?
+            };
+            Ok(SigmaType::SOption(Box::new(SigmaType::SColl(Box::new(
+                inner,
+            )))))
+        }
+
+        // constrId 5: Pair — first element embeddable, or general pair (primId=0)
+        5 => {
+            if prim_id == 0 {
+                let t1 = read_type_at_depth(r, next)?;
+                let t2 = read_type_at_depth(r, next)?;
+                Ok(SigmaType::STuple(vec![t1, t2]))
+            } else {
+                let t1 = prim_from_code(prim_id, gate_v)?;
+                let t2 = read_type_at_depth(r, next)?;
+                Ok(SigmaType::STuple(vec![t1, t2]))
+            }
+        }
+
+        // constrId 6: Pair — second element embeddable (primId>0), or Triple (primId=0)
+        6 => {
+            if prim_id == 0 {
+                // Triple: read 3 types
+                let t1 = read_type_at_depth(r, next)?;
+                let t2 = read_type_at_depth(r, next)?;
+                let t3 = read_type_at_depth(r, next)?;
+                Ok(SigmaType::STuple(vec![t1, t2, t3]))
+            } else {
+                let t1 = read_type_at_depth(r, next)?;
+                let t2 = prim_from_code(prim_id, gate_v)?;
+                Ok(SigmaType::STuple(vec![t1, t2]))
+            }
+        }
+
+        // constrId 7: Symmetric pair (primId>0) or Quad (primId=0)
+        7 => {
+            if prim_id == 0 {
+                // Quad: read 4 types
+                let t1 = read_type_at_depth(r, next)?;
+                let t2 = read_type_at_depth(r, next)?;
+                let t3 = read_type_at_depth(r, next)?;
+                let t4 = read_type_at_depth(r, next)?;
+                Ok(SigmaType::STuple(vec![t1, t2, t3, t4]))
+            } else {
+                let t = prim_from_code(prim_id, gate_v)?;
+                Ok(SigmaType::STuple(vec![t.clone(), t]))
+            }
+        }
+
+        _ => Err(ReadError::InvalidData(format!(
+            "unknown type constructor: constrId={constr_id} (byte=0x{byte:02X})"
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sigma_type::write_type;
+    use ergo_primitives::writer::VlqWriter;
+
+    // ----- helpers -----
+
+    fn encode(t: &SigmaType) -> Vec<u8> {
+        let mut w = VlqWriter::new();
+        write_type(&mut w, t).unwrap();
+        w.result()
+    }
+
+    fn roundtrip(t: &SigmaType) {
+        let bytes = encode(t);
+        let mut r = VlqReader::new(&bytes);
+        let decoded = read_type(&mut r).unwrap();
+        assert!(r.is_empty(), "leftover bytes after decoding {t:?}");
+        assert_eq!(&decoded, t);
+    }
+
+    // ----- round-trips -----
+
+    #[test]
+    fn roundtrip_primitives() {
+        for t in [
+            SigmaType::SBoolean,
+            SigmaType::SByte,
+            SigmaType::SShort,
+            SigmaType::SInt,
+            SigmaType::SLong,
+            SigmaType::SBigInt,
+            SigmaType::SGroupElement,
+            SigmaType::SSigmaProp,
+            SigmaType::SBox,
+            SigmaType::SAvlTree,
+            SigmaType::SContext,
+            SigmaType::SHeader,
+            SigmaType::SPreHeader,
+        ] {
+            roundtrip(&t);
+        }
+    }
+
+    #[test]
+    fn roundtrip_coll_embeddable() {
+        for inner in [
+            SigmaType::SBoolean,
+            SigmaType::SByte,
+            SigmaType::SInt,
+            SigmaType::SLong,
+            SigmaType::SBigInt,
+            SigmaType::SGroupElement,
+            SigmaType::SSigmaProp,
+        ] {
+            roundtrip(&SigmaType::SColl(Box::new(inner)));
+        }
+    }
+
+    #[test]
+    fn roundtrip_coll_nested() {
+        // Coll[Coll[Byte]] — constrId 2
+        roundtrip(&SigmaType::SColl(Box::new(SigmaType::SColl(Box::new(
+            SigmaType::SByte,
+        )))));
+        // Coll[SBox] — constrId 1, primId 0
+        roundtrip(&SigmaType::SColl(Box::new(SigmaType::SBox)));
+        roundtrip(&SigmaType::SColl(Box::new(SigmaType::SAvlTree)));
+    }
+
+    #[test]
+    fn roundtrip_option_embeddable() {
+        for inner in [
+            SigmaType::SBoolean,
+            SigmaType::SByte,
+            SigmaType::SInt,
+            SigmaType::SLong,
+        ] {
+            roundtrip(&SigmaType::SOption(Box::new(inner)));
+        }
+    }
+
+    #[test]
+    fn roundtrip_option_nested() {
+        // Option[Coll[Int]] — constrId 4
+        roundtrip(&SigmaType::SOption(Box::new(SigmaType::SColl(Box::new(
+            SigmaType::SInt,
+        )))));
+        // Option[SBox] — constrId 3, primId 0
+        roundtrip(&SigmaType::SOption(Box::new(SigmaType::SBox)));
+    }
+
+    #[test]
+    fn roundtrip_pair() {
+        roundtrip(&SigmaType::STuple(vec![SigmaType::SInt, SigmaType::SLong]));
+        roundtrip(&SigmaType::STuple(vec![
+            SigmaType::SColl(Box::new(SigmaType::SByte)),
+            SigmaType::SInt,
+        ]));
+    }
+
+    #[test]
+    fn roundtrip_pair_symmetric() {
+        roundtrip(&SigmaType::STuple(vec![SigmaType::SInt, SigmaType::SInt]));
+        roundtrip(&SigmaType::STuple(vec![SigmaType::SLong, SigmaType::SLong]));
+    }
+
+    #[test]
+    fn roundtrip_pair_second_embed() {
+        roundtrip(&SigmaType::STuple(vec![SigmaType::SBox, SigmaType::SInt]));
+    }
+
+    #[test]
+    fn roundtrip_nested_pair() {
+        // (Int, (Long, Byte))
+        let inner = SigmaType::STuple(vec![SigmaType::SLong, SigmaType::SByte]);
+        roundtrip(&SigmaType::STuple(vec![SigmaType::SInt, inner]));
+    }
+
+    #[test]
+    fn roundtrip_triple() {
+        roundtrip(&SigmaType::STuple(vec![
+            SigmaType::SInt,
+            SigmaType::SLong,
+            SigmaType::SByte,
+        ]));
+        // Non-embeddable first element
+        roundtrip(&SigmaType::STuple(vec![
+            SigmaType::SBox,
+            SigmaType::SInt,
+            SigmaType::SLong,
+        ]));
+    }
+
+    #[test]
+    fn roundtrip_quad() {
+        roundtrip(&SigmaType::STuple(vec![
+            SigmaType::SBoolean,
+            SigmaType::SByte,
+            SigmaType::SInt,
+            SigmaType::SLong,
+        ]));
+        // Non-embeddable first element
+        roundtrip(&SigmaType::STuple(vec![
+            SigmaType::SAvlTree,
+            SigmaType::SInt,
+            SigmaType::SLong,
+            SigmaType::SByte,
+        ]));
+    }
+
+    #[test]
+    fn roundtrip_general_tuple_5() {
+        roundtrip(&SigmaType::STuple(vec![
+            SigmaType::SBoolean,
+            SigmaType::SByte,
+            SigmaType::SShort,
+            SigmaType::SInt,
+            SigmaType::SLong,
+        ]));
+    }
+
+    #[test]
+    fn roundtrip_func() {
+        roundtrip(&SigmaType::SFunc {
+            t_dom: vec![SigmaType::SInt],
+            t_range: Box::new(SigmaType::SLong),
+            tpe_params: vec![],
+        });
+        roundtrip(&SigmaType::SFunc {
+            t_dom: vec![SigmaType::SInt, SigmaType::SLong],
+            t_range: Box::new(SigmaType::SBoolean),
+            tpe_params: vec![],
+        });
+        // Non-embeddable domain
+        roundtrip(&SigmaType::SFunc {
+            t_dom: vec![SigmaType::SBox],
+            t_range: Box::new(SigmaType::SInt),
+            tpe_params: vec![],
+        });
+        // Generic function type: tpeParams carried after the range.
+        roundtrip(&SigmaType::SFunc {
+            t_dom: vec![SigmaType::STypeVar("T".into())],
+            t_range: Box::new(SigmaType::STypeVar("T".into())),
+            tpe_params: vec![SigmaType::STypeVar("T".into())],
+        });
+    }
+
+    #[test]
+    fn roundtrip_sstring() {
+        let t = SigmaType::SString;
+        let data = encode(&t);
+        let mut r = VlqReader::new(&data);
+        assert_eq!(read_type(&mut r).unwrap(), t);
+    }
+
+    #[test]
+    fn roundtrip_sglobal() {
+        let t = SigmaType::SGlobal;
+        let data = encode(&t);
+        let mut r = VlqReader::new(&data);
+        assert_eq!(read_type(&mut r).unwrap(), t);
+    }
+
+    #[test]
+    fn roundtrip_stypevar() {
+        let t = SigmaType::STypeVar("T".into());
+        let data = encode(&t);
+        let mut r = VlqReader::new(&data);
+        assert_eq!(read_type(&mut r).unwrap(), t);
+    }
+
+    #[test]
+    fn stypevar_name_at_255_byte_max_round_trips_per_scala() {
+        // Scala accepts 0..=255 byte names for STypeVar. The previous
+        // Rust-only 64-byte cap rejected legitimate Scala-valid
+        // descriptors. Pin the round-trip at the actual Scala max so
+        // any reintroduction of a tighter cap fails loudly.
+        let name = "x".repeat(255);
+        let t = SigmaType::STypeVar(name.clone());
+        let bytes = encode(&t);
+        let mut r = VlqReader::new(&bytes);
+        assert_eq!(read_type(&mut r).unwrap(), t);
+    }
+
+    // ----- error paths -----
+
+    #[test]
+    fn error_unknown_type_code() {
+        let data = [0xFE];
+        let mut r = VlqReader::new(&data);
+        let err = read_type(&mut r).unwrap_err();
+        assert!(
+            matches!(err, ReadError::InvalidData(_)),
+            "expected InvalidData, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn error_unexpected_eof() {
+        let data = [];
+        let mut r = VlqReader::new(&data);
+        let err = read_type(&mut r).unwrap_err();
+        assert!(
+            matches!(err, ReadError::UnexpectedEnd { .. }),
+            "expected UnexpectedEnd, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn error_truncated_nested_coll() {
+        // Coll with non-embeddable element but no element type follows
+        let data = [0x0C]; // COLL_CODE with primId 0
+        let mut r = VlqReader::new(&data);
+        let err = read_type(&mut r).unwrap_err();
+        assert!(
+            matches!(err, ReadError::UnexpectedEnd { .. }),
+            "expected UnexpectedEnd for truncated Coll, got: {err:?}"
+        );
+    }
+
+    // NB: type code 0 is covered by `read_type_prefix_zero_hard_rejects` in the
+    // oracle-parity section — it is a HARD reject, not a soft `InvalidData`.
+
+    #[test]
+    fn read_type_above_max_depth_returns_error_not_stack_overflow() {
+        // Construct wire bytes for a deeply-nested
+        // `Coll[Coll[Coll[...Coll[SBoolean]]]]`:
+        //   - Each `Coll[T]` (with non-embeddable T) is byte
+        //     `0x0C` (`COLL_CODE` = 1*PRIM_RANGE = 12, primId 0).
+        //   - Final inner type can be the embeddable SBoolean (0x01).
+        //
+        // Past MAX_TYPE_DEPTH our recursive reader must error gracefully
+        // rather than overflow the native stack. The cap is a conservative
+        // stack-safety bound, not the true Scala ceiling (= MaxPropositionBytes
+        // = 4096) — see the constant's doc. The relative `MAX_TYPE_DEPTH + 5`
+        // keeps this honest if the constant changes.
+        let mut bytes = vec![0x0Cu8; MAX_TYPE_DEPTH + 5];
+        // Inner type after the chain: SBoolean (1).
+        bytes.push(0x01);
+        let mut r = VlqReader::new(&bytes);
+        let err = read_type(&mut r).expect_err("must not stack-overflow");
+        match err {
+            ReadError::InvalidData(msg) => {
+                assert!(
+                    msg.contains("recursion depth"),
+                    "expected depth error, got: {msg}"
+                );
+            }
+            other => panic!("expected depth error, got: {other:?}"),
+        }
+    }
+
+    // ----- oracle parity -----
+
+    /// Type prefix `0` is Scala's `InvalidTypePrefix` — a `SerializerException`,
+    /// NOT a `ValidationException` — so `deserializeErgoTree`'s catch does not
+    /// cover it and a size-delimited tree carrying one is REJECTED, never
+    /// wrapped as `UnparsedErgoTree`. Oracle (`ErgoSerdeOracle.scala`,
+    /// sigma-state 6.0.2, surface `ergo_tree`):
+    ///
+    /// ```text
+    /// ergo_tree 080100   -> REJECT InvalidTypePrefix
+    /// ergo_tree 08016b   -> ACCEPT 08016b
+    /// ```
+    ///
+    /// `08016b` is the discriminator twin: an unknown but NON-zero type code is
+    /// rule-1016 `ValidationException` territory, which the reference DOES
+    /// catch and wrap — so it must stay a soft [`ReadError::InvalidData`].
+    #[test]
+    fn read_type_prefix_zero_hard_rejects() {
+        let mut r = VlqReader::new(&[0x00]);
+        let err = read_type(&mut r).expect_err("type prefix 0 must reject");
+        assert!(
+            matches!(&err, ReadError::HardReject(m) if m.contains("type prefix 0")),
+            "type prefix 0 must be a HardReject so it escapes the size-delimited \
+             soft-fork wrap (Scala InvalidTypePrefix), got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn read_type_unknown_nonzero_code_stays_soft() {
+        let mut r = VlqReader::new(&[0x6b]);
+        let err = read_type(&mut r).expect_err("type code 0x6b must reject");
+        assert!(
+            matches!(&err, ReadError::InvalidData(m) if m.contains("unknown type code")),
+            "an unknown non-zero type code is a wrappable ValidationException in \
+             the reference, so it must stay soft, got: {err:?}"
+        );
+    }
+
+    /// General-tuple (`TUPLE_CODE` = 0x60) read parity, cargo-fuzz #305
+    /// follow-up. Scala `TypeSerializer.deserialize` (TypeSerializer.scala:
+    /// 188-192) reads `count` item types with NO arity floor — a 0- or
+    /// 1-element `STuple` is a normal accept — and every item read hits the
+    /// same `c <= 0` hard reject as any other type-byte position, wherever it
+    /// falls in the tuple.
+    ///
+    /// Oracle (`ErgoSerdeOracle.scala`, sigma-state 6.0.2, surface
+    /// `sigma_type`):
+    ///
+    /// ```text
+    /// sigma_type 6000     -> ACCEPT      (0-element tuple)
+    /// sigma_type 600104   -> ACCEPT      (1-element tuple: STuple[SInt])
+    /// sigma_type 600100   -> REJECT InvalidTypePrefix  (1-element, item byte 0)
+    /// sigma_type 60020004 -> REJECT InvalidTypePrefix  (2-element, first item byte 0)
+    /// ```
+    ///
+    /// (`ACCEPT` here has no canonical-bytes suffix: Scala's own
+    /// `TypeSerializer.serialize` throws re-emitting a 0- or 1-element
+    /// `STuple` — `write_tuple` keeps its `count >= 2` floor for exactly
+    /// that reason, an intentional read/write asymmetry, see its doc.)
+    #[test]
+    fn read_type_general_tuple_arity_zero_and_one_accept() {
+        for (bytes, want) in [
+            (&[0x60u8, 0x00][..], SigmaType::STuple(vec![])),
+            (
+                &[0x60u8, 0x01, 0x04][..],
+                SigmaType::STuple(vec![SigmaType::SInt]),
+            ),
+        ] {
+            let mut r = VlqReader::new(bytes);
+            let got = read_type(&mut r)
+                .unwrap_or_else(|e| panic!("tuple bytes {bytes:02x?} must accept: {e:?}"));
+            assert_eq!(got, want, "bytes {bytes:02x?}");
+        }
+    }
+
+    #[test]
+    fn read_type_general_tuple_zero_item_hard_rejects_at_any_position() {
+        // count=1, sole item byte 0.
+        let mut r = VlqReader::new(&[0x60, 0x01, 0x00]);
+        let err = read_type(&mut r).expect_err("zero item type in a 1-tuple must hard-reject");
+        assert!(
+            matches!(&err, ReadError::HardReject(_)),
+            "expected HardReject (Scala InvalidTypePrefix), got: {err:?}"
+        );
+
+        // count=2, FIRST item byte 0 (the second item, 0x04 = SInt, is never
+        // reached — matches Scala reading item types left to right and
+        // throwing on the first zero byte it hits).
+        let mut r = VlqReader::new(&[0x60, 0x02, 0x00, 0x04]);
+        let err = read_type(&mut r).expect_err("zero item type in a 2-tuple must hard-reject");
+        assert!(
+            matches!(&err, ReadError::HardReject(_)),
+            "expected HardReject (Scala InvalidTypePrefix), got: {err:?}"
+        );
+    }
+}

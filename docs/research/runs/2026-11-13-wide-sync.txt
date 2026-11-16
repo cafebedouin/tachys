@@ -1,0 +1,185 @@
+tachys sync: 83 candidate peers, want 40 proofs, quorum 3 network groups
+  23.139.82.232:9031     -- handshake read: Connection reset by peer (os error 104)
+  204.136.11.157:9031    -- connect: Connection refused (os error 111)
+  23.105.162.48:9030     ergoref 6.0.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345095 s old
+  104.131.9.252:9030     ergoref 5.0.20 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345095 s old
+  23.139.82.232:9030     ergoref 6.1.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345095 s old
+  54.36.120.105:9031     -- closed during handshake
+  69.87.191.11:9030      -- connect: Connection refused (os error 111)
+  78.46.82.211:9031      -- handshake read: Connection reset by peer (os error 104)
+  64.120.95.14:9031      -- handshake read: Connection reset by peer (os error 104)
+  167.233.240.191:9030   ergo-rust 6.0.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880053 below checkpoint 1914880
+      C8Recency: tip is 4345076 s old
+  37.27.63.70:9030       ergoref 6.0.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345096 s old
+  46.4.58.220:9030       ergoref 6.0.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345096 s old
+  85.121.124.115:9030    ergoref 6.1.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345096 s old
+  46.224.217.101:9030    ergoref 6.1.2 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345096 s old
+  191.101.234.147:9030   ergoref 5.0.24 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345096 s old
+  85.121.122.132:9030    ergoref 6.1.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345096 s old
+  91.218.244.89:9030     ergoref 6.0.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345096 s old
+  136.243.176.114:9030   ergoref 6.0.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345096 s old
+  23.106.244.165:9030    ergoref 6.0.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345096 s old
+  172.255.125.146:9030   ergoref 6.0.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345096 s old
+  156.67.62.53:9030      ergoref 6.0.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345096 s old
+  172.245.236.70:9030    -- closed during handshake
+  152.114.194.200:9030   ergoref 6.0.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345096 s old
+  204.136.11.157:9030    -- connect: Connection refused (os error 111)
+  51.178.97.131:9030     ergoref 6.0.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345096 s old
+  159.89.116.15:9030     ergoref 6.0.2 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345097 s old
+  168.119.14.15:9030     ergoref 6.0.4 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345097 s old
+  172.241.31.200:9030    ergoref 6.0.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345097 s old
+  85.121.52.18:9030      ergoref 6.1.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345097 s old
+  46.4.102.169:9030      ergoref 6.0.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345097 s old
+  37.187.157.60:9030     ergoref 6.0.3 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345097 s old
+  15.235.219.104:9030    ergoref 6.0.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345097 s old
+  177.54.145.109:9030    ergoref 6.0.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345097 s old
+  49.12.210.225:9030     -- connect: Connection refused (os error 111)
+  150.230.54.107:9030    ergoref 5.0.21 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345097 s old
+  128.253.41.100:9030    ergoref 6.1.2 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345097 s old
+  54.36.120.105:9030     ergoref 6.1.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345097 s old
+  159.65.11.55:9030      ergoref 6.0.8 proof 173363 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1827829 below checkpoint 1914880
+      C8Recency: tip is 10684701 s old
+  195.201.143.156:9020   -- closed during handshake
+  103.74.118.33:9030     -- closed during handshake
+  64.120.95.14:9030      ergoref 6.1.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345098 s old
+  67.10.16.12:12035      -- closed during handshake
+  162.55.88.217:9030     ergoref 6.0.8 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345098 s old
+  78.46.40.7:9030        ergoref 6.1.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345098 s old
+  185.216.203.161:9030   -- closed during handshake
+  128.253.41.101:9030    ergoref 6.1.2 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345098 s old
+  157.245.155.5:9030     ergoref 5.0.26 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345098 s old
+  76.125.73.138:9030     -- closed during handshake
+  165.227.26.175:9030    -- closed during handshake
+  85.121.54.203:9031     -- handshake read: Connection reset by peer (os error 104)
+  85.121.124.115:9031    -- handshake read: Connection reset by peer (os error 104)
+  128.253.41.102:9030    ergoref 6.1.7 proof 141919 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1775604 below checkpoint 1914880
+      C8Recency: tip is 16992229 s old
+  212.227.100.111:9030   -- closed during handshake
+  85.121.54.203:9030     ergoref 6.1.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345098 s old
+  82.153.68.166:9030     ergoref 6.1.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345099 s old
+  194.233.80.81:9030     ergoref 6.0.8 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345099 s old
+  64.120.114.165:9030    ergoref 6.0.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345099 s old
+  132.226.207.194:9030   ergoref 6.1.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345099 s old
+  72.14.147.199:9031     -- handshake read: Connection reset by peer (os error 104)
+  128.253.41.49:9030     ergoref 6.1.2 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345099 s old
+  69.87.191.11:9031      -- connect: Connection refused (os error 111)
+  78.46.82.211:9030      ergoref 6.1.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345099 s old
+  188.34.158.109:9030    ergoref 6.0.2 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345099 s old
+  128.140.101.212:9030   ergoref 6.0.2 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345099 s old
+  82.153.68.166:9031     -- closed during handshake
+  72.14.147.199:9030     ergoref 6.1.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345099 s old
+  51.222.248.90:9030     ergoref 6.0.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345099 s old
+  78.46.40.7:9031        -- handshake read: Connection reset by peer (os error 104)
+  213.239.193.208:9031   ergoref 6.0.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345100 s old
+  85.121.122.132:9031    -- handshake read: Connection reset by peer (os error 104)
+  <own-node>:9030     ergoref 6.1.2 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345100 s old
+  175.41.25.90:9030      ergoref 6.0.7 proof 162740 B: REJECTED [C6TipHeight, C8Recency]
+      C6TipHeight: tip 1880052 below checkpoint 1914880
+      C8Recency: tip is 4345100 s old
+  104.250.129.106:9031   -- connect timeout
+  103.13.114.100:9030    -- connect timeout
+  169.239.180.125:9030   -- connect timeout
+  51.195.105.55:9029     -- connect timeout
+  104.250.129.106:9030   -- connect timeout
+  207.172.128.57:9030    -- connect timeout
+  51.195.36.165:9030     -- connect timeout
+  49.13.147.118:9030     -- no proof within 45 s (2 other frames)
+  86.48.16.153:9030      -- no proof within 45 s (0 other frames)
+  159.65.250.130:9030    -- no proof within 45 s (0 other frames)
+  57.129.64.36:9030      -- no proof within 45 s (2 other frames)
+
+peers: 49 answered with a proof, 0 accepted, 49 rejected, 34 gave none; 7975165 B received in 48.7 s
+verdict: NO QUORUM; no tip is trusted

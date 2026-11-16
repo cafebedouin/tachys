@@ -1,0 +1,45 @@
+Live payments through the review work (branch review-fixes, release build), 2026-11-15.
+Testnet payer and payee wallets and a mainnet test wallet; nodes found with --node auto. Addresses left out.
+
+== testnet: an agent pays, the payee waits, the payer learns it is final
+pay --erg 0.01 --dry-run          ok, would_leave_wallet_nanoerg 11100000, fee_nanoerg 1100000
+pay --erg 0.06 --dry-run          refused, exit 1: over the per-payment limit: 61100000 nanoERG would leave the wallet (fee included), 50000000 allowed
+pay --erg 0.01                    ok, tx 6e2fb066…, receipt c668e926...
+payee: accept --receipt           accepted false: no such unspent box: not on chain yet, or not a real receipt
+payee: wait --receipt             accepted true, confirmations 1, after 252 s (one call)
+payer: wait --tx                  confirmed at tip 647285, after 16 s
+payer balance                     438600000 -> 427500000 nanoERG (0.01 and the fee)
+
+== testnet: a node that takes the payment and never answers
+wallet send --node <a listener on this machine that reads the request and closes> --broadcast
+                                  ok false, exit 1, signed true, outcome_unknown true, tx 076e3fd4…
+                                  "the node did not answer ... The payment may have gone out: it is kept as waiting ..."
+history                           that tx: waiting
+the testnet node, asked for it    404: it had never been sent anywhere real
+wait --tx                         confirmed at tip 647288, after 219 s: the sync sent it again and it went through
+
+== testnet: two wallets on one phrase
+A copy of the payer's state directory stands in for a second wallet (Nautilus, another phone).
+first wallet: pay --erg 0.003     tx 623ffb31…, then it stays away
+payee: wait --receipt             accepted after 373 s
+second wallet: status --reconcile finds the change; consolidate --broadcast spends it (tx 4391bee6...), confirmed
+payee: consolidate --broadcast    spends the box it was paid (tx 0c86bd48...), confirmed
+first wallet: status              payment 623ffb31...: result "coins spent", node_says "it is in a block, at height 647290";
+                                  its one tracked box "gone ... spent (not by a payment of this wallet)"; refresh_due true; balance 0
+first wallet: status again        "looking again for this wallet's boxes"; 416200000 nanoERG in 1 box; refresh_due false
+second wallet: status             416200000 nanoERG in 1 box: the two agree
+(After this run a sync that sets refresh_due looks again in the same run, so the balance is not left at 0 in between.)
+
+== mainnet: a test wallet
+tips                              agreed, height 1917717
+status --reconcile                22 boxes, 20071668012 nanoERG, 6 tokens; 3 requests, 64584 B received
+send --nanoerg 1000000 to itself --dry-run     signed false, leaves_wallet_nanoerg 1100000
+send ... --broadcast              accepted by http://128.253.41.49:9053, tx 0a4da98d…
+wait --tx                         timed out at 481 s (one block had come); asked again later: confirmed at tip 1917721
+status                            22 boxes, 20070568012 nanoERG (the fee)
+A note: `tachys tips --network testnet` with its defaults (quorum 3) does not agree on testnet's few peers; the agent
+commands and the app pass --peers 2 --tries 8 --quorum 2 there.
+
+== the Note 2 (Android 7.1.2), the phone build of the core run from adb
+recipes, setup, tips --json, nodes --json, balance: each one JSON line on stdout; the linker warning on stderr; about 16 ms to start a command.
+The app (release build) installed over the one there. Its screens were not driven from here.

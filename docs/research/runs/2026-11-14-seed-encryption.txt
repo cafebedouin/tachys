@@ -1,0 +1,92 @@
+Seed phrases sealed at rest (ergo-wallet's EncryptedSecret: PBKDF2-HMAC-SHA256, 128000 rounds, into AES-256-GCM).
+Host run, 2026-11-14. Script: a new wallet per run, testnet addresses, phrases never printed.
+ErgoAes.java repeats ergo-wallet/src/main/scala/org/ergoplatform/wallet/crypto/AES.scala (master, fetched 2026-11-14) line for line.
+
+== new wallet, password on stdin
+new wallet: address <address>
+birthday height 0 (nothing before it is ever looked for)
+saved to a/wallet.json
+seed phrase sealed with the password given
+-- wallet.json keys and the secret (hex shortened):
+['address', 'address_list', 'birthday', 'boxes', 'name', 'secret']
+{
+ "authTag": "9816ee83…",
+ "cipherParams": {
+  "c": 128000,
+  "dkLen": 256,
+  "prf": "HmacSHA256"
+ },
+ "cipherText": "3f960a04…",
+ "iv": "5186f3b9…",
+ "salt": "8f329b58…",
+ "usePre1627KeyDerivation": false
+}
+-- the word 'mnemonic' in the file: 0 times
+== without the password
+the seed phrase is sealed: give the wallet's password (--pass-stdin, or TACHYS_PASS)
+   [wallet mnemonic: exit 2]
+the seed phrase is sealed: give the wallet's password (--pass-stdin, or TACHYS_PASS)
+   [wallet pubkey: exit 2]
+the seed phrase is sealed: give the wallet's password (--pass-stdin, or TACHYS_PASS)
+   [wallet address --add: exit 2]
+address 0: <address>
+== wrong password
+wallet: the seed phrase could not be opened: bad wallet password
+   [exit 1]
+== right password: a phrase of 12 words
+== ergo-wallet's AES.scala (repeated in Java, openjdk version "21.0.13.0.3" 2026-10-24) opens what tachys sealed
+MATCH
+== tachys opens what ergo-wallet's AES.scala (in Java) sealed
+MATCH
+== a sealed phrase that does not lead to the wallet's address
+address 1: <address>
+wallet: the sealed phrase does not lead to this wallet's address; refusing to use it
+   [exit 1]
+== locked wallet lists both addresses
+address 0: <address>
+address 1: <address>
+== restore, password then phrase on stdin
+restored wallet: address <address>
+-- keys: ['address', 'address_list', 'birthday', 'boxes', 'name', 'restored', 'secret']
+== password lost: restore over the same wallet
+a/wallet.json already exists and is not a read-only wallet of <address>; not overwriting
+resealed wallet: address <address>
+wallet: the seed phrase could not be opened: bad wallet password
+new password opens the same phrase; addresses kept: 2
+== no password: plain text, as before; then sealed with 'wallet encrypt'
+seed phrase in plain text (no password given)
+encrypt needs the password to seal with (--pass-stdin, or TACHYS_PASS)
+   [exit 2]
+sealed: the seed phrase of <address> is no longer in plain text
+-- 'mnemonic' or 'warning' in the file: 0 times
+same phrase after sealing
+== signing: a copy of the testnet payee wallet (5 boxes), sealed; nothing is broadcast
+sealed: the seed phrase of <address> is no longer in plain text
+-- send without the password:
+send: the seed phrase is sealed: give the wallet's password (--pass-stdin, or TACHYS_PASS)
+   ls: cannot access 'p1.json': No such file or directory
+-- unsigned request (--request-out) without the password:
+ergopay:8AEB6KzxIa6x89jEuJBhY09eWuDr1ZNJ
+-- send with a wrong password:
+wallet: the seed phrase could not be opened: bad wallet password
+-- send with the password:
+signed: tx cbdc5e50… (1487 B as JSON), 1 inputs, 3 outputs
+
+== the app, Android 7.0 emulator (API 24, x86_64), driven over adb; files read as root
+no screen lock:  New wallet -> no prompt; wallet.json has "secret" and no "mnemonic"; keystore key tachys-seed-open
+PIN 1234 set:    Display mnemonic -> prompt "Show the seed phrase of Wallet"; PIN given -> 12 words; key now tachys-seed-guarded
+                 CANCEL at the prompt -> "The phone's screen lock was not given, so the seed phrase stays closed."
+                 20 s later, Add an address -> prompt again (the key works for 15 s after the lock is given); PIN -> Address 2 added
+                 Send -> prompt "Send from Wallet"; CANCEL -> nothing sent, same message; PIN -> core reached coin selection
+                 (send: box selection: NotEnoughCoins: the test wallet holds nothing)
+PIN changed to 5678: Display public key -> 1234 refused by the prompt, 5678 accepted, key shown: changing the lock keeps the phrases
+screen lock removed: Display mnemonic -> "This wallet's seed phrase can no longer be opened on this phone: the key that guarded it
+                 is gone, which happens when the phone's screen lock is removed. Restore the wallet from its written seed phrase."
+                 Restore wallet with the same 12 words -> same wallet folder, both addresses kept, Display mnemonic shows 12 words
+plain-text wallet from the earlier format placed in the app's files -> on start: "mnemonic" 0 times, "secret" 1 time;
+                 Display mnemonic shows the same phrase the plain-text file held
+
+== the app, Note 2 (SGH-T889, Android 7.1.2, armeabi-v7a), installed over the previous build
+the testnet wallet already on the phone (plain text, 2 boxes) was sealed after the device password was given at the prompt;
+Display mnemonic -> prompt "Show the seed phrase of Wallet" within about 2 s; after the device password, 12 words shown
+not run on the Note 2: Send, Sign, changing or removing the screen lock. Not run anywhere: the Pixel 6; `tachys pay` with TACHYS_PASS.

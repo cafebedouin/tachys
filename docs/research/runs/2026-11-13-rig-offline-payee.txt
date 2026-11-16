@@ -1,0 +1,32 @@
+[rig] === handing off to hook: rig/offline-payee.sh ===
+[op] 1. the payer wallet is funded and proves its box (online, from the node)
+  payer: balance 0.500000000 ERG in 1 boxes, proven at height 26
+[op] 2. the relaying wallet syncs and serves, with proof relay on
+[op] 3. the payee has no route to the node; it syncs from the relaying wallet and makes an address
+  payee -> node directly: no peer pushed a usable tip
+  verdict: Agreed
+  tip: height 26 id 5b26cdf1370c720b44181c47a814f010e0bd5f4f2841bd3b2997e346860c0451 (8 s old)
+[op] 4. the payer pays the payee 0.1 ERG, submitting over the peer protocol, and gives it the receipt
+  receipt: c153006f…
+    fbfa2b66… delivered on request (2 messages sent, 1069 ms held)
+  outbox done: 1 submitted, 0 refused
+  the receipt box is on chain
+[op] 5. the payee checks the receipt through the relaying wallet
+  node is 4 block(s) past the agreed tip; fetched those headers by id over the peer protocol (linked, work-checked)
+    c153006f…  100000000 nanoERG, proven unspent at 30 (added)
+  address <address>
+  balance 0.100000000 ERG in 1 boxes, proven at height 30
+  cost: 5 requests, 36 B sent, 6745 B received
+[op] 6. control: a made-up receipt asked through the relay is proven absent
+  node is 1 block(s) past the agreed tip; fetched those headers by id over the peer protocol (linked, work-checked)
+    00000000…  ABSENT at height 31: not accepted
+  address <address>
+  relay: tachys serve (devnet): 10 headers 17..26 on 10.9.22.1:9030 for 150 s
+  relaying wallet stopped: 0 listener(s) left on its port
+[op] 7. control: a serving wallet without relay on gives the payee nothing
+  proof from p2p://10.9.22.1:9030: no box proof in time (does the peer carry the patch?)
+  NOT PROVEN by any node given
+  no-relay: tachys serve (devnet): 10 headers 17..26 on 10.9.22.1:9030 for 14 s
+  no-relay: served: 1 connections, 1 sync pushes, 0 header requests (0 headers), 0 parcels taken, 0 proofs relayed, 2216 B sent
+[op] verdict: PASS
+[rig] === hook done (verdict: PASS) ===

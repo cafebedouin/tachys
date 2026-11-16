@@ -1,0 +1,30 @@
+Android 7.0 (API 24), x86_64, MemTotal: 1019432 kB, emulator with 2 cores
+== tip sync, mainnet (first run)
+neighbour cost: 7 connections, 6 messages sent, 13.0 connection-seconds held (failures included), 43960 B received, 6.8 s wall
+verdict: Agreed
+tip: height 1916107 id 1f61f66978709ca28e12ccfd8343857f1756eb71fe97a2efb5e0683d316c2051 (356 s old)
+state root: 6b51746d3fe6d38174e11054ff2b853816a600dfb87529b6d8d5f578b729720119
+    -> peak memory 3116 KB
+== tip sync, mainnet (second run)
+neighbour cost: 6 connections, 5 messages sent, 11.1 connection-seconds held (failures included), 18015 B received, 6.2 s wall
+verdict: Agreed
+tip: height 1916107 id 1f61f66978709ca28e12ccfd8343857f1756eb71fe97a2efb5e0683d316c2051 (363 s old)
+state root: 6b51746d3fe6d38174e11054ff2b853816a600dfb87529b6d8d5f578b729720119
+    -> peak memory 2848 KB
+== new wallet (key generation on the device)
+WARNING: linker: /data/local/tmp/tachys/tachys: unsupported flags DT_FLAGS_1=0x8000001
+new wallet: address <address>
+birthday height 1916107 (nothing before it is ever looked for)
+saved to /data/local/tmp/tachys/st/wallet.json
+    -> peak memory 2288 KB
+== prove an address's boxes against the agreed tip (REST node)
+  a62e97a2…  672446 nanoERG, 0 tokens, created at 1891043
+  32a16180…  675109939 nanoERG, 0 tokens, created at 1891042
+  49b326ba…  63430592 nanoERG, 0 tokens, created at 1891042
+verdict: PROVEN at height 1916107: 21 of 21 boxes unspent, 20.293868012 ERG, 10 token entries
+    -> peak memory 2696 KB
+== verify a 162 KB NiPoPoW proof from disk
+WARNING: linker: /data/local/tmp/tachys/tachys: unsupported flags DT_FLAGS_1=0x8000001
+  mainnet-1915810          162313 B: REJECTED [C8Recency]
+verdict: NO QUORUM; no tip is trusted
+    0m00.09s real     0m00.09s user     0m00.00s system

@@ -1,0 +1,35 @@
+== consolidate the payee wallet
+balance 0.140000000 ERG in 3 boxes, proven at height 643113
+consolidating 3 boxes (0 token kinds) into one
+signed: tx 4d38f780… (1632 B as JSON), 3 inputs, 2 outputs
+broadcast via http://213.239.193.208:9052: accepted, "4d38f780…"
+== agent: balance
+{"address":"<address>","boxes":2,"erg":"0.564200000","nanoerg":564200000,"network":"testnet","ok":true,"proven":true,"tip_height":643114,"tokens":[{"amount":97000,"id":"4f348458…"}]}
+== agent: pay with no policy file
+{"ok":false,"refused":"paying is off: there is no policy file at state-testnet-payer/policy.json"}
+exit=1
+== agent: dry run
+{"dry_run":true,"fee_nanoerg":1100000,"ok":true,"paid_last_24h_nanoerg":0,"to":"<address>","would_pay_nanoerg":20000000}
+== agent: pay 0.02 ERG
+{"fee_nanoerg":1100000,"nanoerg":20000000,"note":"broadcast, not yet in a block; the payee can check the receipt once it confirms","ok":true,"purpose":"agent test payment","receipt":"00584d96…","to":"<address>","tx":"620fedb8cf266dd
+exit=0
+== agent: over the per-payment limit
+{"ok":false,"refused":"over the per-payment limit: 200000000 nanoERG asked, 50000000 allowed"}
+exit=1
+== agent: token payment when the policy forbids tokens
+{"ok":false,"refused":"the policy does not allow token payments"}
+exit=1
+== payee, after a block: consolidation result
+balance 0.138900000 ERG in 1 boxes, proven at height 643131
+== agent: accept the receipt from the agent payment
+{"accepted":true,"address":"<address>","boxes":2,"erg":"0.158900000","nanoerg":158900000,"network":"testnet","ok":true,"reason":"proven unspent and pays this wallet","tip_height":643131,"tokens":[]}
+== agent: accept a made-up receipt
+{"accepted":false,"address":"<address>","boxes":2,"erg":"0.158900000","nanoerg":158900000,"network":"testnet","ok":true,"reason":"no such unspent box: not on
+exit=0
+== agent: daily limit (0.1 ERG; 0.02 already paid)
+{"fee_nanoerg":1100000,"nanoerg":50000000,"note":"broadcast, not yet in a block; the payee can check the receipt once it
+{"ok":false,"refused":"over the daily limit: 70000000 nanoERG already paid in the last 24 h, 50000000 asked, 100000000 allowed"}
+exit=1
+== the audit log
+{"at":1794617699,"nanoerg":20000000,"purpose":"agent test payment","receipt":"00584d96…","to":"3WzVNTZ6QZ7WWNxrsJ25SsuyjzPw45t8r6V2tnVWYCRGSZhqUu
+{"at":1794618292,"nanoerg":50000000,"purpose":"second","receipt":"4df11310…","to":"<address>","token":

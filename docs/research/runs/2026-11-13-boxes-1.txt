@@ -1,0 +1,15 @@
+neighbour cost: 5 connections, 3 messages sent, 7.5 connection-seconds held (failures included), 15929 B received, 4.4 s wall
+verdict: Agreed
+tip: height 1916021 id 4521697bd8ab9e3d2d989a9466645925b961f697c2a9fa0ba3e4aa21bbbfd949 (23 s old)
+state root: 39712cd480bb644c09cf31ce9bdfb705eb3a04f117762161eb9184ee177a573119
+== reconciliation path (address lookup)
+discovery: node lists 1 unspent boxes for the address (1904 B)
+cost: 2 requests, 119 B sent, 4394 B received (1244 B of proof)
+  ce3b3441…  462440739685 nanoERG, 10 tokens, created at 1915823
+verdict: PROVEN at height 1916021: 1 of 1 boxes unspent, 462.440739685 ERG, 10 token entries
+== receipt path (ids only; second id is made up)
+cost: 1 requests, 135 B sent, 3308 B received (1653 B of proof)
+  e9bab352…  767000000 nanoERG, 0 tokens, created at 1916016
+  00000000…  ABSENT at height 1916021 (spent or never existed)
+verdict: PROVEN at height 1916021: 1 of 2 boxes unspent, 0.767000000 ERG, 0 token entries
+exit=0

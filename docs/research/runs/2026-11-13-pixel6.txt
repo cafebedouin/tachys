@@ -1,0 +1,28 @@
+Pixel 6, Android 17 (API 37), arm64-v8a, MemTotal: 7787836 kB, over Wi-Fi
+== tip sync, mainnet (first run)
+neighbour cost: 8 connections, 15 messages sent, 15.6 connection-seconds held (failures included), 24168 B received, 7.3 s wall
+verdict: Agreed
+tip: height 1916114 id 5b7dc115ff8027466c5f2791044e7de73543ca01fea67b65499bd4355f5a914b (136 s old)
+state root: 56ebfa15c1882829e616315d0877ccd710df90cab67aa55ccbb38684551053f619
+    -> peak memory 7572 KB
+== tip sync, mainnet (second run)
+neighbour cost: 8 connections, 16 messages sent, 16.4 connection-seconds held (failures included), 11990 B received, 9.3 s wall
+verdict: Agreed
+tip: height 1916114 id 5b7dc115ff8027466c5f2791044e7de73543ca01fea67b65499bd4355f5a914b (146 s old)
+state root: 56ebfa15c1882829e616315d0877ccd710df90cab67aa55ccbb38684551053f619
+    -> peak memory 7552 KB
+== new wallet (key generation on the device)
+new wallet: address <address>
+birthday height 1916114 (nothing before it is ever looked for)
+saved to /data/local/tmp/tachys/st/wallet.json
+    -> peak memory 4896 KB
+== prove an address's boxes against the agreed tip (REST node)
+  a62e97a2…  672446 nanoERG, 0 tokens, created at 1891043
+  32a16180…  675109939 nanoERG, 0 tokens, created at 1891042
+  49b326ba…  63430592 nanoERG, 0 tokens, created at 1891042
+verdict: PROVEN at height 1916114: 21 of 21 boxes unspent, 20.293868012 ERG, 10 token entries
+    -> peak memory 6468 KB
+== verify a 162 KB NiPoPoW proof from disk
+  mainnet-1915810          162313 B: REJECTED [C8Recency]
+verdict: NO QUORUM; no tip is trusted
+    0m00.19s real     0m00.14s user     0m00.04s system

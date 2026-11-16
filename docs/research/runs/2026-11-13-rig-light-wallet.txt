@@ -1,0 +1,35 @@
+[rig] === handing off to hook: rig/light-wallet.sh ===
+[tachys] waiting for A to reach height 20 and B to follow
+[tachys] A.h=20 B.h=17 SAME@17
+[tachys] checkpoint height 8, header version 3, peers 100.64.0.1:9021 100.64.0.2:9021 
+[tachys] 1. tip sync
+[tachys] 2. payment from A's wallet, accepted by receipt over the peer protocol
+  tachys address: <address>
+  A paid 0.5 ERG, tx 5903266a…
+  fee script taken from the node's payment: 1005040004000e3510020414... (208 hex chars)
+  receipt (box id): f4b44968…
+    f4b44968…  500000000 nanoERG, proven unspent at 26 (added)
+  address <address>
+  balance 0.500000000 ERG in 1 boxes, proven at height 26
+  cost: 1 requests, 36 B sent, 366 B received
+[tachys] 3. the same request to the unpatched release node B
+  proof from p2p://100.64.0.2:9021: no box proof in time (does the peer carry the patch?)
+  NOT PROVEN by any node given
+[tachys] 4. how B treated the peer that sent the unknown message
+  B blacklisted peers: {"addresses":[]}
+  B log lines mentioning the message, a penalty or a ban:
+  after:   100.64.0.2:9021        ergoref 6.0.8 answered after 1505 ms, 443 B, 2 headers (2 pass), tip 29, announced 13 ids
+[tachys] 5. tachys pays 0.1 ERG back to A and finds its change
+  address <address>
+  balance 0.500000000 ERG in 1 boxes, proven at height 30
+  cost: 1 requests, 36 B sent, 366 B received
+  signed: tx 202b5920… (1477 B as JSON), 1 inputs, 3 outputs
+  receipt for the payee (box ids to hand over): dd2bf382…
+  change we will look for ourselves: 83daaf47…
+  broadcast via http://127.0.0.1:9052: accepted, "202b5920…"
+    83daaf47…  398900000 nanoERG, proven unspent at 38 (added)
+  address <address>
+  balance 0.398900000 ERG in 1 boxes, proven at height 38
+  cost: 1 requests, 36 B sent, 366 B received
+[tachys] verdict: PASS
+[rig] === hook done (verdict: PASS) ===

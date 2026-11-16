@@ -1,0 +1,30 @@
+testnet; copies of one wallet
+balance 0.200300000 ERG in 5 boxes, proven at height 643362
+== three copies of one wallet. Copy 1 and copy 3 each sign a payment and do not send it; copy 2 sends a different one spending the same coins
+1
+1
+accepted
+== A. copy 2 (sent): waiting, then confirmed
+payment 29d3d1ac…: waiting, 0 block(s) since first checked
+balance 0.190300000 ERG in 4 boxes, proven at height 643362
+payment 29d3d1ac…: confirmed at height 643363 or before
+balance 0.197200000 ERG in 5 boxes, proven at height 643363
+balance 0.197200000 ERG in 5 boxes, proven at height 643364
+== B. copy 1 (its coins were spent by copy 2's payment)
+payment 10f17c17…: FAILED: coins it spends were spent by another transaction; it can never conf
+balance 0.197200000 ERG in 5 boxes, proven at height 643364
+
+balance 0.197200000 ERG in 5 boxes, proven at height 643365
+== C. a payment signed and never sent (and not re-sent): watched until the wallet gives up on it
+1
+payment 76a4a5bb…: waiting, 0 block(s) since first checked
+balance 0.190300000 ERG in 4 boxes, proven at height 643365
+payment 76a4a5bb…: NOT INCLUDED after 10 blocks; its coins count as this wallet's again
+balance 0.197200000 ERG in 5 boxes, proven at height 643375
+balance 0.197200000 ERG in 5 boxes, proven at height 643375
+== then it is sent late after all
+outbox: 1 sent, 0 still waiting, 0 refused
+payment 76a4a5bb…: included after all; confirmed at height 643376 or before
+balance 0.193100000 ERG in 5 boxes, proven at height 643376
+balance 0.193100000 ERG in 5 boxes, proven at height 643376
+[{"tx":"76a4a5bb72","result":"confirmed"},{"tx":"29d3d1aca2","result":"confirmed"}]

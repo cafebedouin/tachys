@@ -1,0 +1,140 @@
+diff --git a/ergo-core/src/main/scala/org/ergoplatform/network/message/BoxProofSpec.scala b/ergo-core/src/main/scala/org/ergoplatform/network/message/BoxProofSpec.scala
+new file mode 100644
+index 000000000..7ea675bff
+--- /dev/null
++++ b/ergo-core/src/main/scala/org/ergoplatform/network/message/BoxProofSpec.scala
+@@ -0,0 +1,69 @@
++package org.ergoplatform.network.message
++
++import org.ergoplatform.network.message.MessageConstants.MessageCode
++import scorex.util.serialization.{Reader, Writer}
++
++/**
++  * Request for a batch proof that boxes exist (or do not exist) in the current UTXO set.
++  * Payload: number of ids, then the 32-byte box ids.
++  */
++object GetBoxProofSpec extends MessageSpecV1[Seq[Array[Byte]]] {
++
++  val MaxIds = 100
++  val IdLength = 32
++  val SizeLimit: Int = 2 + MaxIds * IdLength + 2 + 100
++
++  val messageCode: MessageCode = 92: Byte
++  val messageName: String = "GetBoxProof"
++
++  override def serialize(ids: Seq[Array[Byte]], w: Writer): Unit = {
++    w.putUShort(ids.length)
++    ids.foreach(id => w.putBytes(id))
++    w.putUShort(0) // pad length, for future extension
++  }
++
++  override def parse(r: Reader): Seq[Array[Byte]] = {
++    require(r.remaining <= SizeLimit, s"Too big GetBoxProof message (size: ${r.remaining})")
++    val count = r.getUShort()
++    require(count > 0 && count <= MaxIds, s"GetBoxProof asks for $count boxes, allowed 1..$MaxIds")
++    val ids = (0 until count).map(_ => r.getBytes(IdLength))
++    val pad = r.getUShort()
++    if (pad > 0 && pad < SizeLimit) r.getBytes(pad)
++    ids
++  }
++}
++
++/**
++  * @param headerId - id of the block whose state root the proof is against
++  * @param proof    - serialized batch AVL+ proof for lookups of the requested ids, in request order
++  */
++case class BoxProofData(headerId: Array[Byte], proof: Array[Byte])
++
++/**
++  * Answer to GetBoxProof: the header the proof is against, then the proof.
++  */
++object BoxProofSpec extends MessageSpecV1[BoxProofData] {
++
++  val SizeLimit = 2000000
++
++  val messageCode: MessageCode = 93: Byte
++  val messageName: String = "BoxProof"
++
++  override def serialize(data: BoxProofData, w: Writer): Unit = {
++    w.putBytes(data.headerId)
++    w.putUInt(data.proof.length.toLong)
++    w.putBytes(data.proof)
++    w.putUShort(0) // pad length, for future extension
++  }
++
++  override def parse(r: Reader): BoxProofData = {
++    require(r.remaining <= SizeLimit, s"Too big BoxProof message (size: ${r.remaining})")
++    val headerId = r.getBytes(32)
++    val len = r.getUInt().toInt
++    require(len >= 0 && len <= SizeLimit, s"BoxProof declares $len proof bytes")
++    val proof = r.getBytes(len)
++    val pad = r.getUShort()
++    if (pad > 0 && pad < SizeLimit) r.getBytes(pad)
++    BoxProofData(headerId, proof)
++  }
++}
+diff --git a/src/main/scala/org/ergoplatform/ErgoApp.scala b/src/main/scala/org/ergoplatform/ErgoApp.scala
+index b9d7d6385..243ffdddd 100644
+--- a/src/main/scala/org/ergoplatform/ErgoApp.scala
++++ b/src/main/scala/org/ergoplatform/ErgoApp.scala
+@@ -82,7 +82,9 @@ class ErgoApp(args: Args) extends ScorexLogging {
+       GetUtxoSnapshotChunkSpec,
+       UtxoSnapshotChunkSpec,
+       GetNipopowProofSpec,
+-      NipopowProofSpec
++      NipopowProofSpec,
++      GetBoxProofSpec,
++      BoxProofSpec
+     )
+   }
+ 
+@@ -138,7 +140,9 @@ class ErgoApp(args: Args) extends ScorexLogging {
+         UtxoSnapshotChunkSpec.messageCode   -> ergoNodeViewSynchronizerRef,
+         // nipopows exchange related messages
+         GetNipopowProofSpec.messageCode     -> ergoNodeViewSynchronizerRef,
+-        NipopowProofSpec.messageCode        -> ergoNodeViewSynchronizerRef
++        NipopowProofSpec.messageCode        -> ergoNodeViewSynchronizerRef,
++        // box proofs for light clients
++        GetBoxProofSpec.messageCode         -> ergoNodeViewSynchronizerRef
+       )
+       // Launching PeerSynchronizer actor which is then registering itself at network controller
+       if (ergoSettings.scorexSettings.network.peerDiscovery) {
+diff --git a/src/main/scala/org/ergoplatform/network/ErgoNodeViewSynchronizer.scala b/src/main/scala/org/ergoplatform/network/ErgoNodeViewSynchronizer.scala
+index 7907ddea7..fab6abb07 100644
+--- a/src/main/scala/org/ergoplatform/network/ErgoNodeViewSynchronizer.scala
++++ b/src/main/scala/org/ergoplatform/network/ErgoNodeViewSynchronizer.scala
+@@ -1111,6 +1111,22 @@ class ErgoNodeViewSynchronizer(networkControllerRef: ActorRef,
+     }
+   }
+ 
++  /**
++    * Send a batch proof for box lookups to a peer asked for it, together with the id of the block
++    * whose state root the proof is against. If a block is applied while the proof is generated,
++    * nothing is sent (the peer can ask again), so the answer never names the wrong block.
++    */
++  private def sendBoxProof(ids: Seq[Array[Byte]], usr: UtxoStateReader, peer: ConnectedPeer): Unit = {
++    val versionBefore = usr.version
++    val proof = usr.generateBatchProofForBoxes(ids.map(id => scorex.crypto.authds.ADKey @@ id))
++    if (usr.version == versionBefore) {
++      val data = BoxProofData(org.ergoplatform.core.versionToBytes(versionBefore), proof)
++      networkControllerRef ! SendToNetwork(Message(BoxProofSpec, Right(data), None), SendToPeer(peer))
++    } else {
++      log.info(s"State changed while generating a box proof for $peer, not sending")
++    }
++  }
++
+   /**
+     * Process NiPoPoW proof got from remote peer
+     */
+@@ -1703,6 +1719,11 @@ class ErgoNodeViewSynchronizer(networkControllerRef: ActorRef,
+       }
+     case (_: GetNipopowProofSpec.type, data: NipopowProofData, remote) =>
+       sendNipopowProof(data, hr, remote)
++    case (_: GetBoxProofSpec.type, ids: Seq[_], remote) =>
++      usrOpt match {
++        case Some(usr) => sendBoxProof(ids.collect { case id: Array[Byte] => id }, usr, remote)
++        case None => log.warn(s"Asked for a box proof when UTXO set is not supported, remote: $remote")
++      }
+     case (_: NipopowProofSpec.type , proofBytes: Array[Byte], remote) =>
+       processNipopowProof(proofBytes, hr, remote)
+   }

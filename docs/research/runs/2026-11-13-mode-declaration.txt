@@ -1,0 +1,22 @@
+== arm: nothing
+frames received from 127.0.0.2:19031 in 30 s:
+  code   1 GetPeers           x1  0 B
+  code  55 Inv                x1464  49776 B
+  code  65 SyncInfo           x2  669 B
+asked us for data (RequestModifier): 0; asked us for a proof (GetNipopowProof): 0
+B after the arm: {"fullHeight":366,"headersHeight":368,"peersCount":2}  A: {"fullHeight":368}
+== arm: light
+frames received from 127.0.0.2:19031 in 30 s:
+  code   1 GetPeers           x1  0 B
+  code  55 Inv                x1484  50456 B
+  code  65 SyncInfo           x2  669 B
+asked us for data (RequestModifier): 0; asked us for a proof (GetNipopowProof): 0
+B after the arm: {"fullHeight":371,"headersHeight":373,"peersCount":2}  A: {"fullHeight":373}
+== arm: full-claim-control
+frames received from 127.0.0.2:19031 in 30 s:
+  code   1 GetPeers           x1  0 B
+  code  55 Inv                x1508  51272 B
+  code  65 SyncInfo           x2  669 B
+asked us for data (RequestModifier): 0; asked us for a proof (GetNipopowProof): 0
+B after the arm: {"fullHeight":377,"headersHeight":379,"peersCount":2}  A: {"fullHeight":379}
+finished

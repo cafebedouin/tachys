@@ -1,0 +1,10 @@
+testnet, scratch wallet with two addresses of one phrase; payer funds each, then one payment must spend from both:
+balance 0.492000000 ERG in 2 boxes, proven at height 643220
+accepted, "892790d38b4864881c82c0bce5e35
+balance 0.020000000 ERG in 1 boxes, proven at height 643223
+balance 0.470900000 ERG in 1 boxes, proven at height 643223
+accepted, "dd6332f5202a01d3cbb7f95d40eb4d5b9e22f9ce502b569d1
+balance 0.025000000 ERG in 2 boxes, proven at height 643224
+== spend needing both addresses' boxes (0.022 of 0.025 ERG)
+accepted, "7dce7d1c2f1aeca1e17489d0af7acf322e707b72d4cc35888
+balance 0.001900000 ERG in 1 boxes, proven at height 643225

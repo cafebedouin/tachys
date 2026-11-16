@@ -1,0 +1,22 @@
+NOTE: the network-group count below is wrong for this run. Twelve of these fourteen peers advertise the same
+REST address (node.ergo.eutxo.de), so the proofs came from three distinct servers, not ten groups.
+Grouping must be by the server actually queried. Kept as run.
+
+  132.226.207.194_9030     631920 B on disk, 179252 B wire: OK tip 1916001 work-checked 139 difficulty Bounded
+  213.239.193.208_9031     631920 B on disk, 179252 B wire: OK tip 1916001 work-checked 139 difficulty Bounded
+  23.139.82.232_9030       631920 B on disk, 179252 B wire: OK tip 1916001 work-checked 139 difficulty Bounded
+  54.36.120.105_9030       631920 B on disk, 179252 B wire: OK tip 1916001 work-checked 139 difficulty Bounded
+  64.120.95.14_9030        631920 B on disk, 179252 B wire: OK tip 1916001 work-checked 139 difficulty Bounded
+  72.14.147.199_9030       631920 B on disk, 179252 B wire: OK tip 1916001 work-checked 139 difficulty Bounded
+  <own-node>_9030       631920 B on disk, 179252 B wire: OK tip 1916001 work-checked 139 difficulty Bounded
+  78.46.40.7_9030          631920 B on disk, 179252 B wire: OK tip 1916001 work-checked 139 difficulty Bounded
+  78.46.82.211_9030        631920 B on disk, 179252 B wire: OK tip 1916001 work-checked 139 difficulty Bounded
+  82.153.68.166_9030       631920 B on disk, 179252 B wire: OK tip 1916001 work-checked 139 difficulty Bounded
+  85.121.122.132_9030      631920 B on disk, 179252 B wire: OK tip 1916001 work-checked 139 difficulty Bounded
+  85.121.124.115_9030      631920 B on disk, 179252 B wire: OK tip 1916001 work-checked 139 difficulty Bounded
+  85.121.52.18_9030        631920 B on disk, 179252 B wire: OK tip 1916001 work-checked 139 difficulty Bounded
+  85.121.54.203_9030       631920 B on disk, 179252 B wire: OK tip 1916001 work-checked 139 difficulty Bounded
+cluster 1: 14 peers in 10 network groups, heights 1915992..1916001, tip 313139c567136cb490226bdc57a9b9584c164c1c797f9c683e78e9c99437b5fd
+verdict: Agreed
+tip: height 1916001 id 313139c567136cb490226bdc57a9b9584c164c1c797f9c683e78e9c99437b5fd (185 s old)
+state root: 7f8a572d162e854e85eec0e977761fdbd090cd8f81d312509f4f4b3fa354661f19

@@ -1,0 +1,49 @@
+== payer: restore
+restored wallet: address <address>
+reconcile: http://213.239.193.208:9052 lists 3 unspent boxes, 3 not yet tracked
+proof from http://213.239.193.208:9052: the proof matches no header of the agreed chain; run `tachys tips` again
+NOT PROVEN by any node given
+== payee: new wallet
+verdict: Agreed
+new wallet: address <address>
+birthday height 642461 (nothing before it is ever looked for)
+== payer: fresh tip, then prove
+verdict: Agreed
+tip: height 642462 id 73cda2ec8422833ffc484196a3334790aa3fd246a63f16822abd0d8b745184d0 (51 s old)
+reconcile: http://213.239.193.208:9052 lists 3 unspent boxes, 3 not yet tracked
+proof from http://213.239.193.208:9052: the proof matches no header of the agreed chain; run `tachys tips` again
+NOT PROVEN by any node given
+== payer: send 0.1 ERG to the payee and broadcast
+send: box selection: NotEnoughCoins(101100000)
+== payer: fresh tip, then prove
+verdict: Agreed
+tip: height 642464 id c8ab5968c77fa672523800180d1971e95087b120fd2c8e3e3f3941b9d482b413 (46 s old)
+reconcile: http://213.239.193.208:9052 lists 3 unspent boxes, 3 not yet tracked
+  2a8633a7…  17000000 nanoERG, proven unspent at 642464 (added)
+  31305816…  27000000 nanoERG, proven unspent at 642464 (added)
+  5fb5fd12…  1010000000 nanoERG, proven unspent at 642464 (added)
+address <address>
+balance 1.054000000 ERG in 3 boxes, proven at height 642464
+cost: 2 requests, 254 B sent, 6133 B received
+signed: tx ab5a66e9… (1491 B as JSON), 1 inputs, 3 outputs
+receipt for the payee (box ids to hand over): e9c7bfa8…
+change we will look for ourselves: 0d5cb529…
+broadcast via http://213.239.193.208:9052: accepted, "ab5a66e9…"
+receipt box on chain after about 30 s
+== payee: fresh tip, then accept the receipt
+neighbour cost: 3 connections, 11 messages sent, 5.3 connection-seconds held (failures included), 5091 B received, 15.5 s wall
+verdict: Agreed
+tip: height 642465 id 1ff71e4f0d437f918d9602c48eea9ad618008bf637c3642dc629164c0c467781 (28 s old)
+  e9c7bfa8…  100000000 nanoERG, proven unspent at 642465 (added)
+address <address>
+balance 0.100000000 ERG in 1 boxes, proven at height 642465
+cost: 1 requests, 68 B sent, 1732 B received
+== payer: status (no address lookup; change found from our own record)
+verdict: Agreed
+  2a8633a7…  17000000 nanoERG, proven unspent at 642466
+  31305816…  27000000 nanoERG, proven unspent at 642466
+  0d5cb529…  908900000 nanoERG, proven unspent at 642466 (added)
+address <address>
+balance 0.952900000 ERG in 3 boxes, proven at height 642466
+cost: 1 requests, 202 B sent, 4308 B received
+done

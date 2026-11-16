@@ -1,0 +1,29 @@
+FreeDEX page (live), phone-signing route, test wallet address, 0.2 ERG -> SigUSD:
+wallet: phone: <address> disconnect
+receive options: ERG, RSN  (227030 ERG pool), SigUSD  (149612 ERG pool), rsBTC  (51695 ERG pool), rsFIRO  (32984 ERG pool), MEOW  (22719 ERG pool), QUACKS  (16451 ERG pool), Paideia  (15570 ERG pool)
+receive asset: SigUSD  (149612 ERG pool)  estimate out: 0.03
+route: ERG pool, 149612 ERG deep
+quote: Pool price | 5.725348 ERG per SigUSD | Pool fee | 0.5% to liquidity providers | You receive (estimate) | 0.03 SigUSD | Minimum after slippage | 0.03 | Price impact | 0% | Miner fee | 0.001 ERG (the only fee this page adds)
+txid: b235e523…
+
+tachys reading of that request (before signing):
+request: 2 inputs (1 yours, 1 proven others), 4 outputs
+you give: 972179778 nanoERG, 22485301 of token c1980d8299, 1 of token db47ea5b1d
+you get back: 771179778 nanoERG, 3 of token 03faf2cb32, 22485301 of token c1980d8299, 1 of token db47ea5b1d
+others put in: 149612693283116 nanoERG, 2613163 of token 03faf2cb32, 9223372022202950964 of token 303f390265, 1 of token 9916d75132
+others receive: 149612893283116 nanoERG, 2613160 of token 03faf2cb32, 9223372022202950964 of token 303f390265, 1 of token 9916d75132
+network fee: 1000000 nanoERG
+net for you: -201000000 nanoERG, +3 of token 03faf2cb32
+not signed (add --sign to sign and send)
+
+signed and sent:
+network fee: 1000000 nanoERG
+net for you: -201000000 nanoERG, +3 of token 03faf2cb32
+signed and sent via http://<own-node>:9053: accepted, "b235e523…"
+
+after confirmation:
+  e177836e…  1000000 nanoERG, proven unspent at 1916255 (added)
+  a261e9dc…  770179778 nanoERG, proven unspent at 1916255 (added)
+balance 20.092868012 ERG in 22 boxes, proven at height 1916255
+[{"id":"003bd19d01","amount":100},{"id":"01dce8a563","amount":87561},{"id":"03faf2cb32","amount":3},{"id":"6c35aa395c","amount":100},{"id":"c1980d8299","amount":22485301},{"id":"db47ea5b1d","amount":1},{"id":"f0cac602d6","amount":4836}]
+{"inclusionHeight":1916255,"numConfirmations":1}

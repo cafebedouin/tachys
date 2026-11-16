@@ -1,0 +1,46 @@
+[rig] === handing off to hook: rig/store-forward.sh ===
+[sf] 1. online: the payer wallet is created, paid by the node's wallet, and proves its box
+  balance 0.500000000 ERG in 1 boxes, proven at height 26
+  cost: 1 requests, 36 B sent, 366 B received
+[sf] 2. the payer loses its connection to the node
+[rig] partition A<->T2 (100% loss)
+  payer -> node: no peer pushed a usable tip
+[sf] 3. offline, the payer signs 0.1 ERG to the node's address and writes a parcel
+  signed: tx 50649de0… (1477 B as JSON), 1 inputs, 3 outputs
+  receipt for the payee (box ids to hand over): 81b67df1…
+  change we will look for ourselves: 1dcfa4d0…
+  parcel written to rig/out/rig3/tachys/parcel.json (291 B of transaction); hand it to any wallet that can reach the network
+[sf] 4. the carrier wallet syncs, serves, and takes the parcel from the payer
+  handed to 10.9.21.1:9030: it acknowledged tx 50649de0… (672 B)
+  carrier: tachys serve (devnet): 10 headers 19..28 on 10.9.21.1:9030 for 10 s
+  carrier: served: 1 connections, 1 sync pushes, 0 header requests (0 headers), 1 parcels taken, 2216 B sent
+[sf] 4b. controls: a carrier must refuse bad parcels before anything reaches the node
+  handed to 10.9.21.1:9030: it acknowledged tx 50649de0… (675 B)
+  [badproof] outbox: 1 payment(s) to submit to 10.9.20.1:9021
+  [badproof]   50649de0… REFUSED before submission: spending proof or balance check failed: ReducedToFalse(0, VerificationResult { result: false, cost: 0, diag: ReductionDiagn
+  [badproof] outbox done: 0 submitted, 1 refused
+  handed to 10.9.21.1:9030: it acknowledged tx b09caa94… (675 B)
+  [badinput] outbox: 1 payment(s) to submit to 10.9.20.1:9021
+  [badinput]   b09caa94… REFUSED before submission: input 38462ab8a4a552e5 is not an unspent box at height 37; dropped
+  [badinput] outbox done: 0 submitted, 1 refused
+  node mempool holds the payment: no
+[sf] 5. the carrier submits what it carries to the node over the peer protocol
+  outbox: 1 payment(s) to submit to 10.9.20.1:9021
+    50649de0… checked: inputs proven unspent at height 38, spending proofs verify
+    50649de0… delivered on request (2 messages sent, 804 ms held)
+  outbox done: 1 submitted, 0 refused
+[sf] 6. the payment confirms
+  node's wallet sees tx 50649de0… with 2 confirmation(s)
+[sf] 6b. control: the same parcel handed over again after it confirmed is refused as already on chain
+  handed to 10.9.21.1:9030: it acknowledged tx 50649de0… (672 B)
+  [replay] outbox: 1 payment(s) to submit to 10.9.20.1:9021
+  [replay]   50649de0… REFUSED before submission: already on chain (an output exists at height 45); dropped
+  [replay] outbox done: 0 submitted, 1 refused
+[sf] 7. the payer reconnects and finds its change without asking for it by address
+[rig] heal A<->T2
+    1dcfa4d0…  398900000 nanoERG, proven unspent at 46 (added)
+  address <address>
+  balance 0.398900000 ERG in 1 boxes, proven at height 46
+  cost: 1 requests, 36 B sent, 400 B received
+[sf] verdict: PASS
+[rig] === hook done (verdict: PASS) ===

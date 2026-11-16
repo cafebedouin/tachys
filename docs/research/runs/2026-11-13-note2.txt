@@ -1,0 +1,28 @@
+Galaxy Note 2 (SGH-T889, Exynos 4412, 1.6 GHz), LineageOS, Android 7.1.2 (API 25), armeabi-v7a, 1.8 GB RAM, over Wi-Fi
+== tip sync, mainnet (first run)
+neighbour cost: 7 connections, 6 messages sent, 13.1 connection-seconds held (failures included), 19446 B received, 6.6 s wall
+verdict: Agreed
+tip: height 1916141 id a0d21b68317be57737bdb36a424523c77b0de7bee009883a29a0e8fbaa5fe672 (167 s old)
+state root: c0706d03a7c81709d501dc876369abb41ee3b247b36cb6623d03aaff1fded7d419
+    -> peak memory 2320 KB
+== tip sync, mainnet (second run)
+neighbour cost: 8 connections, 7 messages sent, 15.3 connection-seconds held (failures included), 20877 B received, 7.0 s wall
+verdict: Agreed
+tip: height 1916141 id a0d21b68317be57737bdb36a424523c77b0de7bee009883a29a0e8fbaa5fe672 (174 s old)
+state root: c0706d03a7c81709d501dc876369abb41ee3b247b36cb6623d03aaff1fded7d419
+    -> peak memory 2280 KB
+== new wallet (key generation on the device)
+new wallet: address <address>
+birthday height 0 (nothing before it is ever looked for)
+saved to /data/local/tmp/tachys/st2/wallet.json
+    -> peak memory 1628 KB
+== prove an address's 21 boxes against the agreed tip (REST node)
+  a62e97a2…  672446 nanoERG, 0 tokens, created at 1891043
+  32a16180…  675109939 nanoERG, 0 tokens, created at 1891042
+  49b326ba…  63430592 nanoERG, 0 tokens, created at 1891042
+verdict: PROVEN at height 1916141: 21 of 21 boxes unspent, 20.293868012 ERG, 10 token entries
+    -> peak memory 1896 KB
+== verify a 162 KB NiPoPoW proof from disk (127 work checks)
+  mainnet-1915810          162313 B: REJECTED [C8Recency]
+verdict: NO QUORUM; no tip is trusted
+    0m01.02s real     0m00.99s user     0m00.02s system

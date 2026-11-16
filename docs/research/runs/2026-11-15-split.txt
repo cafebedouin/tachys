@@ -1,0 +1,93 @@
+main.rs split into modules (a move: every function and command body carried over as it was). Host, 2026-11-15. "before" is the binary built from
+commit 31d9654, "after" the one built from the split tree. The wallet is the public BIP-39 test phrase on testnet,
+which someone has funded. Nothing was signed or broadcast. Addresses and the node are left out.
+
+== lines of the old main.rs against the new files (indentation and pub(crate) ignored)
+in the old file and not in the new ones: 21 lines: the old file's own doc line and `use` line, the eleven
+  command-dispatch lines of main() (rewritten to call a module), six `return;` that ended a command's block in
+  main(), and `mod tests {` with its `use super::*;`
+in the new files and not in the old one: 106 lines: module docs, `mod` and `use` lines, the seven `fn` lines and
+  one-line docs that now wrap the commands that were blocks in main(), and the rewritten dispatch lines
+
+== wc -l crates/tachys-cli/src/*.rs
+    93 agent.rs
+    54 chain.rs
+    61 main.rs
+    53 network.rs
+   109 outbox.rs
+   209 policy.rs
+   247 proofs.rs
+    68 seal.rs
+    91 serve.rs
+   148 sync.rs
+    52 tests.rs
+   194 tips.rs
+    53 tools.rs
+    49 util.rs
+   845 wallet.rs
+  2326 total
+
+== cargo test --release -p tachys -p tachys-verify -p tachys-net
+     Running unittests src/main.rs
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+     Running tests/difficulty_port.rs
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+     Running tests/peers.rs
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+     Running tests/tip.rs
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+     Running tests/vectors.rs
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+== twenty commands that need no network, before and after: output and exit codes
+$ tachys 	[exit 2]
+$ tachys nosuch	[exit 2]
+$ tachys qr ergo:9f...test?amount=1	[exit 0]
+$ tachys check /nonexistent_1.bin	[exit 0]
+$ tachys wallet restore --state ST --network testnet --mnemonic-file bad.txt	[exit 2]
+$ tachys wallet restore --state ST --network testnet --mnemonic-file vec.txt	[exit 2]
+$ tachys wallet derive --network testnet --mnemonic-file vec.txt	[exit 0]
+$ tachys wallet receive --state ST --network testnet	[exit 2]
+$ tachys wallet address --state ST --network testnet	[exit 0]
+$ tachys wallet pubkey --state ST --network testnet	[exit 0]
+$ tachys wallet status --state ST --network testnet	[exit 2]
+$ tachys wallet name --state ST --network testnet --name scratch	[exit 0]
+$ tachys wallet mnemonic --state ST --network testnet	[exit 0]
+$ tachys wallet send --state ST --network testnet --to <address> --amount 1000000	[exit 1]
+$ tachys wallet request --state ST --network testnet	[exit 1]
+$ tachys boxes --state ST --network testnet --ids 00	[exit 2]
+$ tachys outbox --state ST --network testnet --rest <node>	[exit 0]
+$ tachys token --state ST --network testnet --node <node> --id 00	[exit 1]
+$ tachys handoff --peer 127.0.0.1:9 --parcel /nonexistent	[exit 2]
+$ tachys sync --seeds /nonexistent	[exit 2]
+diff of the two runs' full output, wallet.json and file modes included: none
+
+== balance, pay, accept, serve and tips, before and after (live, run one after the other)
+the output differs only in what the network gave: block heights, peers' order and timings
+
+== restore over the network, before (the node was one block past the tip the peers had reached)
+$ tachys tips --state wallet --network testnet --quorum 2     (two network groups answered; three were asked for by default)
+$ tachys wallet restore --state wallet --network testnet --mnemonic-file FILE --node <node>
+node is 1 block(s) past the agreed tip; extended with work-checked, linked headers from <node>
+  237f8214…  10000000000 nanoERG, seen unspent at 647091, above the tip the peers agree on (647090): one source, confirmations 0 (added)
+address <address>
+balance 10.000000000 ERG in 1 boxes, proven at height 647091
+cost: 23 requests, 1176 B sent, 11401 B received
+note: height 647091 is above the tip the peers agree on (647090); the headers between came from this node alone
+
+== the same, after (the peers had reached the node's block)
+  237f8214…  10000000000 nanoERG, proven unspent at 647092, confirmations 1 (added)
+address <address>
+balance 10.000000000 ERG in 1 boxes, proven at height 647092
+cost: 21 requests, 1108 B sent, 2335 B received
+
+== wallet status on two copies of one state, before and after, started together
+  237f8214…  10000000000 nanoERG, proven unspent at 647092, confirmations 1
+address <address>
+balance 10.000000000 ERG in 1 boxes, proven at height 647092
+cost: 1 requests, 68 B sent, 1666 B received
+diff of the two outputs: none; the two wallet.json files hold the same values
+
+Not run after the split: signing and sending (the scratch wallet's keys were not used), the app on a phone.
+cargo test --workspace also runs the vendored codec's tests, one of which fails for want of a fixture file
+(vendor/arkadianet-codec/ergo-primitives, digest test: "oracle fixture missing"). The split touches nothing under vendor/.

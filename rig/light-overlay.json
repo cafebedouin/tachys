@@ -1,0 +1,12 @@
+{
+  "jar": "${TACHYS_JAR_RELEASE}",
+  "nodes": [
+    { "name": "A", "mining": true, "mine_poll": "3s", "knownPeers": [] },
+    { "name": "T1", "defer": true, "knownPeers": [] },
+    { "name": "T2", "defer": true, "knownPeers": [] }
+  ],
+  "links": [
+    { "a": "A", "b": "T1", "delay_ms": 0, "loss_pct": 0 },
+    { "a": "T1", "b": "T2", "delay_ms": 0, "loss_pct": 0 }
+  ]
+}

@@ -1,0 +1,2195 @@
+use super::*;
+use crate::address_book::AddressBookError;
+use std::net::Ipv4Addr;
+
+fn addr(a: u8, b: u8, c: u8, d: u8, port: u16) -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(a, b, c, d)), port)
+}
+
+/// Trusted IPs are no-op for `penalize`. Even a permanent penalty must
+/// not transition a trusted peer to `Banned` or remove it from the
+/// peer table. Logged at info level; behavior matches Scala's
+/// always-reconnect treatment of operator-supplied `knownPeers`.
+/// `peers_for_sharing` must rotate the returned subset across calls so
+/// every recipient of a `Peers` reply doesn't see the same prefix.
+/// Mirrors Scala `PeerManager.scala`'s `Random.shuffle` intent —
+/// without it, the gossip share is deterministic per-process and one
+/// well-connected peer gets propagated more than others.
+/// Inbound peers connect from an ephemeral client port; their listening
+/// port is carried in the declared address. Verify that handshake
+/// completion records the declared (listening) socket in
+/// `known_addresses` so a later dial cycle can reach them after the
+/// current session ends. Outbound peers already have their listening
+/// address in the pool (that's how the dial found them); the test
+/// asserts the inbound case specifically.
+#[test]
+fn inbound_handshake_persists_declared_for_redial() {
+    use crate::handshake::DeclaredAddress;
+    let mut mgr = PeerManager::new(42);
+    let now = Instant::now();
+    // Inbound peer: observed at ephemeral client port 52331, declared
+    // at listening port 9030 on a routable address.
+    let observed = addr(213, 239, 193, 208, 52331);
+    let declared_listening = addr(213, 239, 193, 208, 9030);
+    mgr.register_inbound(observed, now).unwrap();
+    mgr.mark_tcp_connected(&observed);
+
+    let known_before = mgr.known_addresses_len();
+    let spec = PeerSpec {
+        agent_name: "remote".into(),
+        version: crate::handshake::Version::NIPOPOW,
+        node_name: "r".into(),
+        declared_address: Some(DeclaredAddress {
+            addr: vec![213, 239, 193, 208],
+            port: 9030,
+        }),
+        features: Vec::new(),
+    };
+    mgr.complete_handshake(&observed, spec, None, now).unwrap();
+
+    let known_after = mgr.known_addresses_len();
+    assert_eq!(
+        known_after,
+        known_before + 1,
+        "inbound handshake should add declared listening address to pool",
+    );
+
+    // While still connected, the per-IP filter in `check_can_connect`
+    // excludes the declared listening port from dial candidates (we're
+    // already on that IP via the ephemeral client port). Post-disconnect,
+    // the declared address must surface so a future dial cycle can
+    // re-reach the peer at its listening port.
+    mgr.disconnect(&observed);
+    let candidates = mgr.addresses_to_connect(now, 10);
+    assert!(
+        candidates.contains(&declared_listening),
+        "declared listening address must be a future dial candidate post-disconnect, got {candidates:?}",
+    );
+}
+
+#[test]
+fn peers_for_sharing_rotates_across_seeds() {
+    use crate::handshake::DeclaredAddress;
+    let mut mgr = PeerManager::new(7);
+    let now = Instant::now();
+    // Four routable peers — enough that limit=2 leaves two-out-of-four
+    // combinations; rotation starts at `seed % 4` so different seeds
+    // pick distinguishable subsets.
+    let peers = [
+        (addr(213, 239, 193, 208, 9030), [213u8, 239, 193, 208]),
+        (addr(45, 33, 102, 17, 9030), [45, 33, 102, 17]),
+        (addr(159, 65, 11, 55, 9030), [159, 65, 11, 55]),
+        (addr(78, 47, 9, 200, 9030), [78, 47, 9, 200]),
+    ];
+    let mk_spec = |octets: [u8; 4]| PeerSpec {
+        agent_name: "n".into(),
+        version: crate::handshake::Version::NIPOPOW,
+        node_name: "x".into(),
+        declared_address: Some(DeclaredAddress {
+            addr: octets.to_vec(),
+            port: 9030,
+        }),
+        features: Vec::new(),
+    };
+    for (a, octets) in &peers {
+        mgr.register_outbound(*a, now).unwrap();
+        mgr.mark_tcp_connected(a);
+        mgr.complete_handshake(a, mk_spec(*octets), None, now)
+            .unwrap();
+    }
+
+    // Sort key is declared-address bytes: 45.33.102.17 < 78.47.9.200
+    // < 159.65.11.55 < 213.239.193.208. seed=0 starts at index 0,
+    // seed=1 at index 1, etc. Each rotation is contiguous-modulo-len.
+    let s0 = mgr.peers_for_sharing(2, 0);
+    let s1 = mgr.peers_for_sharing(2, 1);
+    assert_eq!(s0.len(), 2);
+    assert_eq!(s1.len(), 2);
+    let first_addr_s0 = s0[0].declared_address.as_ref().unwrap().addr.clone();
+    let first_addr_s1 = s1[0].declared_address.as_ref().unwrap().addr.clone();
+    assert_ne!(
+        first_addr_s0, first_addr_s1,
+        "different seeds must pick different leading peers",
+    );
+}
+
+#[test]
+fn select_peer_for_gossip_rotates_with_seed() {
+    // Different seeds modulo the eligible-peer count must select
+    // different peers — pins the random-rotation contract so a
+    // silent-but-connected peer can't monopolize gossip rounds.
+    let mut mgr = PeerManager::new(12345);
+    let a = addr(10, 0, 0, 10, 9030);
+    let b = addr(10, 0, 0, 11, 9030);
+    let now = Instant::now();
+    mgr.register_outbound(a, now).unwrap();
+    mgr.mark_tcp_connected(&a);
+    mgr.complete_handshake(&a, spec(), None, now).unwrap();
+    mgr.register_outbound(b, now).unwrap();
+    mgr.mark_tcp_connected(&b);
+    mgr.complete_handshake(&b, spec(), None, now).unwrap();
+
+    // Eligible peers sorted by SocketAddr → [a, b]. seed=0 → a, seed=1 → b.
+    assert_eq!(mgr.select_peer_for_gossip(now, 0), Some(a));
+    assert_eq!(mgr.select_peer_for_gossip(now, 1), Some(b));
+    assert_eq!(mgr.select_peer_for_gossip(now, 2), Some(a));
+    assert_eq!(mgr.select_peer_for_gossip(now, 3), Some(b));
+}
+
+#[test]
+fn select_peer_for_gossip_none_when_empty() {
+    let mgr = PeerManager::new(12345);
+    assert_eq!(mgr.select_peer_for_gossip(Instant::now(), 0), None);
+}
+
+#[test]
+fn gossip_interval_matches_scala_default() {
+    // Scala's `scorexSettings.network.getPeersInterval` defaults to
+    // 2 minutes. Pin so a refactor that shortens the gate doesn't
+    // silently triple our gossip traffic.
+    assert_eq!(GOSSIP_INTERVAL, Duration::from_secs(120));
+}
+
+fn unique_addr(i: usize) -> SocketAddr {
+    // Distinct /16 subnet per index so per-IP (/32) and per-subnet (/16)
+    // caps never collide for indices up to ~65k. octet0 starts at 1 to
+    // stay off the 0.0.0.0/8 reserved block.
+    let hi = 1 + (i / 256) as u8;
+    let lo = (i % 256) as u8;
+    addr(hi, lo, 0, 1, 9030)
+}
+
+fn spec() -> PeerSpec {
+    PeerSpec {
+        agent_name: "test".into(),
+        version: crate::handshake::Version::NIPOPOW,
+        node_name: "node".into(),
+        declared_address: None,
+        features: Vec::new(),
+    }
+}
+
+#[test]
+fn register_and_handshake() {
+    let mut mgr = PeerManager::new(12345);
+    let now = Instant::now();
+    let a = addr(10, 0, 0, 1, 9030);
+
+    mgr.register_outbound(a, now).unwrap();
+    assert_eq!(mgr.peer_count(), 1);
+    assert_eq!(mgr.connected_count(), 0); // not yet handshaked
+
+    mgr.mark_tcp_connected(&a);
+    mgr.complete_handshake(&a, spec(), None, now).unwrap();
+    assert_eq!(mgr.connected_count(), 1);
+}
+
+#[test]
+fn per_ip_limit_enforced() {
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    let a1 = addr(10, 0, 0, 1, 9030);
+    let a2 = addr(10, 0, 0, 1, 9031); // same IP, different port
+
+    mgr.register_outbound(a1, now).unwrap();
+    let result = mgr.register_outbound(a2, now);
+    assert_eq!(result, Err(ConnectError::PerIpLimitReached));
+}
+
+#[test]
+fn per_subnet_limit_enforced() {
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    // Same /16 subnet: 10.0.x.x
+    mgr.register_outbound(addr(10, 0, 0, 1, 9030), now).unwrap();
+    mgr.register_outbound(addr(10, 0, 0, 2, 9030), now).unwrap();
+    mgr.register_outbound(addr(10, 0, 0, 3, 9030), now).unwrap();
+    let result = mgr.register_outbound(addr(10, 0, 0, 4, 9030), now);
+    assert_eq!(result, Err(ConnectError::PerSubnetLimitReached));
+}
+
+#[test]
+fn max_connections_enforced() {
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    for i in 0..DEFAULT_MAX_CONNECTIONS {
+        mgr.register_outbound(unique_addr(i), now).unwrap();
+    }
+    let result = mgr.register_outbound(addr(200, 200, 200, 200, 9030), now);
+    assert_eq!(result, Err(ConnectError::TooManyConnections));
+}
+
+#[test]
+fn self_connection_rejected() {
+    let mut mgr = PeerManager::new(42);
+    let now = Instant::now();
+    let a = addr(10, 0, 0, 1, 9030);
+    mgr.register_outbound(a, now).unwrap();
+    mgr.mark_tcp_connected(&a);
+    let result = mgr.complete_handshake(&a, spec(), Some(42), now);
+    assert_eq!(result, Err(ConnectError::SelfConnection));
+}
+
+#[test]
+fn version_too_old_rejected() {
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    let a = addr(10, 0, 0, 1, 9030);
+    mgr.register_outbound(a, now).unwrap();
+    mgr.mark_tcp_connected(&a);
+    let old_spec = PeerSpec {
+        version: crate::handshake::Version {
+            major: 3,
+            minor: 0,
+            patch: 0,
+        },
+        ..spec()
+    };
+    let result = mgr.complete_handshake(&a, old_spec, None, now);
+    assert!(matches!(result, Err(ConnectError::VersionTooOld(_))));
+}
+
+#[test]
+fn penalize_and_ban() {
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    let a = addr(10, 0, 0, 1, 9030);
+    mgr.register_outbound(a, now).unwrap();
+    mgr.mark_tcp_connected(&a);
+    mgr.complete_handshake(&a, spec(), None, now).unwrap();
+
+    let mut t = now;
+    // Push above Scala's 500-point ban threshold with spam penalties (+25 each).
+    // Need enough to overcome decay (10 per 10min).
+    for _ in 0..25 {
+        t += crate::peer::SAFE_INTERVAL;
+        mgr.penalize(&a, Penalty::Spam, t);
+    }
+    assert_eq!(mgr.peer_count(), 0, "peer should be removed after ban");
+}
+
+#[test]
+fn evict_timed_out() {
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    let a = addr(10, 0, 0, 1, 9030);
+    mgr.register_outbound(a, now).unwrap();
+    // Still in Connecting state — times out after 5s
+    let evicted =
+        mgr.evict_timed_out(now + crate::peer::CONNECT_TIMEOUT + std::time::Duration::from_secs(1));
+    assert_eq!(evicted, vec![(a, crate::peer::ConnectionState::Connecting)]);
+    assert_eq!(mgr.peer_count(), 0);
+}
+
+#[test]
+fn peer_selection_prefers_active() {
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    let a1 = addr(10, 0, 0, 1, 9030);
+    let a2 = addr(10, 0, 1, 1, 9030);
+
+    mgr.register_outbound(a1, now).unwrap();
+    mgr.mark_tcp_connected(&a1);
+    mgr.complete_handshake(&a1, spec(), None, now).unwrap();
+
+    mgr.register_outbound(a2, now).unwrap();
+    mgr.mark_tcp_connected(&a2);
+    mgr.complete_handshake(&a2, spec(), None, now).unwrap();
+
+    // Touch a2 more recently
+    mgr.touch(&a2, now + std::time::Duration::from_secs(1));
+
+    let selected = mgr.select_peer_for_download(now + std::time::Duration::from_secs(2));
+    assert_eq!(selected, Some(a2));
+}
+
+#[test]
+fn addresses_to_connect_skips_per_ip_collisions() {
+    // Regression: gossip routinely surfaces alternate-port variants
+    // of an already-connected IP. Pre-fix, those sat in the pool,
+    // got reselected each dial cycle, and were rejected by
+    // `register_outbound`'s per-IP gate without ever being backed
+    // off — burning the per-cycle dial budget on guaranteed-failures.
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    let primary = addr(100, 200, 1, 1, 9030);
+    let alt_port = addr(100, 200, 1, 1, 9020); // same IP, different port
+    let other = addr(100, 200, 1, 2, 9030);
+
+    mgr.add_known_address(primary, PeerOrigin::Seed);
+    mgr.add_known_address(alt_port, PeerOrigin::Seed);
+    mgr.add_known_address(other, PeerOrigin::Seed);
+
+    // Before any connection: all three are eligible.
+    assert_eq!(
+        mgr.addresses_to_connect(now, 10),
+        vec![primary, alt_port, other]
+    );
+
+    // Connect to primary. `alt_port` shares its IP and would fail
+    // `register_outbound` with `PerIpLimitReached`, so it must be
+    // filtered out here.
+    mgr.register_outbound(primary, now).unwrap();
+    assert_eq!(mgr.addresses_to_connect(now, 10), vec![other]);
+}
+
+#[test]
+fn addresses_to_connect_skips_per_subnet_saturation() {
+    // The /16 subnet limit (default 3) is also enforced upfront so
+    // dial-budget isn't wasted. With three peers in 100.200.0.0/16,
+    // a fourth gossiped candidate from the same /16 must be filtered
+    // before `register_outbound` sees it.
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    for i in 1..=3u8 {
+        let a = addr(100, 200, 1, i, 9030);
+        mgr.add_known_address(a, PeerOrigin::Seed);
+        mgr.register_outbound(a, now).unwrap();
+    }
+    let fourth = addr(100, 200, 1, 4, 9030);
+    mgr.add_known_address(fourth, PeerOrigin::Seed);
+
+    // Subnet is full — the fourth candidate is filtered out, even
+    // though it has a fresh IP.
+    assert!(mgr.addresses_to_connect(now, 10).is_empty());
+}
+
+#[test]
+fn known_addresses_for_discovery() {
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    // 100.200.1/24 sits outside every special-purpose range (it's
+    // outside the 100.64.0.0/10 CGNAT band and none of the IANA
+    // documentation/benchmarking/reserved ranges `is_never_dialable`
+    // rejects), so it passes the routability filter without being a
+    // real public host. Pre-routability-filter the test used 10/8;
+    // the TEST-NET ranges (192.0.2/24, 198.51.100/24, 203.0.113/24)
+    // used after that are themselves now rejected (CodeRabbit #299
+    // round 3), so this picks a plain, non-special block instead.
+    let a1 = addr(100, 200, 1, 1, 9030);
+    let a2 = addr(100, 200, 1, 2, 9030);
+
+    mgr.add_known_address(a1, PeerOrigin::Seed);
+    mgr.add_known_address(a2, PeerOrigin::Gossip);
+    mgr.add_known_address(a1, PeerOrigin::Seed); // duplicate — should not add
+
+    let to_connect = mgr.addresses_to_connect(now, 10);
+    assert_eq!(to_connect.len(), 2);
+
+    // Connect to a1 — should not appear in to_connect list
+    mgr.register_outbound(a1, now).unwrap();
+    let to_connect = mgr.addresses_to_connect(now, 10);
+    assert_eq!(to_connect.len(), 1);
+    assert_eq!(to_connect[0], a2);
+}
+
+#[test]
+fn add_known_address_caps_dial_pool_under_gossip_flood() {
+    // Regression: an unbounded Vec under gossip flood is a memory
+    // DoS vector. Cap is `MAX_KNOWN_ADDRESSES`; the eviction rule
+    // protects seeds first, then by `(last_seen, -failures)`.
+    let mut mgr = PeerManager::new(1);
+
+    // Fill exactly to cap with synthetic gossip entries. 100.201.1/24
+    // and 100.200.1/24 sit outside every special-purpose range (see
+    // the comment on `known_addresses_for_discovery`), so both pass
+    // the routability filter without being real public hosts. Use
+    // port to disambiguate within a /24 since `add_known_address`
+    // keys on full SocketAddr.
+    let mut count = 0usize;
+    'outer: for octet in 1..=255u8 {
+        for port in 9030u16..=u16::MAX {
+            if count >= MAX_KNOWN_ADDRESSES {
+                break 'outer;
+            }
+            mgr.add_known_address(addr(100, 201, 1, octet, port), PeerOrigin::Gossip);
+            count += 1;
+        }
+    }
+    assert_eq!(mgr.known_addresses_len(), MAX_KNOWN_ADDRESSES);
+
+    // Pushing another gossip entry must NOT grow the pool.
+    let extra_gossip = addr(100, 200, 1, 1, 9030);
+    mgr.add_known_address(extra_gossip, PeerOrigin::Gossip);
+    assert_eq!(
+        mgr.known_addresses_len(),
+        MAX_KNOWN_ADDRESSES,
+        "gossip flood must not grow the pool past the cap"
+    );
+    // The drop-when-no-better rule: incoming gossip with no
+    // seed/last_seen advantage is rejected outright, so the
+    // extra address never appears.
+    assert!(
+        !mgr.known_addresses.iter().any(|k| k.addr == extra_gossip),
+        "incoming gossip at cap must be dropped"
+    );
+
+    // A seed claim, however, must displace the lowest-priority
+    // gossip entry to make room.
+    let seed_addr = addr(100, 200, 1, 99, 9030);
+    mgr.add_known_address(seed_addr, PeerOrigin::Seed);
+    assert_eq!(
+        mgr.known_addresses_len(),
+        MAX_KNOWN_ADDRESSES,
+        "seed insertion must evict + push, not grow the pool"
+    );
+    assert!(
+        mgr.known_addresses
+            .iter()
+            .any(|k| k.addr == seed_addr && k.origin.is_seed()),
+        "seed entry must be present after eviction"
+    );
+}
+
+#[test]
+fn add_known_address_upgrades_gossip_learned_to_seed_on_duplicate() {
+    // Regression: previously a duplicate `add_known_address` call
+    // returned silently regardless of `origin`, leaving an
+    // entry first learned via gossip stuck at `Gossip`
+    // even when the same address appeared in the configured seed
+    // list. AddressBook (the persistence layer) already upgrades
+    // on the same shape (`address_book.rs:395-407`); this fixes
+    // the in-memory mirror to match.
+    let mut mgr = PeerManager::new(1);
+    let a = addr(100, 200, 1, 1, 9030);
+
+    // First learned via gossip (origin=Gossip).
+    mgr.add_known_address(a, PeerOrigin::Gossip);
+    let entry = mgr
+        .known_addresses
+        .iter()
+        .find(|k| k.addr == a)
+        .expect("entry inserted");
+    assert!(
+        !entry.origin.is_seed(),
+        "initial gossip ingest must keep origin=Gossip"
+    );
+
+    // Same address now appears in the seed list — must upgrade.
+    mgr.add_known_address(a, PeerOrigin::Seed);
+    let entry = mgr
+        .known_addresses
+        .iter()
+        .find(|k| k.addr == a)
+        .expect("entry still present");
+    assert!(
+        entry.origin.is_seed(),
+        "duplicate add_known_address(_, Seed) must upgrade gossip → seed"
+    );
+
+    // No duplication.
+    assert_eq!(
+        mgr.known_addresses.iter().filter(|k| k.addr == a).count(),
+        1,
+        "upgrade must be in-place, not duplicate the entry"
+    );
+
+    // Reverse direction (seed → gossip claim) must NOT downgrade.
+    mgr.add_known_address(a, PeerOrigin::Gossip);
+    let entry = mgr
+        .known_addresses
+        .iter()
+        .find(|k| k.addr == a)
+        .expect("entry still present");
+    assert!(
+        entry.origin.is_seed(),
+        "seed status must be sticky against later gossip claims"
+    );
+}
+
+/// Pins the typed outcomes node-level diagnostics depend on. Every
+/// branch of `add_known_address` must report itself accurately so
+/// the `[peers] recv` counters distinguish real progress from
+/// gossip echo.
+#[test]
+fn add_known_address_outcome_taxonomy_is_complete() {
+    let mut mgr = PeerManager::new(1);
+    let routable = addr(100, 200, 1, 1, 9030);
+
+    assert_eq!(
+        mgr.add_known_address(routable, PeerOrigin::Gossip),
+        AddKnownOutcome::Added,
+        "first-time gossip ingest of a routable address",
+    );
+    assert_eq!(
+        mgr.add_known_address(routable, PeerOrigin::Gossip),
+        AddKnownOutcome::AlreadyKnown,
+        "duplicate gossip ingest must be reported as already-known",
+    );
+    assert_eq!(
+        mgr.add_known_address(routable, PeerOrigin::Seed),
+        AddKnownOutcome::UpgradedToSeed,
+        "seed claim against an existing gossip entry must upgrade",
+    );
+    assert_eq!(
+        mgr.add_known_address(routable, PeerOrigin::Seed),
+        AddKnownOutcome::AlreadyKnown,
+        "second seed claim against an already-seed entry is a no-op",
+    );
+
+    // Non-routable gossip — RFC1918 — must surface as filtered.
+    let private_addr = addr(10, 0, 0, 5, 9030);
+    assert_eq!(
+        mgr.add_known_address(private_addr, PeerOrigin::Gossip),
+        AddKnownOutcome::FilteredNonRoutable,
+        "RFC1918 gossip must be reported as filtered, not silently dropped",
+    );
+
+    // Same RFC1918 address with `PeerOrigin::Seed` skips the filter
+    // (the user might be running a local Scala dev peer) and is
+    // accepted as Added.
+    assert_eq!(
+        mgr.add_known_address(private_addr, PeerOrigin::Seed),
+        AddKnownOutcome::Added,
+        "seed claim bypasses routability filter for legitimate local peers",
+    );
+}
+
+#[test]
+fn dial_failure_backoff_skips_recently_failed_until_window_elapses() {
+    // Regression: dead seeds were dominating the dial cycle every
+    // tick because addresses_to_connect returned them in insertion
+    // order with no failure-aware filtering. Gossiped peers behind
+    // them in the list never got a chance.
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    let dead = addr(100, 200, 1, 1, 9030);
+    let live = addr(100, 200, 1, 2, 9030);
+
+    mgr.add_known_address(dead, PeerOrigin::Seed);
+    mgr.add_known_address(live, PeerOrigin::Gossip);
+
+    // Both visible initially.
+    let candidates = mgr.addresses_to_connect(now, 10);
+    assert_eq!(candidates, vec![dead, live]);
+
+    // First failure: dead is suppressed for the first backoff window
+    // (30s); live is still visible.
+    mgr.mark_dial_failed(&dead, now);
+    let after_first = mgr.addresses_to_connect(now, 10);
+    assert_eq!(
+        after_first,
+        vec![live],
+        "dead address suppressed during backoff, live still visible"
+    );
+
+    // Just before the window expires, dead is still suppressed.
+    let almost = now + std::time::Duration::from_secs(29);
+    assert_eq!(mgr.addresses_to_connect(almost, 10), vec![live]);
+
+    // After the window, dead becomes eligible again.
+    let elapsed = now + std::time::Duration::from_secs(31);
+    let candidates = mgr.addresses_to_connect(elapsed, 10);
+    assert_eq!(candidates, vec![dead, live]);
+
+    // Another failure escalates the backoff (30s → 2min).
+    mgr.mark_dial_failed(&dead, elapsed);
+    assert_eq!(
+        mgr.addresses_to_connect(elapsed + std::time::Duration::from_secs(60), 10),
+        vec![live],
+        "second failure → 2min backoff, 1min later still suppressed"
+    );
+    assert_eq!(
+        mgr.addresses_to_connect(elapsed + std::time::Duration::from_secs(125), 10),
+        vec![dead, live],
+        "after 2min, retried"
+    );
+}
+
+#[test]
+fn dial_success_resets_backoff_state() {
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    let a = addr(100, 200, 1, 1, 9030);
+    mgr.add_known_address(a, PeerOrigin::Seed);
+
+    // Two failures escalate to a 2min backoff.
+    mgr.mark_dial_failed(&a, now);
+    mgr.mark_dial_failed(&a, now);
+    assert!(
+        mgr.addresses_to_connect(now + std::time::Duration::from_secs(60), 10)
+            .is_empty(),
+        "still suppressed at 1min into 2min backoff"
+    );
+
+    // Success resets — address is immediately eligible again on next attempt.
+    mgr.mark_dial_succeeded(&a, now);
+    assert_eq!(mgr.addresses_to_connect(now, 10), vec![a]);
+}
+
+#[test]
+fn needs_outbound_tracks_target() {
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    assert!(mgr.needs_outbound());
+
+    for i in 0..DEFAULT_TARGET_OUTBOUND {
+        mgr.register_outbound(unique_addr(i), now).unwrap();
+    }
+    assert!(!mgr.needs_outbound());
+}
+
+#[test]
+fn s4_outbound_deficit_matches_missing_outbound_count() {
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    assert_eq!(mgr.outbound_deficit(), DEFAULT_TARGET_OUTBOUND);
+
+    // Each outbound register reduces deficit by one.
+    for i in 0..(DEFAULT_TARGET_OUTBOUND - 2) {
+        mgr.register_outbound(unique_addr(i), now).unwrap();
+    }
+    assert_eq!(mgr.outbound_deficit(), 2);
+
+    // Fill to the target: deficit hits 0 and stays there even if
+    // more outbound connections happen above the target.
+    mgr.register_outbound(addr(250, 0, 0, 1, 9030), now)
+        .unwrap();
+    mgr.register_outbound(addr(250, 0, 0, 2, 9030), now)
+        .unwrap();
+    assert_eq!(mgr.outbound_deficit(), 0);
+}
+
+#[test]
+fn default_limits_are_decoupled() {
+    // The inbound budget is an explicit field, NOT `max - target`.
+    assert_eq!(DEFAULT_MAX_CONNECTIONS, 384);
+    assert_eq!(DEFAULT_TARGET_OUTBOUND, 96);
+    assert_eq!(DEFAULT_MAX_INBOUND, 256);
+    let limits = PeerLimits::default();
+    assert_eq!(limits.max_inbound(), 256);
+    // Proof of decoupling: the old leftover formula would give 288.
+    assert_ne!(
+        limits.max_inbound(),
+        DEFAULT_MAX_CONNECTIONS - DEFAULT_TARGET_OUTBOUND,
+        "max_inbound must be its own budget, not max_connections - target_outbound",
+    );
+}
+
+#[test]
+fn full_outbound_does_not_reduce_inbound() {
+    // Decoupling invariant: filling the entire outbound target must not
+    // steal a single inbound slot. Small custom limits keep the numbers
+    // tractable and make max_inbound (12) distinct from the old leftover
+    // max - target (20 - 5 = 15).
+    let limits = PeerLimits {
+        max_connections: 20,
+        target_outbound: 5,
+        max_inbound: 12,
+        per_ip_limit: 1,
+        per_subnet_limit: 3,
+    };
+    let mut mgr = PeerManager::new_with_limits(1, limits);
+    let now = Instant::now();
+
+    // Fill outbound to target.
+    for i in 0..5 {
+        mgr.register_outbound(unique_addr(i), now).unwrap();
+    }
+    assert_eq!(mgr.outbound_deficit(), 0);
+
+    // Inbound still reaches its full explicit budget (12), unaffected by
+    // the full outbound set. 5 + 12 = 17 <= 20, so the total ceiling is
+    // not the limiter here — max_inbound is.
+    for i in 5..17 {
+        mgr.register_inbound(unique_addr(i), now).unwrap();
+    }
+    assert_eq!(
+        mgr.register_inbound(unique_addr(17), now),
+        Err(ConnectError::TooManyInbound),
+    );
+}
+
+#[test]
+fn custom_limits_decouple_inbound() {
+    // max_inbound (4) is deliberately NOT max_connections - target_outbound
+    // (12 - 7 = 5), proving the inbound cap is the explicit field.
+    let limits = PeerLimits {
+        max_connections: 12,
+        target_outbound: 7,
+        max_inbound: 4,
+        per_ip_limit: 1,
+        per_subnet_limit: 3,
+    };
+    let mut mgr = PeerManager::new_with_limits(1, limits);
+    let now = Instant::now();
+
+    assert_eq!(mgr.limits(), limits);
+    assert_eq!(mgr.outbound_deficit(), 7);
+
+    // Inbound caps at the explicit 4, not the leftover 5.
+    for i in 0..4 {
+        mgr.register_inbound(unique_addr(i), now).unwrap();
+    }
+    assert_eq!(
+        mgr.register_inbound(unique_addr(4), now),
+        Err(ConnectError::TooManyInbound),
+    );
+
+    // Outbound still reaches its own target (4 + 7 = 11 <= 12).
+    for i in 5..12 {
+        mgr.register_outbound(unique_addr(i), now).unwrap();
+    }
+    assert_eq!(mgr.outbound_deficit(), 0);
+}
+
+#[test]
+fn max_connections_is_hard_ceiling_over_sum() {
+    // target_outbound + max_inbound (5 + 8 = 13) exceeds max_connections
+    // (10). The total ceiling must still cap the sum: once 10 peers are
+    // connected, the next register is rejected as TooManyConnections even
+    // though the inbound budget (8) is not yet full.
+    let limits = PeerLimits {
+        max_connections: 10,
+        target_outbound: 5,
+        max_inbound: 8,
+        per_ip_limit: 1,
+        per_subnet_limit: 3,
+    };
+    let mut mgr = PeerManager::new_with_limits(1, limits);
+    let now = Instant::now();
+
+    for i in 0..5 {
+        mgr.register_outbound(unique_addr(i), now).unwrap();
+    }
+    for i in 5..10 {
+        mgr.register_inbound(unique_addr(i), now).unwrap();
+    }
+    // 10 total = max_connections. Inbound count is only 5 (< 8), yet the
+    // total ceiling rejects first (check_can_connect runs before the
+    // inbound-cap check in register_inbound).
+    assert_eq!(
+        mgr.register_inbound(unique_addr(10), now),
+        Err(ConnectError::TooManyConnections),
+    );
+}
+
+#[test]
+fn max_inbound_zero_is_outbound_only() {
+    // max_inbound = 0 is a legal outbound-only posture: every inbound
+    // registration is rejected immediately, while outbound is unaffected.
+    let limits = PeerLimits {
+        max_connections: 8,
+        target_outbound: 8,
+        max_inbound: 0,
+        per_ip_limit: 1,
+        per_subnet_limit: 3,
+    };
+    let mut mgr = PeerManager::new_with_limits(1, limits);
+    let now = Instant::now();
+
+    assert_eq!(
+        mgr.register_inbound(unique_addr(0), now),
+        Err(ConnectError::TooManyInbound),
+    );
+    // Outbound still works.
+    mgr.register_outbound(unique_addr(1), now).unwrap();
+}
+
+#[test]
+fn ban_survives_disconnect() {
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    let a = addr(10, 0, 0, 1, 9030);
+    mgr.register_outbound(a, now).unwrap();
+    mgr.mark_tcp_connected(&a);
+    mgr.complete_handshake(&a, spec(), None, now).unwrap();
+
+    // Push above Scala's 500-point ban threshold.
+    let mut t = now;
+    for _ in 0..25 {
+        t += crate::peer::SAFE_INTERVAL;
+        mgr.penalize(&a, Penalty::Spam, t);
+    }
+    // Peer removed from table
+    assert_eq!(mgr.peer_count(), 0);
+    // But still banned — can't reconnect
+    assert!(mgr.is_banned(&a, t));
+    let result = mgr.register_outbound(a, t);
+    assert_eq!(result, Err(ConnectError::Banned));
+    // Ban also excludes from discovery
+    mgr.add_known_address(a, PeerOrigin::Gossip);
+    assert!(mgr.addresses_to_connect(t, 10).is_empty());
+}
+
+#[test]
+fn ban_expires_after_duration() {
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    let a = addr(10, 0, 0, 1, 9030);
+    mgr.register_outbound(a, now).unwrap();
+    mgr.mark_tcp_connected(&a);
+    mgr.complete_handshake(&a, spec(), None, now).unwrap();
+
+    let mut t = now;
+    for _ in 0..25 {
+        t += crate::peer::SAFE_INTERVAL;
+        mgr.penalize(&a, Penalty::Spam, t);
+    }
+    assert!(mgr.is_banned(&a, t));
+    // First ban is 30 minutes — should expire after that
+    let after_ban = t + Duration::from_secs(31 * 60);
+    assert!(!mgr.is_banned(&a, after_ban));
+    // Can reconnect now
+    assert!(mgr.register_outbound(a, after_ban).is_ok());
+}
+
+#[test]
+fn version_too_old_frees_slot_and_bans() {
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    let a = addr(10, 0, 0, 1, 9030);
+    mgr.register_outbound(a, now).unwrap();
+    assert_eq!(mgr.peer_count(), 1);
+    mgr.mark_tcp_connected(&a);
+    let old_spec = PeerSpec {
+        version: crate::handshake::Version {
+            major: 3,
+            minor: 0,
+            patch: 0,
+        },
+        ..spec()
+    };
+    let _ = mgr.complete_handshake(&a, old_spec, None, now);
+    // Slot freed
+    assert_eq!(mgr.peer_count(), 0);
+    // Permanently banned
+    assert!(mgr.is_banned(&a, now));
+    assert!(mgr.is_banned(&a, now + Duration::from_secs(86400))); // still banned after 24h
+}
+
+#[test]
+fn select_peer_excluding_skips_excluded() {
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    let a1 = addr(10, 0, 0, 1, 9030);
+    let a2 = addr(10, 0, 1, 1, 9030);
+
+    mgr.register_outbound(a1, now).unwrap();
+    mgr.mark_tcp_connected(&a1);
+    mgr.complete_handshake(&a1, spec(), None, now).unwrap();
+
+    mgr.register_outbound(a2, now).unwrap();
+    mgr.mark_tcp_connected(&a2);
+    mgr.complete_handshake(&a2, spec(), None, now).unwrap();
+
+    // Without exclusion, returns top candidate
+    let selected = mgr.select_peer_for_download(now);
+    assert!(selected.is_some());
+
+    // Excluding top candidate should return the other
+    let top = selected.unwrap();
+    let alt = mgr.select_peer_excluding(now, &[top]);
+    assert!(alt.is_some());
+    assert_ne!(alt.unwrap(), top, "should select a different peer");
+
+    // Excluding both returns None
+    let none = mgr.select_peer_excluding(now, &[a1, a2]);
+    assert!(none.is_none());
+}
+
+// ---- Sync-S1: eligible_download_peers ----
+
+#[test]
+fn eligible_download_peers_empty_when_no_connected() {
+    let mgr = PeerManager::new(1);
+    let out = mgr.eligible_download_peers(Instant::now());
+    assert!(out.is_empty(), "fresh manager → no eligible peers");
+}
+
+#[test]
+fn eligible_download_peers_sorted_by_socket_addr() {
+    // Deterministic ordering is the contract for bucketed distribution.
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    // Register out of sorted order.
+    let a_high = addr(10, 0, 1, 1, 9030);
+    let a_low = addr(10, 0, 0, 1, 9030);
+    let a_mid = addr(10, 0, 0, 5, 9030);
+    for a in [a_high, a_low, a_mid] {
+        mgr.register_outbound(a, now).unwrap();
+        mgr.mark_tcp_connected(&a);
+        mgr.complete_handshake(&a, spec(), None, now).unwrap();
+    }
+
+    let out = mgr.eligible_download_peers(now);
+    assert_eq!(
+        out,
+        vec![a_low, a_mid, a_high],
+        "eligible_download_peers must sort by SocketAddr (IP bytes + port)"
+    );
+}
+
+#[test]
+fn eligible_download_peers_prefers_non_degraded() {
+    // When at least one non-degraded peer is connected, degraded
+    // peers are excluded from the download pool.
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    let a1 = addr(10, 0, 0, 1, 9030);
+    let a2 = addr(10, 0, 1, 1, 9030);
+    for a in [a1, a2] {
+        mgr.register_outbound(a, now).unwrap();
+        mgr.mark_tcp_connected(&a);
+        mgr.complete_handshake(&a, spec(), None, now).unwrap();
+    }
+
+    // Push a2 over the Degraded threshold.
+    let mut t = now;
+    while mgr
+        .connected_peers()
+        .find(|p| p.addr == a2)
+        .map(|p| p.score.effective_score(t))
+        .unwrap_or(0)
+        < DEGRADED_THRESHOLD
+    {
+        mgr.penalize(&a2, Penalty::Spam, t);
+        t += Duration::from_secs(180);
+    }
+
+    let out = mgr.eligible_download_peers(t);
+    assert_eq!(
+        out,
+        vec![a1],
+        "non-degraded a1 preferred; a2 excluded, got {out:?}"
+    );
+}
+
+#[test]
+fn eligible_download_peers_falls_back_to_degraded_when_no_alternative() {
+    // Bucketed by last-seen, falling back to degraded peers. When
+    // EVERY connected peer is degraded, return them all rather than
+    // stalling sync.
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    let a1 = addr(10, 0, 0, 1, 9030);
+    mgr.register_outbound(a1, now).unwrap();
+    mgr.mark_tcp_connected(&a1);
+    mgr.complete_handshake(&a1, spec(), None, now).unwrap();
+
+    let mut t = now;
+    while mgr
+        .connected_peers()
+        .find(|p| p.addr == a1)
+        .map(|p| p.score.effective_score(t))
+        .unwrap_or(0)
+        < DEGRADED_THRESHOLD
+    {
+        mgr.penalize(&a1, Penalty::Spam, t);
+        t += Duration::from_secs(180);
+    }
+
+    let out = mgr.eligible_download_peers(t);
+    assert_eq!(
+        out,
+        vec![a1],
+        "degraded fallback must yield a1 when no alternative, got {out:?}"
+    );
+}
+
+#[test]
+fn eligible_download_peers_excludes_not_yet_handshaked() {
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    let a = addr(10, 0, 0, 1, 9030);
+    mgr.register_outbound(a, now).unwrap();
+    mgr.mark_tcp_connected(&a);
+    // Skip complete_handshake — peer is TCP-connected but not
+    // fully connected per is_connected()'s handshake gate.
+
+    let out = mgr.eligible_download_peers(now);
+    assert!(
+        out.is_empty(),
+        "pre-handshake peer must not be in download pool, got {out:?}"
+    );
+}
+
+#[test]
+fn eligible_download_peers_deprioritizes_delivery_degraded_peer() {
+    // A peer that repeatedly times out on delivery (but never accrues
+    // enough score to degrade) is dropped from the preferred pool once its
+    // streak reaches DELIVERY_DEGRADE_STREAK, and restored the moment it
+    // delivers. The same gate also fronts block_section_capable_peers.
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    let a1 = addr(10, 0, 0, 1, 9030);
+    let a2 = addr(10, 0, 1, 1, 9030);
+    for a in [a1, a2] {
+        mgr.register_outbound(a, now).unwrap();
+        mgr.mark_tcp_connected(&a);
+        mgr.complete_handshake(&a, spec(), None, now).unwrap();
+    }
+
+    // a2 fails to deliver up to the streak threshold. Its score stays clear
+    // of DEGRADED (no penalize call), so only the streak gate can exclude it.
+    for _ in 0..DELIVERY_DEGRADE_STREAK {
+        mgr.note_delivery_outcome(&a2, false);
+    }
+    assert_eq!(
+        mgr.eligible_download_peers(now),
+        vec![a1],
+        "delivery-degraded a2 must be excluded from the preferred pool"
+    );
+
+    // One accepted delivery clears the streak and restores a2.
+    mgr.note_delivery_outcome(&a2, true);
+    assert_eq!(
+        mgr.eligible_download_peers(now),
+        vec![a1, a2],
+        "a2 must rejoin the preferred pool after a successful delivery"
+    );
+}
+
+#[test]
+fn eligible_download_peers_falls_back_when_all_delivery_degraded() {
+    // If every connected peer is delivery-degraded, fall back to using them
+    // rather than stalling sync — mirrors the score-degraded fallback.
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    let a1 = addr(10, 0, 0, 1, 9030);
+    mgr.register_outbound(a1, now).unwrap();
+    mgr.mark_tcp_connected(&a1);
+    mgr.complete_handshake(&a1, spec(), None, now).unwrap();
+
+    for _ in 0..DELIVERY_DEGRADE_STREAK {
+        mgr.note_delivery_outcome(&a1, false);
+    }
+    assert_eq!(
+        mgr.eligible_download_peers(now),
+        vec![a1],
+        "delivery-degraded fallback must yield a1 when it's the only peer"
+    );
+}
+
+#[test]
+fn block_section_capable_peers_falls_back_to_delivery_degraded_archives() {
+    // Capability (full archive) is a hard requirement; the streak is a soft
+    // preference. When every archive peer is delivery-degraded we must still
+    // return them — they're the only peers that have the sections — rather
+    // than an empty set that would route requests to incapable peers.
+    let archive_spec = || {
+        let mut s = spec();
+        s.features = vec![crate::handshake::PeerFeature::Mode {
+            state_type: 0,
+            verify_tx: true,
+            nipopow: None,
+            blocks_to_keep: -1,
+        }];
+        s
+    };
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+    let a1 = addr(10, 0, 0, 1, 9030);
+    let a2 = addr(10, 0, 1, 1, 9030);
+    for a in [a1, a2] {
+        mgr.register_outbound(a, now).unwrap();
+        mgr.mark_tcp_connected(&a);
+        mgr.complete_handshake(&a, archive_spec(), None, now)
+            .unwrap();
+    }
+
+    // Both healthy archives → both preferred.
+    assert_eq!(mgr.block_section_capable_peers(now), vec![a1, a2]);
+
+    // Degrade a2 only → healthy a1 preferred, degraded a2 excluded.
+    for _ in 0..DELIVERY_DEGRADE_STREAK {
+        mgr.note_delivery_outcome(&a2, false);
+    }
+    assert_eq!(
+        mgr.block_section_capable_peers(now),
+        vec![a1],
+        "healthy archive preferred; degraded archive excluded"
+    );
+
+    // Degrade a1 too → all archives degraded → fall back to ALL capable
+    // peers (never empty, or sections would go to peers without the data).
+    for _ in 0..DELIVERY_DEGRADE_STREAK {
+        mgr.note_delivery_outcome(&a1, false);
+    }
+    assert_eq!(
+        mgr.block_section_capable_peers(now),
+        vec![a1, a2],
+        "all archives degraded → fall back to all capable, not empty"
+    );
+}
+
+// ---- Routability filter (tip-hardening) ----
+
+#[test]
+fn is_routable_rejects_rfc1918_and_private_categories() {
+    // RFC1918 — the exact case from prod logs (10.0.0.8:9030 leak).
+    assert!(!is_routable_for_p2p(&addr(10, 0, 0, 8, 9030), false));
+    assert!(!is_routable_for_p2p(&addr(192, 168, 1, 1, 9030), false));
+    assert!(!is_routable_for_p2p(&addr(172, 16, 5, 5, 9030), false));
+    // Loopback / unspecified / multicast.
+    assert!(!is_routable_for_p2p(&addr(127, 0, 0, 1, 9030), false));
+    assert!(!is_routable_for_p2p(&addr(0, 0, 0, 0, 9030), false));
+    assert!(!is_routable_for_p2p(&addr(224, 0, 0, 1, 9030), false));
+    // Link-local.
+    assert!(!is_routable_for_p2p(&addr(169, 254, 1, 1, 9030), false));
+    // Carrier-grade NAT.
+    assert!(!is_routable_for_p2p(&addr(100, 64, 1, 1, 9030), false));
+    assert!(!is_routable_for_p2p(&addr(100, 127, 255, 254, 9030), false));
+    // Port 0 — not dialable.
+    assert!(!is_routable_for_p2p(&addr(213, 239, 193, 208, 0), false));
+
+    // Real public seed addresses must pass.
+    assert!(is_routable_for_p2p(&addr(213, 239, 193, 208, 9030), false));
+    assert!(is_routable_for_p2p(&addr(159, 65, 11, 55, 9030), false));
+    // 100.x outside the CGNAT band is fine.
+    assert!(is_routable_for_p2p(&addr(100, 200, 1, 1, 9030), false));
+
+    // IPv4 broadcast — never a listening address, whatever `allow_local`
+    // says (CodeRabbit #299 round 2: a `Peers` response can hand out
+    // 255.255.255.255, which must not enter the dial pool).
+    assert!(!is_routable_for_p2p(
+        &SocketAddr::new(IpAddr::V4(Ipv4Addr::new(255, 255, 255, 255)), 9030),
+        false
+    ));
+    assert!(!is_routable_for_p2p(
+        &SocketAddr::new(IpAddr::V4(Ipv4Addr::new(255, 255, 255, 255)), 9030),
+        true
+    ));
+}
+
+/// `::ffff:a.b.c.d` (IPv4-mapped IPv6) must classify exactly like the
+/// IPv4 address it embeds — before the fix, `is_local_address`'s IPv6
+/// arm only matched fe80::/10, fc00::/7 and fec0::/10, none of which an
+/// IPv4-mapped address's top segment (always `0`) can hit, so
+/// `::ffff:10.0.0.8` sailed past the RFC1918 rejection `10.0.0.8` itself
+/// gets (CodeRabbit #299 round 2, SSRF-class).
+#[test]
+fn is_routable_rejects_ipv4_mapped_local_addresses() {
+    let mapped = |a, b, c, d| -> SocketAddr {
+        SocketAddr::new(IpAddr::V6(Ipv4Addr::new(a, b, c, d).to_ipv6_mapped()), 9030)
+    };
+
+    assert!(!is_routable_for_p2p(&mapped(127, 0, 0, 1), false));
+    assert!(!is_routable_for_p2p(&mapped(10, 0, 0, 1), false));
+    assert!(!is_routable_for_p2p(&mapped(192, 168, 1, 1), false));
+
+    // The same host is admitted once `allow_local` is set — matching
+    // the plain-IPv4 form's behaviour exactly.
+    assert!(is_routable_for_p2p(&mapped(10, 0, 0, 1), true));
+
+    // A public IPv4-mapped address still passes.
+    assert!(is_routable_for_p2p(&mapped(213, 239, 193, 208), false));
+}
+
+#[test]
+fn is_routable_handles_ipv6_categories() {
+    use std::net::Ipv6Addr;
+    let v6 = |ip: &str, port: u16| -> SocketAddr {
+        SocketAddr::new(IpAddr::V6(ip.parse::<Ipv6Addr>().unwrap()), port)
+    };
+    // Public IPv6 (one of our hardcoded seeds).
+    assert!(is_routable_for_p2p(
+        &v6("2001:41d0:700:6662::", 29031),
+        false
+    ));
+    // Loopback / unspecified / link-local / unique-local.
+    assert!(!is_routable_for_p2p(&v6("::1", 9030), false));
+    assert!(!is_routable_for_p2p(&v6("::", 9030), false));
+    assert!(!is_routable_for_p2p(&v6("fe80::1", 9030), false));
+    assert!(!is_routable_for_p2p(&v6("fc00::1", 9030), false));
+    assert!(!is_routable_for_p2p(&v6("fd12:3456:789a::1", 9030), false));
+    // fec0::/10 deprecated site-local — what Java's
+    // `isSiteLocalAddress` matches for IPv6, so Scala's `isLocal`
+    // rejects it too (NetworkUtils.scala:31-38).
+    assert!(!is_routable_for_p2p(&v6("fec0::1", 9030), false));
+    assert!(!is_routable_for_p2p(&v6("feff:ffff::1", 9030), false));
+    // Multicast.
+    assert!(!is_routable_for_p2p(&v6("ff02::1", 9030), false));
+}
+
+/// `allow_local` re-admits exactly the local-network classes and
+/// nothing else: unspecified, multicast, and port 0 stay rejected
+/// because they are not addresses a peer can listen on.
+#[test]
+fn is_routable_with_allow_local_admits_local_classes_only() {
+    use std::net::Ipv6Addr;
+    let v6 = |ip: &str, port: u16| -> SocketAddr {
+        SocketAddr::new(IpAddr::V6(ip.parse::<Ipv6Addr>().unwrap()), port)
+    };
+    // Local classes, all re-admitted.
+    for a in [
+        addr(127, 0, 0, 1, 9030),
+        addr(10, 0, 0, 8, 9030),
+        addr(192, 168, 1, 1, 9030),
+        addr(169, 254, 1, 1, 9030),
+        addr(100, 64, 1, 1, 9030),
+    ] {
+        assert!(!is_routable_for_p2p(&a, false), "{a} is local");
+        assert!(is_routable_for_p2p(&a, true), "{a} under allow_local");
+    }
+    for a in [
+        v6("::1", 9030),
+        v6("fe80::1", 9030),
+        v6("fc00::1", 9030),
+        v6("fec0::1", 9030),
+    ] {
+        assert!(!is_routable_for_p2p(&a, false), "{a} is local");
+        assert!(is_routable_for_p2p(&a, true), "{a} under allow_local");
+    }
+    // Never-dialable, whatever the setting.
+    for a in [
+        addr(0, 0, 0, 0, 9030),
+        addr(224, 0, 0, 1, 9030),
+        addr(213, 239, 193, 208, 0),
+    ] {
+        assert!(!is_routable_for_p2p(&a, true), "{a} is never dialable");
+    }
+    assert!(!is_routable_for_p2p(&v6("::", 9030), true));
+    assert!(!is_routable_for_p2p(&v6("ff02::1", 9030), true));
+}
+
+/// Every IANA IPv4 special-purpose range `is_never_dialable` rejects,
+/// under both `allow_local` settings — these are not local-network
+/// addresses `allow_local` is meant to re-admit, they're addresses no
+/// real peer ever listens on (CodeRabbit #299 round 3).
+#[test]
+fn is_routable_rejects_ipv4_special_purpose_ranges() {
+    let cases: &[(&str, SocketAddr)] = &[
+        ("0.0.0.0/8 \"this network\"", addr(0, 5, 6, 7, 9030)),
+        (
+            "192.0.0.0/24 IETF protocol assignments",
+            addr(192, 0, 0, 8, 9030),
+        ),
+        (
+            "192.0.2.0/24 TEST-NET-1 documentation",
+            addr(192, 0, 2, 1, 9030),
+        ),
+        (
+            "198.51.100.0/24 TEST-NET-2 documentation",
+            addr(198, 51, 100, 1, 9030),
+        ),
+        (
+            "203.0.113.0/24 TEST-NET-3 documentation",
+            addr(203, 0, 113, 1, 9030),
+        ),
+        (
+            "198.18.0.0/15 benchmarking (low half)",
+            addr(198, 18, 0, 1, 9030),
+        ),
+        (
+            "198.18.0.0/15 benchmarking (high half)",
+            addr(198, 19, 255, 254, 9030),
+        ),
+        (
+            "192.88.99.0/24 6to4 relay anycast",
+            addr(192, 88, 99, 1, 9030),
+        ),
+        ("240.0.0.0/4 reserved (low end)", addr(240, 0, 0, 1, 9030)),
+        ("240.0.0.0/4 reserved (high end)", addr(255, 0, 0, 1, 9030)),
+    ];
+    for (label, a) in cases {
+        assert!(
+            !is_routable_for_p2p(a, false),
+            "{label} ({a}) must be rejected with allow_local=false"
+        );
+        assert!(
+            !is_routable_for_p2p(a, true),
+            "{label} ({a}) must stay rejected with allow_local=true — \
+             allow_local re-admits local-network classes only"
+        );
+    }
+}
+
+/// IPv6 equivalents of the special-purpose ranges above, under both
+/// `allow_local` settings.
+#[test]
+fn is_routable_rejects_ipv6_special_purpose_ranges() {
+    use std::net::Ipv6Addr;
+    let v6 = |ip: &str, port: u16| -> SocketAddr {
+        SocketAddr::new(IpAddr::V6(ip.parse::<Ipv6Addr>().unwrap()), port)
+    };
+    let cases: &[(&str, SocketAddr)] = &[
+        ("2001:db8::/32 documentation", v6("2001:db8::1", 9030)),
+        (
+            "2001:db8::/32 documentation (high end)",
+            v6("2001:db8:ffff:ffff:ffff:ffff:ffff:ffff", 9030),
+        ),
+        ("2001:2::/48 benchmarking", v6("2001:2::1", 9030)),
+        ("100::/64 discard-only", v6("100::1", 9030)),
+        (
+            "100::/64 discard-only (high end)",
+            v6("100::ffff:ffff:ffff:ffff", 9030),
+        ),
+    ];
+    for (label, a) in cases {
+        assert!(
+            !is_routable_for_p2p(a, false),
+            "{label} ({a}) must be rejected with allow_local=false"
+        );
+        assert!(
+            !is_routable_for_p2p(a, true),
+            "{label} ({a}) must stay rejected with allow_local=true"
+        );
+    }
+    // 2001:2:1::1 is outside the /48 (segs[2] != 0) and must pass —
+    // guards against an over-wide mask.
+    assert!(is_routable_for_p2p(&v6("2001:2:1::1", 9030), false));
+}
+
+/// The gossip ingest path (`add_known_address` with `origin=Gossip`,
+/// the same call `Peers`-message handling drives) must not create a
+/// row for a special-purpose address — it has to be rejected before
+/// ever reaching `known_addresses`, not merely excluded from dial
+/// selection downstream.
+#[test]
+fn add_known_address_drops_special_purpose_gossip_without_creating_rows() {
+    let mut mgr = PeerManager::new(1);
+    let before = mgr.known_addresses_len();
+
+    let gossiped = [
+        addr(192, 0, 2, 1, 9030),    // TEST-NET-1 documentation
+        addr(198, 51, 100, 1, 9030), // TEST-NET-2 documentation
+        addr(203, 0, 113, 1, 9030),  // TEST-NET-3 documentation
+        addr(198, 18, 0, 1, 9030),   // benchmarking
+        addr(192, 88, 99, 1, 9030),  // 6to4 relay anycast
+        addr(240, 0, 0, 1, 9030),    // reserved
+    ];
+    for a in gossiped {
+        let outcome = mgr.add_known_address(a, PeerOrigin::Gossip);
+        assert_eq!(
+            outcome,
+            AddKnownOutcome::FilteredNonRoutable,
+            "{a} must be filtered, not admitted as a known address"
+        );
+    }
+
+    assert_eq!(
+        mgr.known_addresses_len(),
+        before,
+        "special-purpose gossip must not create rows in the dial book"
+    );
+    for a in gossiped {
+        assert!(
+            !mgr.known_addresses.iter().any(|k| k.addr == a),
+            "{a} must not appear in known_addresses"
+        );
+    }
+}
+
+#[test]
+fn add_known_address_drops_non_routable_from_gossip_only() {
+    // Policy split: routability filter applies to GOSSIP ingress
+    // (origin=Gossip), not to user-configured peers (origin=Seed).
+    let mut mgr = PeerManager::new(1);
+
+    // Routable bootstrap seed — accepted under either flag.
+    mgr.add_known_address(addr(213, 239, 193, 208, 9030), PeerOrigin::Seed);
+
+    // Gossiped non-routables — silently dropped.
+    mgr.add_known_address(addr(10, 0, 0, 8, 9030), PeerOrigin::Gossip);
+    mgr.add_known_address(addr(192, 168, 1, 1, 9030), PeerOrigin::Gossip);
+    mgr.add_known_address(addr(127, 0, 0, 1, 9030), PeerOrigin::Gossip);
+    mgr.add_known_address(addr(0, 0, 0, 0, 9030), PeerOrigin::Gossip);
+
+    let pool = mgr.addresses_to_connect(Instant::now(), 100);
+    assert_eq!(
+        pool,
+        vec![addr(213, 239, 193, 208, 9030)],
+        "gossiped non-routable addresses must not enter the dial pool"
+    );
+}
+
+#[test]
+fn add_known_address_keeps_user_configured_loopback_and_lan() {
+    // Regression: an earlier version of the routability filter
+    // applied to all add_known_address callers, silently dropping
+    // user-configured `127.0.0.1:9030` (co-located Scala node) and
+    // dev/staging LAN peers like `10.0.0.8:9030`. Both must be
+    // preserved when `origin=Seed`.
+    let mut mgr = PeerManager::new(1);
+
+    let cases = &[
+        addr(127, 0, 0, 1, 9030),       // loopback Scala node
+        addr(10, 0, 0, 8, 9030),        // LAN dev/staging peer
+        addr(192, 168, 1, 50, 9030),    // home-LAN peer
+        addr(213, 239, 193, 208, 9030), // public bootstrap seed
+    ];
+    for a in cases {
+        mgr.add_known_address(*a, PeerOrigin::Seed);
+    }
+
+    let pool = mgr.addresses_to_connect(Instant::now(), 100);
+    assert_eq!(
+        pool.len(),
+        cases.len(),
+        "all user-configured peers must be retained, got pool {pool:?}"
+    );
+    for a in cases {
+        assert!(pool.contains(a), "missing user-configured address {a}");
+    }
+}
+
+#[test]
+fn declared_to_socket_handles_ipv4_and_ipv6() {
+    use crate::handshake::DeclaredAddress;
+    // IPv4 — 4 bytes.
+    let v4 = DeclaredAddress {
+        addr: vec![10, 0, 0, 8],
+        port: 9030,
+    };
+    assert_eq!(declared_to_socket(&v4), Some(addr(10, 0, 0, 8, 9030)));
+
+    // IPv6 — 16 bytes. The pre-fix code coerced this to 0.0.0.0:port.
+    // (Picking 2001:41d0:700:6662:: which is a real seed.)
+    let v6_bytes = vec![
+        0x20, 0x01, 0x41, 0xd0, 0x07, 0x00, 0x66, 0x62, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00,
+    ];
+    let v6 = DeclaredAddress {
+        addr: v6_bytes,
+        port: 29031,
+    };
+    let parsed = declared_to_socket(&v6).expect("16-byte IPv6 must parse");
+    assert!(
+        parsed.is_ipv6(),
+        "16-byte declared address must yield IPv6 SocketAddr, got {parsed:?}"
+    );
+    assert_eq!(parsed.port(), 29031);
+
+    // Malformed — neither 4 nor 16 bytes.
+    let weird = DeclaredAddress {
+        addr: vec![1, 2, 3],
+        port: 9030,
+    };
+    assert_eq!(declared_to_socket(&weird), None);
+
+    // Out-of-range port (deserializer carries u32; we only accept u16).
+    let bad_port = DeclaredAddress {
+        addr: vec![1, 2, 3, 4],
+        port: 70_000,
+    };
+    assert_eq!(declared_to_socket(&bad_port), None);
+}
+
+#[test]
+fn peers_for_sharing_excludes_non_routable_declared_addresses() {
+    use crate::handshake::DeclaredAddress;
+    let mut mgr = PeerManager::new(42);
+    let now = Instant::now();
+    // Three peers: one routable, one with a leaked private addr, one
+    // with no declared address. Only the first should be shared.
+    let routable = addr(213, 239, 193, 208, 9030);
+    let leaked = addr(10, 0, 0, 8, 9030);
+    let undeclared = addr(159, 65, 11, 55, 9030);
+    for a in &[routable, leaked, undeclared] {
+        mgr.register_outbound(*a, now).unwrap();
+        mgr.mark_tcp_connected(a);
+    }
+
+    let mk_spec = |declared: Option<DeclaredAddress>| PeerSpec {
+        agent_name: "ergo-reference".into(),
+        version: crate::handshake::Version::NIPOPOW,
+        node_name: "n".into(),
+        declared_address: declared,
+        features: Vec::new(),
+    };
+    let v4 = |o: [u8; 4], p: u32| DeclaredAddress {
+        addr: o.to_vec(),
+        port: p,
+    };
+    mgr.complete_handshake(
+        &routable,
+        mk_spec(Some(v4([213, 239, 193, 208], 9030))),
+        None,
+        now,
+    )
+    .unwrap();
+    mgr.complete_handshake(&leaked, mk_spec(Some(v4([10, 0, 0, 8], 9030))), None, now)
+        .unwrap();
+    mgr.complete_handshake(&undeclared, mk_spec(None), None, now)
+        .unwrap();
+
+    let shared = mgr.peers_for_sharing(100, 0);
+    assert!(
+        shared.len() <= MAX_SHARED_PEER_SPECS,
+        "share count must stay below Scala's 64-spec parse limit, got {shared:?}"
+    );
+    assert_eq!(
+        shared.len(),
+        1,
+        "expected one shareable peer (routable only), got {shared:?}"
+    );
+    let sd = shared[0].declared_address.as_ref().unwrap();
+    assert_eq!(sd.addr, vec![213, 239, 193, 208]);
+    assert_eq!(sd.port, 9030);
+}
+
+/// Asking for more than [`MAX_SHARED_PEER_SPECS`] must still yield at
+/// most that many specs: a Scala receiver parses Peers with
+/// `require(length <= 64)` (BasicMessagesRepo.scala:56-58) and any parse
+/// failure means a permanent (10-year) IP ban, so an oversized reply is
+/// never acceptable regardless of the caller's limit.
+#[test]
+fn peers_for_sharing_clamps_to_max_shared_peer_specs() {
+    use crate::handshake::DeclaredAddress;
+    let mut mgr = PeerManager::new(42);
+    let now = Instant::now();
+    let mk_spec = |declared: Option<DeclaredAddress>| PeerSpec {
+        agent_name: "ergo-reference".into(),
+        version: crate::handshake::Version::NIPOPOW,
+        node_name: "n".into(),
+        declared_address: declared,
+        features: Vec::new(),
+    };
+    // Distinct first/second octets keep each registration in its own /16
+    // so the per-subnet cap doesn't reject them.
+    let eligible = MAX_SHARED_PEER_SPECS + 12;
+    for i in 0..eligible {
+        let octets = [213u8, (i as u8) + 1, i as u8, 9];
+        let a = addr(octets[0], octets[1], octets[2], octets[3], 9030);
+        mgr.register_outbound(a, now).unwrap();
+        mgr.mark_tcp_connected(&a);
+        mgr.complete_handshake(
+            &a,
+            mk_spec(Some(DeclaredAddress {
+                addr: octets.to_vec(),
+                port: 9030,
+            })),
+            None,
+            now,
+        )
+        .unwrap();
+    }
+    let shared = mgr.peers_for_sharing(eligible, 0);
+    assert_eq!(
+        shared.len(),
+        MAX_SHARED_PEER_SPECS,
+        "asking for {eligible} must be clamped to MAX_SHARED_PEER_SPECS"
+    );
+}
+
+// ---- ban-list bounds (audit M-6) ----
+
+fn addr_of(o: [u8; 4]) -> IpAddr {
+    IpAddr::from(o)
+}
+
+fn sock(ip: IpAddr) -> SocketAddr {
+    SocketAddr::from((ip, 9000))
+}
+
+#[test]
+fn ban_cap_evicts_soonest_expiring_first_and_keeps_recent() {
+    let mut mgr = PeerManager::new(1);
+    let now = Instant::now();
+
+    // One long-lived (permanent) ban among many short ones: under cap
+    // pressure the short-lived entries must evict first.
+    mgr.record_ban(addr_of([9, 9, 9, 9]), now, true);
+    for i in 0..MAX_BANS - 1 {
+        let octets = [(i & 0xff) as u8, ((i >> 8) & 0xff) as u8, 1, 1];
+        mgr.record_ban(addr_of(octets), now, false);
+    }
+    assert_eq!(mgr.bans.len(), MAX_BANS);
+
+    // Five more: cap pressure evicts five soonest-expiring entries.
+    for i in 0..5 {
+        let octets = [7, 7, 7, i as u8];
+        mgr.record_ban(
+            addr_of(octets),
+            now + Duration::from_secs(i as u64 * 60),
+            false,
+        );
+        assert_eq!(mgr.bans.len(), MAX_BANS, "cap must hold after insert {i}");
+        assert!(
+            mgr.bans.contains_key(&IpAddr::from([9, 9, 9, 9])),
+            "the farthest-expiring (permanent) ban must never be the eviction victim"
+        );
+    }
+
+    // Every survivor is still an active ban at record time.
+    for ip in mgr.bans.keys() {
+        assert!(mgr.is_banned(&sock(*ip), now));
+    }
+}
+
+#[test]
+fn sweep_removes_expired_but_keeps_unexpired_and_permanent() {
+    let mut mgr = PeerManager::new(2);
+    let now = Instant::now();
+    mgr.record_ban(addr_of([192, 168, 1, 1]), now, false); // 30 min default
+    mgr.record_ban(addr_of([192, 168, 1, 2]), now, true); // 1 year
+    mgr.record_ban(addr_of([192, 168, 1, 3]), now, false); // 30 min default
+
+    let after = now + Duration::from_secs(31 * 60);
+    let swept = mgr.sweep_expired_bans(after);
+    assert_eq!(swept, 2, "both 30-min bans are expired and must be swept");
+    assert!(!mgr.is_banned(&sock(addr_of([192, 168, 1, 1])), after));
+    assert!(!mgr.is_banned(&sock(addr_of([192, 168, 1, 3])), after));
+    assert!(
+        mgr.is_banned(&sock(addr_of([192, 168, 1, 2])), after),
+        "permanent ban survives the sweep"
+    );
+
+    // Cadence gate: an immediate second call is a no-op even if new bans
+    // have already expired again.
+    mgr.record_ban(addr_of([192, 168, 1, 4]), now, false); // expires before `after`
+    assert_eq!(mgr.sweep_expired_bans(after), 0, "inside sweep interval");
+    assert!(mgr.bans.contains_key(&IpAddr::from([192, 168, 1, 4])));
+    let swept = mgr.sweep_expired_bans(after + BAN_SWEEP_INTERVAL);
+    assert_eq!(swept, 1, "next scheduled sweep collects it");
+    assert!(!mgr.bans.contains_key(&IpAddr::from([192, 168, 1, 4])));
+}
+
+#[test]
+fn persisted_ban_rows_stay_within_cap_across_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("peers.redb");
+    let book = std::sync::Arc::new(AddressBook::open_at(&path).unwrap());
+
+    let mut mgr = PeerManager::new(3);
+    mgr.set_address_book(book.clone());
+    let now = Instant::now();
+    for i in 0..10u32 {
+        mgr.record_ban(
+            addr_of([10, 0, (i >> 8) as u8, (i & 0xff) as u8]),
+            now,
+            false,
+        );
+    }
+    // Drive cap pressure well below MAX_BANS to keep the redb write count
+    // small while exercising the same eviction path production uses.
+    mgr.enforce_ban_cap_to(4);
+    drop(mgr);
+    drop(book);
+
+    let reopened = AddressBook::open_at(&path).unwrap();
+    let loaded = reopened.load_all(false).unwrap();
+    assert!(
+        loaded.bans.len() <= 4,
+        "persisted rows must be evicted alongside in-memory entries, got {}",
+        loaded.bans.len()
+    );
+}
+
+// ----- storage-error observability (issue #281) -----
+
+/// A simulated `peers.redb` write-through failure (issue #281) increments
+/// `storage_error_count` and records `last_storage_error` in the
+/// `"peers: <message>"` shape the node layer expects when picking the
+/// freshest of the state/indexer/peers last-error candidates.
+#[test]
+fn record_storage_error_increments_counter_and_sets_last_error() {
+    let mgr = PeerManager::new(1);
+    assert_eq!(mgr.storage_error_count(), 0);
+    assert!(mgr.last_storage_error().is_none());
+
+    let addr = addr(10, 0, 0, 1, 9030);
+    let err = AddressBookError::Db("simulated redb write failure".to_string());
+    mgr.record_storage_error("mark_failure", &addr, &err);
+
+    assert_eq!(mgr.storage_error_count(), 1);
+    let (_ts, message) = mgr.last_storage_error().expect("last_storage_error set");
+    assert!(message.starts_with("peers: "));
+    assert!(message.contains("simulated redb write failure"));
+
+    // A second failure keeps incrementing the counter — only the log
+    // LINE is throttled (see the next test), never the counter or
+    // `last_storage_error`, which must track every real occurrence.
+    mgr.record_storage_error("mark_failure", &addr, &err);
+    assert_eq!(mgr.storage_error_count(), 2);
+}
+
+/// Issue #281 review fix P2-1: an unthrottled ERROR-per-write-through
+/// would flood the log (and amplify the very I/O fault causing it) for a
+/// poisoned/full `peers.redb`, since every housekeeping tick keeps
+/// retrying the same write. The log line is throttled to at most once
+/// per `STORAGE_ERROR_LOG_INTERVAL_MS` per operation; the counter is not.
+#[test]
+fn record_storage_error_throttles_log_line_but_not_counter() {
+    let mgr = PeerManager::new(1);
+    let addr = addr(10, 0, 0, 2, 9030);
+    let err = AddressBookError::Db("simulated redb write failure".to_string());
+
+    // First occurrence for this op: due immediately (no prior emit).
+    mgr.record_storage_error("touch_seen", &addr, &err);
+    {
+        let state = mgr.storage_error_log_state.borrow();
+        let (last_emit, suppressed) = state["touch_seen"];
+        assert!(last_emit > 0, "first occurrence must emit immediately");
+        assert_eq!(suppressed, 0);
+    }
+
+    // Repeated occurrences within the interval: counter advances, but
+    // the log throttle records them as suppressed instead of re-emitting.
+    for _ in 0..5 {
+        mgr.record_storage_error("touch_seen", &addr, &err);
+    }
+    assert_eq!(mgr.storage_error_count(), 6);
+    {
+        let state = mgr.storage_error_log_state.borrow();
+        let (last_emit, suppressed) = state["touch_seen"];
+        assert_eq!(
+            suppressed, 5,
+            "5 repeats within the window must be suppressed"
+        );
+        assert!(last_emit > 0);
+    }
+
+    // A DIFFERENT op has its own independent throttle bucket.
+    mgr.record_storage_error("mark_failure", &addr, &err);
+    {
+        let state = mgr.storage_error_log_state.borrow();
+        let (_, suppressed) = state["mark_failure"];
+        assert_eq!(
+            suppressed, 0,
+            "a distinct op must not inherit another op's throttle"
+        );
+    }
+    assert_eq!(mgr.storage_error_count(), 7);
+
+    // Simulate the interval elapsing: backdate `touch_seen`'s last-emit
+    // past the threshold, then confirm the next failure is due again and
+    // resets the suppressed counter.
+    {
+        let mut state = mgr.storage_error_log_state.borrow_mut();
+        let entry = state.get_mut("touch_seen").unwrap();
+        entry.0 = entry.0.saturating_sub(STORAGE_ERROR_LOG_INTERVAL_MS);
+    }
+    mgr.record_storage_error("touch_seen", &addr, &err);
+    {
+        let state = mgr.storage_error_log_state.borrow();
+        let (_, suppressed) = state["touch_seen"];
+        assert_eq!(suppressed, 0, "an emission resets the suppressed count");
+    }
+    assert_eq!(mgr.storage_error_count(), 8);
+}
+
+// ----- dial-book routability (issue #298) -----
+
+/// Build a `PeerSpec` with an optional IPv4 declared address.
+fn spec_with_declared(declared: Option<SocketAddr>) -> PeerSpec {
+    use crate::handshake::DeclaredAddress;
+    PeerSpec {
+        agent_name: "remote".into(),
+        version: crate::handshake::Version::NIPOPOW,
+        node_name: "r".into(),
+        declared_address: declared.map(|d| match d.ip() {
+            IpAddr::V4(v4) => DeclaredAddress {
+                addr: v4.octets().to_vec(),
+                port: d.port() as u32,
+            },
+            IpAddr::V6(v6) => DeclaredAddress {
+                addr: v6.octets().to_vec(),
+                port: d.port() as u32,
+            },
+        }),
+        features: Vec::new(),
+    }
+}
+
+/// A `PeerManager` with a fresh on-disk book, plus the tempdir that must
+/// outlive it.
+fn mgr_with_book() -> (PeerManager, std::sync::Arc<AddressBook>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let book = std::sync::Arc::new(AddressBook::open_at(&dir.path().join("peers.redb")).unwrap());
+    let mut mgr = PeerManager::new(7);
+    mgr.set_address_book(book.clone());
+    (mgr, book, dir)
+}
+
+/// An inbound peer that declares no address has no dialable identity, so
+/// its handshake and its later disconnect must leave the book untouched.
+/// Before the fix, `persist_handshake` upserted the observed
+/// `ip:ephemeral` socket and `persist_touch` kept refreshing it, so every
+/// inbound session seeded one undialable most-recently-seen row (issue
+/// #298: 909 loopback rows and a starved dial cycle after restart).
+/// Scala writes nothing for such a peer — `addOrUpdateKnownPeer` iterates
+/// `peerSpec.address` (`declaredAddress orElse localAddressOpt`), which
+/// is empty here (PeerDatabase.scala:79-87, PeerSpec.scala:37).
+#[test]
+fn inbound_handshake_without_declared_address_writes_no_book_entry() {
+    let (mut mgr, book, _dir) = mgr_with_book();
+    let now = Instant::now();
+    let observed = addr(213, 239, 193, 208, 52331);
+
+    mgr.register_inbound(observed, now).unwrap();
+    mgr.mark_tcp_connected(&observed);
+    mgr.complete_handshake(&observed, spec_with_declared(None), None, now)
+        .unwrap();
+    mgr.disconnect(&observed);
+
+    let loaded = book.load_all(false).unwrap();
+    assert!(
+        loaded.peers.is_empty(),
+        "an inbound peer with no declared address must not enter the book, got {:?}",
+        loaded.peers.iter().map(|p| p.addr).collect::<Vec<_>>(),
+    );
+}
+
+/// An inbound peer that declares a routable listening address is
+/// persisted under that address, never under the ephemeral socket we
+/// observed — the declared address is the only one a later dial cycle
+/// can use.
+#[test]
+fn inbound_handshake_persists_declared_address_not_observed_socket() {
+    let (mut mgr, book, _dir) = mgr_with_book();
+    let now = Instant::now();
+    let observed = addr(213, 239, 193, 208, 52331);
+    let declared = addr(213, 239, 193, 208, 9030);
+
+    mgr.register_inbound(observed, now).unwrap();
+    mgr.mark_tcp_connected(&observed);
+    mgr.complete_handshake(&observed, spec_with_declared(Some(declared)), None, now)
+        .unwrap();
+    mgr.disconnect(&observed);
+
+    let loaded = book.load_all(false).unwrap();
+    let addrs: Vec<SocketAddr> = loaded.peers.iter().map(|p| p.addr).collect();
+    assert!(
+        addrs.contains(&declared),
+        "declared listening address must be persisted, got {addrs:?}",
+    );
+    assert!(
+        !addrs.contains(&observed),
+        "observed ephemeral socket must never be persisted, got {addrs:?}",
+    );
+    let row = loaded.peers.iter().find(|p| p.addr == declared).unwrap();
+    assert!(row.handshaked, "the declared row carries the handshake");
+    assert!(
+        row.last_seen.is_some(),
+        "disconnect refreshes last_seen on the declared row",
+    );
+}
+
+/// An outbound peer keeps being persisted under the socket we dialed —
+/// that address is by construction a listening address, and it stays
+/// dialable even when it is loopback (an operator's `[peers] known`
+/// pointing at a Scala node on the same host).
+#[test]
+fn outbound_handshake_persists_dialed_socket_even_when_loopback() {
+    let (mut mgr, book, _dir) = mgr_with_book();
+    let now = Instant::now();
+    let dialed = addr(127, 0, 0, 1, 9020);
+
+    mgr.add_known_address(dialed, PeerOrigin::Seed);
+    mgr.register_outbound(dialed, now).unwrap();
+    mgr.mark_tcp_connected(&dialed);
+    mgr.complete_handshake(&dialed, spec_with_declared(Some(dialed)), None, now)
+        .unwrap();
+    mgr.disconnect(&dialed);
+
+    let loaded = book.load_all(false).unwrap();
+    let row = loaded
+        .peers
+        .iter()
+        .find(|p| p.addr == dialed)
+        .expect("configured loopback seed must survive as a book row");
+    assert!(row.handshaked);
+    assert_eq!(row.origin, PeerOrigin::Seed);
+}
+
+/// A loopback address the operator seeded stays dialable when that peer
+/// connects to *us*: the declared address matches an existing seed row,
+/// so the routability filter is bypassed and the seed's `last_seen` is
+/// refreshed. Only learned addresses are filtered.
+#[test]
+fn inbound_handshake_from_seeded_loopback_touches_the_seed_entry() {
+    let (mut mgr, book, _dir) = mgr_with_book();
+    let now = Instant::now();
+    let seeded = addr(127, 0, 0, 1, 9020);
+    let observed = addr(127, 0, 0, 1, 41337);
+
+    mgr.add_known_address(seeded, PeerOrigin::Seed);
+    mgr.register_inbound(observed, now).unwrap();
+    mgr.mark_tcp_connected(&observed);
+    mgr.complete_handshake(&observed, spec_with_declared(Some(seeded)), None, now)
+        .unwrap();
+    mgr.disconnect(&observed);
+
+    let loaded = book.load_all(false).unwrap();
+    let addrs: Vec<SocketAddr> = loaded.peers.iter().map(|p| p.addr).collect();
+    assert!(
+        !addrs.contains(&observed),
+        "the ephemeral socket is still never persisted, got {addrs:?}",
+    );
+    let row = loaded.peers.iter().find(|p| p.addr == seeded).unwrap();
+    assert_eq!(row.origin, PeerOrigin::Seed);
+    assert!(
+        row.handshaked && row.last_seen.is_some(),
+        "a seeded loopback peer dialing us keeps its dialable row current",
+    );
+}
+
+/// `addresses_to_connect` applies the same routability predicate as
+/// `peers_for_sharing`: a learned loopback / RFC1918 entry is never
+/// offered as a dial candidate, while a seeded loopback entry still is.
+#[test]
+fn addresses_to_connect_skips_learned_nonroutable_but_keeps_seeds() {
+    let mut mgr = PeerManager::new(9);
+    let now = Instant::now();
+    let learned_loopback = addr(127, 1, 0, 1, 42947);
+    let learned_private = addr(10, 0, 0, 8, 9030);
+    let seeded_loopback = addr(127, 0, 0, 1, 9020);
+    let routable = addr(213, 239, 193, 208, 9030);
+
+    // `add_known_address` already filters gossip; restore bypasses it the
+    // way a boot-time replay of an older book would.
+    for a in [learned_loopback, learned_private] {
+        mgr.restore_known_peer(KnownPeer {
+            addr: a,
+            last_seen: Some(now),
+            origin: PeerOrigin::Gossip,
+            last_failure: None,
+            consecutive_failures: 0,
+        });
+    }
+    mgr.add_known_address(seeded_loopback, PeerOrigin::Seed);
+    mgr.add_known_address(routable, PeerOrigin::Gossip);
+
+    let candidates = mgr.addresses_to_connect(now, 16);
+    assert!(
+        !candidates.contains(&learned_loopback) && !candidates.contains(&learned_private),
+        "learned non-routable addresses must not be dialed, got {candidates:?}",
+    );
+    assert!(
+        candidates.contains(&seeded_loopback),
+        "an operator-configured loopback seed stays dialable, got {candidates:?}",
+    );
+    assert!(
+        candidates.contains(&routable),
+        "routable gossip stays dialable, got {candidates:?}",
+    );
+}
+
+// ----- dial-failure bookkeeping (issue #298 review, P1-1) -----
+
+/// An inbound peer that fails its handshake leaves no book row. The
+/// failure paths hand `mark_dial_failed` the observed `ip:ephemeral`
+/// socket, which is not in the dial pool — and `mark_failure` no longer
+/// creates a stub for it. A *public* ephemeral socket like
+/// `1.2.3.4:54321` is routable, so a stub would survive the boot purge
+/// and be replayed straight into the dial pool on the next start.
+#[test]
+fn mark_dial_failed_unknown_address_writes_no_book_entry() {
+    let (mut mgr, book, _dir) = mgr_with_book();
+    let now = Instant::now();
+    let observed = addr(1, 2, 3, 4, 54321);
+
+    mgr.register_inbound(observed, now).unwrap();
+    mgr.mark_tcp_connected(&observed);
+    mgr.disconnect(&observed);
+    mgr.mark_dial_failed(&observed, now);
+
+    let loaded = book.load_all(false).unwrap();
+    assert!(
+        loaded.peers.is_empty(),
+        "a failure on an address we never dialed must not mint a row, got {:?}",
+        loaded.peers.iter().map(|p| p.addr).collect::<Vec<_>>(),
+    );
+    assert_eq!(mgr.known_addresses_len(), 0);
+}
+
+/// A dial failure on a genuine dial-pool address still records — both in
+/// memory (so backoff suppresses it) and on disk.
+#[test]
+fn mark_dial_failed_known_address_records_failure() {
+    let (mut mgr, book, _dir) = mgr_with_book();
+    let now = Instant::now();
+    let known = addr(213, 239, 193, 208, 9030);
+
+    mgr.add_known_address(known, PeerOrigin::Gossip);
+    mgr.mark_dial_failed(&known, now);
+    mgr.mark_dial_failed(&known, now);
+
+    assert!(
+        mgr.addresses_to_connect(now, 8).is_empty(),
+        "backoff must suppress a freshly-failed address",
+    );
+    let loaded = book.load_all(false).unwrap();
+    let row = loaded.peers.iter().find(|p| p.addr == known).unwrap();
+    assert_eq!(row.consecutive_failures, 2);
+    assert!(row.last_failure.is_some());
+}
+
+// ----- allow_local (issue #298 review, P1-2) -----
+
+/// With `[peers] allow_local` off — the default, Scala's
+/// `scorex.network.allowLocal = false` — a LAN address learned by
+/// gossip is refused at ingest. With it on, the same address is
+/// accepted, dialable, and shareable, which is what lets a LAN devnet
+/// form by gossip instead of by hand-listing every node.
+#[test]
+fn allow_local_admits_gossiped_lan_addresses_when_enabled() {
+    let lan = addr(192, 168, 1, 5, 9030);
+    let now = Instant::now();
+
+    let mut strict = PeerManager::new(11);
+    assert_eq!(
+        strict.add_known_address(lan, PeerOrigin::Gossip),
+        AddKnownOutcome::FilteredNonRoutable,
+    );
+    assert!(!strict.addresses_to_connect(now, 8).contains(&lan));
+
+    let mut permissive = PeerManager::new(11);
+    permissive.set_allow_local(true);
+    assert!(permissive.allow_local());
+    assert_eq!(
+        permissive.add_known_address(lan, PeerOrigin::Gossip),
+        AddKnownOutcome::Added,
+    );
+    assert!(
+        permissive.addresses_to_connect(now, 8).contains(&lan),
+        "allow_local must make a learned LAN address dialable",
+    );
+}
+
+/// `allow_local` reaches the boot sanitisation too: a LAN devnet's
+/// persisted peers must not be purged out from under it on restart.
+#[test]
+fn allow_local_preserves_lan_rows_through_boot_sanitisation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("peers.redb");
+    let book = AddressBook::open_at(&path).unwrap();
+    let lan = addr(192, 168, 1, 5, 9030);
+    book.add_known(lan, PeerOrigin::Gossip).unwrap();
+
+    assert_eq!(
+        book.load_all(true).unwrap().peers.len(),
+        1,
+        "allow_local keeps LAN rows",
+    );
+    assert_eq!(
+        book.load_all(false).unwrap().nonroutable_purged,
+        1,
+        "the default purges them",
+    );
+}
+
+/// `peers_for_sharing` uses the same `allow_local` policy as the dial
+/// side: a LAN declared address is withheld by default and propagated
+/// once the operator opts in.
+#[test]
+fn peers_for_sharing_honours_allow_local() {
+    let now = Instant::now();
+    let lan_declared = addr(192, 168, 1, 5, 9030);
+
+    let share = |allow_local: bool| -> usize {
+        let mut mgr = PeerManager::new(12);
+        mgr.set_allow_local(allow_local);
+        let observed = addr(192, 168, 1, 5, 41000);
+        mgr.register_inbound(observed, now).unwrap();
+        mgr.mark_tcp_connected(&observed);
+        mgr.complete_handshake(&observed, spec_with_declared(Some(lan_declared)), None, now)
+            .unwrap();
+        mgr.peers_for_sharing(8, 0).len()
+    };
+
+    assert_eq!(share(false), 0, "a LAN declared address is not gossiped");
+    assert_eq!(share(true), 1, "allow_local propagates it");
+}
+
+// ----- outbound declared-address parity (issue #298 review, P2-1) -----
+
+/// Scala books a handshake under `peerSpec.address` in **both**
+/// directions (`NetworkController.scala:412`, `PeerDatabase.scala:81`),
+/// so an outbound peer whose declared listening address differs from the
+/// socket we happened to dial is persisted under the declared one.
+#[test]
+fn outbound_handshake_persists_declared_when_it_differs_from_dialed() {
+    let (mut mgr, book, _dir) = mgr_with_book();
+    let now = Instant::now();
+    let dialed = addr(213, 239, 193, 208, 9030);
+    let declared = addr(159, 65, 11, 55, 9020);
+
+    mgr.add_known_address(dialed, PeerOrigin::Gossip);
+    mgr.register_outbound(dialed, now).unwrap();
+    mgr.mark_tcp_connected(&dialed);
+    mgr.complete_handshake(&dialed, spec_with_declared(Some(declared)), None, now)
+        .unwrap();
+
+    let loaded = book.load_all(false).unwrap();
+    let row = loaded
+        .peers
+        .iter()
+        .find(|p| p.addr == declared)
+        .expect("the declared listening address carries the handshake");
+    assert!(row.handshaked);
+    assert!(
+        !loaded
+            .peers
+            .iter()
+            .any(|p| p.addr == dialed && p.handshaked),
+        "the dialed socket keeps its dial-pool row but not the handshake",
+    );
+}
+
+/// An outbound peer's declared address that differs from the socket we
+/// actually dialed must NOT be booked with `LastDirection::Outbound` —
+/// we never dialed it ourselves, only the peer's own claim says it
+/// listens there. Before the fix, `persist_handshake` always used the
+/// live session's direction regardless of which address it was writing,
+/// so this row got the same tier-3 "reached outbound" eviction priority
+/// as a genuinely-dialed peer (CodeRabbit #299 round 2, DoS: a peer that
+/// rotates its declared address across reconnects can mint an unbounded
+/// stream of unverified top-tier rows and evict real dial candidates
+/// from `peers.redb`).
+#[test]
+fn outbound_handshake_declared_mismatch_does_not_earn_outbound_provenance() {
+    use crate::address_book::LastDirection;
+
+    let (mut mgr, book, _dir) = mgr_with_book();
+    let now = Instant::now();
+    let dialed = addr(213, 239, 193, 208, 9030);
+    let declared = addr(159, 65, 11, 55, 9020);
+
+    mgr.add_known_address(dialed, PeerOrigin::Gossip);
+    mgr.register_outbound(dialed, now).unwrap();
+    mgr.mark_tcp_connected(&dialed);
+    mgr.complete_handshake(&dialed, spec_with_declared(Some(declared)), None, now)
+        .unwrap();
+
+    let loaded = book.load_all(false).unwrap();
+    let row = loaded
+        .peers
+        .iter()
+        .find(|p| p.addr == declared)
+        .expect("the declared listening address carries the handshake");
+    assert_ne!(
+        row.last_direction,
+        Some(LastDirection::Outbound),
+        "an unreached declared address must not claim outbound provenance",
+    );
+}
+
+/// A peer that rotates its declared address across repeated outbound
+/// reconnects must not mint a stream of `Outbound`-tier rows — each
+/// rotation books a *different* address, none of which we ever dialed
+/// directly, so none may claim the reached-outbound eviction tier that
+/// would let it displace real dial candidates.
+#[test]
+fn outbound_handshake_rotated_declared_addresses_never_earn_outbound_provenance() {
+    use crate::address_book::LastDirection;
+
+    let (mut mgr, book, _dir) = mgr_with_book();
+    let now = Instant::now();
+    let dialed = addr(213, 239, 193, 208, 9030);
+
+    mgr.add_known_address(dialed, PeerOrigin::Gossip);
+
+    for i in 0..5u8 {
+        let declared = addr(159, 65, 11, i, 9020);
+        mgr.register_outbound(dialed, now).unwrap();
+        mgr.mark_tcp_connected(&dialed);
+        mgr.complete_handshake(&dialed, spec_with_declared(Some(declared)), None, now)
+            .unwrap();
+        mgr.disconnect(&dialed);
+
+        let loaded = book.load_all(false).unwrap();
+        let row = loaded
+            .peers
+            .iter()
+            .find(|p| p.addr == declared)
+            .expect("each rotated declared address is persisted");
+        assert_ne!(
+            row.last_direction,
+            Some(LastDirection::Outbound),
+            "rotation {i}: an unreached declared address must not earn outbound provenance",
+        );
+    }
+}

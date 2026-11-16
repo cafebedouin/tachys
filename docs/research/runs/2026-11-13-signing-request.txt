@@ -1,0 +1,23 @@
+verdict: Agreed
+balance 0.158900000 ERG in 2 boxes, proven at height 643143
+== a request built for the payee wallet (0.02 ERG to another address)
+code: ergopay:8QEBWKFdmNiZwgwcAMVsJxWEQb5emV-bUwn6H4-juZi9kSwAAAAA… (380 characters)
+== the wallet's description of it
+request: 1 inputs (1 yours, 0 proven others), 3 outputs
+you give: 138900000 nanoERG
+you get back: 117800000 nanoERG
+others put in: 0 nanoERG
+others receive: 20000000 nanoERG
+network fee: 1100000 nanoERG
+net for you: -21100000 nanoERG
+not signed (add --sign to sign and send)
+== control: the same request shown to a wallet whose boxes it does not spend
+request refused: it spends nothing from this wallet (or this wallet's boxes are not proven yet: sync first)
+exit=1
+== control: not a transaction
+request refused: the request does not hold a transaction
+exit=1
+== sign and send
+net for you: -21100000 nanoERG
+signed and sent via http://213.239.193.208:9052: accepted, "6fbdf537…"
+balance 0.137800000 ERG in 2 boxes, proven at height 643144

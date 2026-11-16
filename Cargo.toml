@@ -1,0 +1,46 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tachys-verify",
+    "crates/tachys-net",
+    "crates/tachys-cli",
+    "vendor/arkadianet-codec/ergo-primitives",
+    "vendor/arkadianet-codec/ergo-ser",
+    "vendor/arkadianet-codec/ergo-p2p",
+]
+
+# Inherited by the vendored codec crates (see vendor/arkadianet-codec/NOTICE.md).
+[workspace.package]
+version    = "0.7.0"
+edition    = "2021"
+license    = "MIT OR Apache-2.0" # inherited by the vendored codec crates only; the tachys crates are CC0-1.0
+repository = "https://github.com/arkadianet/ergo"
+
+[workspace.dependencies]
+ergo-primitives = { path = "vendor/arkadianet-codec/ergo-primitives" }
+ergo-ser        = { path = "vendor/arkadianet-codec/ergo-ser" }
+blake2     = "0.10"
+hex        = "0.4"
+thiserror  = "2"
+tokio      = "1"
+redb       = "2"
+tracing    = "0.1"
+tempfile   = "3"
+proptest   = "1"
+serde      = "1"
+serde_json = "1"
+num-bigint = "0.4"
+bs58       = "0.5"
+indexmap   = { version = "2", features = ["serde"] }
+
+[profile.release]
+opt-level = 3
+
+# For phones: smallest binary, same code.
+[profile.phone]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

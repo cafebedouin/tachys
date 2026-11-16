@@ -1,0 +1,13 @@
+{
+  "nodes": [
+    { "name": "A", "mining": true, "mine_poll": "3s", "knownPeers": [], "jar": "${TACHYS_JAR_PATCHED}" },
+    { "name": "T1", "defer": true, "knownPeers": [], "jar": "${TACHYS_JAR_PATCHED}" },
+    { "name": "T2", "defer": true, "knownPeers": [], "jar": "${TACHYS_JAR_PATCHED}" },
+    { "name": "T3", "defer": true, "knownPeers": [], "jar": "${TACHYS_JAR_PATCHED}" }
+  ],
+  "links": [
+    { "a": "A", "b": "T1", "delay_ms": 0, "loss_pct": 0 },
+    { "a": "A", "b": "T2", "delay_ms": 0, "loss_pct": 0 },
+    { "a": "T1", "b": "T3", "delay_ms": 0, "loss_pct": 0 }
+  ]
+}

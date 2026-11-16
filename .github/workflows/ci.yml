@@ -1,0 +1,34 @@
+name: ci
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 5 * * 1"   # weekly: what rots is caught even when nothing is pushed
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      # a fixed toolchain: a new lint in a newer one must not turn the branch red with no change to the code
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # the whole workspace, vendored codec included, unoptimised (.cargo/config.toml gives its deep tests the stack they need)
+      - run: cargo test --workspace --locked
+      # the tachys crates only: the vendored codec is kept as upstream wrote it
+      - run: cargo clippy --locked -p tachys -p tachys-verify -p tachys-net --all-targets -- -D warnings
+      # the profile the phone runs (panic = abort) must at least build
+      - run: cargo build --locked --profile phone -p tachys
+      # the app ships its own copies of the seed lists
+      - run: cmp seeds-mainnet.txt android/app/src/main/assets/seeds-mainnet.txt && cmp seeds-testnet.txt android/app/src/main/assets/seeds-testnet.txt
+      # a build is good for sixty days from its checkpoint (docs/maintaining.md): fail the weekly run before that
+      - run: |
+          age=$(cargo run --locked -q -p tachys -- version --json | sed -n 's/.*"checkpoint_age_days":\([0-9]*\).*/\1/p')
+          echo "checkpoint is $age days old"; test "$age" -lt 45
+      - run: cargo install cargo-audit --locked && cargo audit

@@ -1,0 +1,18 @@
+[package]
+name = "tachys-verify"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.89"
+publish = false
+license = "CC0-1.0"
+
+[dependencies]
+ergo-nipopow = { git = "https://github.com/ergoplatform/sigma-rust", rev = "688511dff3e3436dfdd6bd368e3eeef6f67d59e9" }
+ergo-chain-types = { git = "https://github.com/ergoplatform/sigma-rust", rev = "688511dff3e3436dfdd6bd368e3eeef6f67d59e9" }
+ergo-merkle-tree = { git = "https://github.com/ergoplatform/sigma-rust", rev = "688511dff3e3436dfdd6bd368e3eeef6f67d59e9" }
+sigma-ser = { git = "https://github.com/ergoplatform/sigma-rust", rev = "688511dff3e3436dfdd6bd368e3eeef6f67d59e9" }
+num-bigint = "0.4"
+num-traits = "0.2"
+
+[dev-dependencies]
+serde_json = "1"

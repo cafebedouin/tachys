@@ -1,0 +1,2 @@
+# The code is written in long lines on purpose (AGENTS.md). This keeps a format-on-save from rewriting every file.
+disable_all_formatting = true

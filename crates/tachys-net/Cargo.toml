@@ -1,0 +1,15 @@
+[package]
+name = "tachys-net"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.89"
+publish = false
+license = "CC0-1.0"
+
+[dependencies]
+ergo-p2p = { path = "../../vendor/arkadianet-codec/ergo-p2p" }
+ergo-primitives = { path = "../../vendor/arkadianet-codec/ergo-primitives" }
+tokio = { version = "1", features = ["net", "io-util", "time", "sync"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["net", "io-util", "time", "sync", "macros", "rt-multi-thread"] }

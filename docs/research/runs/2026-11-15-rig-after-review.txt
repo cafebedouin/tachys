@@ -1,0 +1,221 @@
+The four rig recipes after the review work (branch review-fixes, release build), 2026-11-15.
+peeryard rig.sh, ergo-6.0.8.jar and rig/out/ergo-6.0.8-boxproof.jar. Each ended PASS.
+
+==== overlay
+[rig] scratch: <scratch>/overlay
+[rig] chain preset current: blockInterval=2s minerRewardDelay=10
+~/bin/peeryard/rig/rig.sh: line 198: 206517 Killed                  ip netns exec "${NS[$n]}" bash -c "cd '${RT_CWD[$n]}' && exec '$JAVA_BIN' $JAVA_OPTS -Djava.io.tmpdir='$pdir/tmp' -jar '${NODE_JAR[$n]}' $NET_ARGS -c '$conf'" > "$plog" 2>&
+[rig] genesis state digest for minerRewardDelay=10 derived from a probe start: c01a142d004a917b…
+[rig] effective configuration: <scratch>/overlay/out/effective.json ({"chain":"current","nodes":["A:ergo-6.0.8.jar","T1:ergo-6.0.8.jar","T2:ergo-6.0.8.jar"],"links":2})
+[rig] A pid=206687 cpus_applied=0-11 gc=G1GC
+[rig] A REST up
+[rig] bring-up: every link connected
+[rig] === handing off to hook: ~/bin/tachys/rig/light-overlay.sh ===
+[overlay] A at height 21; A is 10.9.20.1 to T1; T1 is 10.9.21.1 to T2
+[overlay] 0. control: T2 has no route to the full node
+    10.9.20.1:9021         -- connect: Network is unreachable (os error 101) (held 0 ms)
+  no peer pushed a usable tip
+  verdict: NOT TRUSTED (no tip heard)
+[overlay] 1. T1 syncs from the full node
+  neighbour cost: 2 connections, 10 messages sent, 2.0 connection-seconds held (failures included), 3714 B received, 2.0 s wall
+  verdict: Agreed
+  tip: height 21 id 6d6023b03879e35ce1d286cbc3abb326f37ce820820724107d90f2eb0cc213f9 (4 s old)
+  state root: 91e6607b3b27de2043408b373652f7c69386a9764683250e9d45d0e5c3b0b3e006
+[overlay] 2. T1 serves; T2 syncs from T1 only
+  
+  1 peers pushed a tip; 1 network groups have reached the agreed tip; off-chain: []
+  neighbour cost: 1 connections, 0 messages sent, 0.3 connection-seconds held (failures included), 2216 B received, 0.3 s wall
+  verdict: Agreed
+  tip: height 21 id 6d6023b03879e35ce1d286cbc3abb326f37ce820820724107d90f2eb0cc213f9 (7 s old)
+  state root: 91e6607b3b27de2043408b373652f7c69386a9764683250e9d45d0e5c3b0b3e006
+  T2's tip equals T1's: 21 6d6023b0…
+  and the full node has that header at that height: yes
+  T1: tachys serve (devnet): 10 headers 12..21 on 10.9.21.1:9030 for 12 s
+  T1: served: 1 connections, 1 sync pushes, 0 header requests (0 headers), 0 parcels taken, 0 proofs relayed, 0 reloads, 2216 B sent
+[overlay] 3. control: T1 serves a chain with one broken header; T2 must refuse it
+  tip at height 21 (difficulty 1) not agreed on: Short { have: 5, want: 10 }
+  
+  1 peers pushed a tip; 0 network groups have reached the agreed tip; off-chain: []
+  neighbour cost: 2 connections, 5 messages sent, 0.5 connection-seconds held (failures included), 5767 B received, 0.5 s wall
+  verdict: NOT TRUSTED (height 21: Short { have: 5, want: 10 })
+  T1: serving a TAMPERED chain (control): header at height 16 has a flipped nonce
+  T1: tachys serve (devnet): 10 headers 12..21 on 10.9.21.1:9030 for 12 s
+  T1: served: 2 connections, 2 sync pushes, 5 header requests (5 headers), 0 parcels taken, 0 proofs relayed, 0 reloads, 5767 B sent
+[overlay] 4. a serving wallet that keeps syncing serves a tip that moves
+  T2 saw height 21 from T1, then height 37 after T1 had synced three more times (node is at 39)
+[overlay] verdict: PASS
+[rig] HEALTH A ok launches=1 exits=0 oom=0 jvm_fatal=0 restart_lines=0
+[rig] HEALTH: OK nodes=1
+[rig] COSTS no recovery events
+[rig] === hook done (verdict: PASS) ===
+[rig] all nodes stopped
+
+==== light-wallet
+[rig] scratch: <scratch>/light-wallet
+[rig] chain preset current: blockInterval=2s minerRewardDelay=10
+[rig] genesis state digest for minerRewardDelay=10 derived from a probe start: c01a142d004a917b…
+[rig] effective configuration: <scratch>/light-wallet/out/effective.json ({"chain":"current","nodes":["A:ergo-6.0.8-boxproof.jar","B:ergo-6.0.8.jar"],"links":1})
+[rig] A pid=208811 cpus_applied=0-11 gc=G1GC
+[rig] B pid=208874 cpus_applied=0-11 gc=G1GC
+[rig] A REST up
+[rig] B REST up
+[rig] bring-up: every link connected
+[rig] === handing off to hook: ~/bin/tachys/rig/light-wallet.sh ===
+[tachys] waiting for A to reach height 20 and B to follow
+[tachys] A.h=20 B.h=17 SAME@17
+[tachys] checkpoint height 8, header version 3, peers 100.64.0.1:9021 100.64.0.2:9021 
+[tachys] 1. tip sync
+
+2 peers pushed a tip; 1 network groups have reached the agreed tip; off-chain: []
+neighbour cost: 3 connections, 11 messages sent, 3.8 connection-seconds held (failures included), 4301 B received, 2.0 s wall
+verdict: Agreed
+tip: height 21 id 1058c73d6d7930c7c99e6f034399c05c0f554960f8237b59f1cc8e6fe04375c6 (3 s old)
+state root: 91e6607b3b27de2043408b373652f7c69386a9764683250e9d45d0e5c3b0b3e006
+[tachys] 2. payment from A's wallet, accepted by receipt over the peer protocol
+  tachys address: <address>
+  A paid 0.5 ERG, tx b1f0ca60…
+  fee script taken from the node's payment: 1005040004000e3510020414... (208 hex chars)
+  receipt (box id): 1e89d2d2…
+  node is 1 block(s) past the agreed tip; fetched those headers by id over the peer protocol (linked, work-checked)
+    1e89d2d2…  500000000 nanoERG, seen unspent at 27, above the tip the peers agree on (26): one source, confirmations 0 (added)
+  address <address>
+  balance 0.500000000 ERG in 1 boxes, proven at height 27
+  cost: 2 requests, 36 B sent, 855 B received
+  note: height 27 is above the tip the peers agree on (26); the headers between came from this node alone
+[tachys] 3. the same request to the unpatched release node B
+  proof from p2p://100.64.0.2:9021: no box proof in time (does the peer carry the patch?)
+  NOT PROVEN by any node given
+[tachys] 4. how B treated the peer that sent the unknown message
+  B blacklisted peers: {"addresses":[]}
+  B log lines mentioning the message, a penalty or a ban:
+    19:27:07.450 INFO  [tor.default-dispatcher-21] o.e.n.ErgoNodeViewSynchronizer - Penalize peer ConnectedPeer(connection: ConnectionId(remote=/100.64.0.1:9021, local=/100.64.0.2:33002, direction=Outgoing) , remote version:
+    19:27:07.454 INFO  [tor.default-dispatcher-21] o.e.n.peer.PeerManager - /100.64.0.1:9021 penalized, penalty: MisbehaviorPenalty
+  after:   100.64.0.2:9021        ergoref 6.0.8 answered after 1756 ms, 443 B, 2 headers (2 pass), tip 28, announced 12 ids
+[tachys] 5. tachys pays 0.1 ERG back to A and finds its change
+  address <address>
+  balance 0.500000000 ERG in 1 boxes, proven at height 32
+  cost: 1 requests, 36 B sent, 400 B received
+  signed: tx fe76179d… (1477 B as JSON), 1 inputs, 3 outputs
+  receipt for the payee (box ids to hand over): db0dc912…
+  change we will look for ourselves: b5f2145d…
+  broadcast via http://127.0.0.1:9052: accepted, "fe76179d…"
+  node is 1 block(s) past the agreed tip; fetched those headers by id over the peer protocol (linked, work-checked)
+  payment fe76179d…: waiting, 0 block(s) since first checked
+    b5f2145d…  398900000 nanoERG, seen unspent at 40, above the tip the peers agree on (39): one source, confirmations 0 (added)
+  address <address>
+  balance 0.398900000 ERG in 1 boxes, proven at height 40
+  cost: 2 requests, 132 B sent, 1448 B received
+  note: height 40 is above the tip the peers agree on (39); the headers between came from this node alone
+[tachys] verdict: PASS
+[rig] HEALTH A ok launches=1 exits=0 oom=0 jvm_fatal=0 restart_lines=0
+[rig] HEALTH B ok launches=1 exits=0 oom=0 jvm_fatal=0 restart_lines=0
+[rig] HEALTH: OK nodes=2
+[rig] COSTS no recovery events
+[rig] === hook done (verdict: PASS) ===
+[rig] all nodes stopped
+
+==== store-forward
+[rig] scratch: <scratch>/store-forward
+[rig] chain preset current: blockInterval=2s minerRewardDelay=10
+[rig] genesis state digest for minerRewardDelay=10 derived from a probe start: c01a142d004a917b…
+[rig] effective configuration: <scratch>/store-forward/out/effective.json ({"chain":"current","nodes":["A:ergo-6.0.8-boxproof.jar","T1:ergo-6.0.8-boxproof.jar","T2:ergo-6.0.8-boxproof.jar"],"links":3})
+[rig] A pid=211554 cpus_applied=0-11 gc=G1GC
+[rig] A REST up
+[rig] bring-up: every link connected
+[rig] === handing off to hook: ~/bin/tachys/rig/store-forward.sh ===
+[sf] 1. online: the payer wallet is created, paid by the node's wallet, and proves its box
+  cost: 2 requests, 36 B sent, 667 B received
+  note: height 27 is above the tip the peers agree on (26); the headers between came from this node alone
+[sf] 2. the payer loses its connection to the node
+[rig] partition A<->T2 (100% loss)
+  payer -> node: verdict: NOT TRUSTED (no tip heard)
+[sf] 3. offline, the payer signs 0.1 ERG to the node's address and writes a parcel
+  signed: tx 905868e6… (1477 B as JSON), 1 inputs, 3 outputs
+  receipt for the payee (box ids to hand over): 0e7c9ae7…
+  change we will look for ourselves: 3ae34be8…
+  parcel written to <scratch>/store-forward/tachys/parcel.json (291 B of transaction); hand it to any wallet that can reach the network
+[sf] 4. the carrier wallet syncs, serves, and takes the parcel from the payer
+  handed to 10.9.21.1:9030: it acknowledged tx 905868e6… (2250 B)
+  carrier: tachys serve (devnet): 10 headers 20..29 on 10.9.21.1:9030 for 10 s
+  carrier: served: 1 connections, 1 sync pushes, 0 header requests (0 headers), 1 parcels taken, 0 proofs relayed, 0 reloads, 2216 B sent
+[sf] 4b. controls: a carrier must refuse bad parcels before anything reaches the node
+  handed to 10.9.21.1:9030: it acknowledged tx 905868e6… (675 B)
+  [badproof] outbox: 1 payment(s) to submit to 10.9.20.1:9021
+  [badproof]   905868e6… REFUSED before submission: spending proof or balance check failed: ReducedToFalse(0, VerificationResult { result: false, cost: 0, diag: ReductionDiagnosticInfo 
+  [badproof] outbox done: 0 submitted, 1 refused
+  handed to 10.9.21.1:9030: it acknowledged tx 3a101424… (675 B)
+  [badinput] outbox: 1 payment(s) to submit to 10.9.20.1:9021
+  [badinput]   3a101424… REFUSED before submission: input 2f0bf270d1d5bf93 is not an unspent box at height 39; dropped
+  [badinput] outbox done: 0 submitted, 1 refused
+  node mempool holds the payment: no
+[sf] 5. the carrier submits what it carries to the node over the peer protocol
+  outbox: 1 payment(s) to submit to 10.9.20.1:9021
+    905868e6… checked: inputs proven unspent at height 40, spending proofs verify
+    905868e6… delivered on request (2 messages sent, 1068 ms held)
+  outbox done: 1 submitted, 0 refused
+[sf] 6. the payment confirms
+  node's wallet sees tx 905868e6… with 2 confirmation(s)
+[sf] 6b. control: the same parcel handed over again after it confirmed is refused as already on chain
+  handed to 10.9.21.1:9030: it acknowledged tx 905868e6… (2250 B)
+  [replay] outbox: 1 payment(s) to submit to 10.9.20.1:9021
+  [replay]   905868e6… REFUSED before submission: already on chain (an output exists at height 47); dropped
+  [replay] outbox done: 0 submitted, 1 refused
+[sf] 7. the payer reconnects and finds its change without asking for it by address
+[rig] heal A<->T2
+  payment 905868e6…: confirmed at height 49 or before
+    3ae34be8…  398900000 nanoERG, proven unspent at 49, confirmations 1 (added)
+  address <address>
+  balance 0.398900000 ERG in 1 boxes, proven at height 49
+  cost: 1 requests, 132 B sent, 982 B received
+[sf] verdict: PASS
+[rig] HEALTH A ok launches=1 exits=0 oom=0 jvm_fatal=0 restart_lines=0
+[rig] HEALTH: OK nodes=1
+[rig] COSTS heal A-T2: censored endpoint_down
+[rig] === hook done (verdict: PASS) ===
+[rig] all nodes stopped
+
+==== offline-payee
+[rig] scratch: <scratch>/offline-payee
+[rig] chain preset current: blockInterval=2s minerRewardDelay=10
+[rig] genesis state digest for minerRewardDelay=10 derived from a probe start: c01a142d004a917b…
+[rig] effective configuration: <scratch>/offline-payee/out/effective.json ({"chain":"current","nodes":["A:ergo-6.0.8-boxproof.jar","T1:ergo-6.0.8-boxproof.jar","T2:ergo-6.0.8-boxproof.jar","T3:ergo-6.0.8-boxproof.jar"],"links":3})
+[rig] A pid=214249 cpus_applied=0-11 gc=G1GC
+[rig] A REST up
+[rig] bring-up: every link connected
+[rig] === handing off to hook: ~/bin/tachys/rig/offline-payee.sh ===
+[op] 1. the payer wallet is funded and proves its box (online, from the node)
+  payer: balance 0.500000000 ERG in 1 boxes, proven at height 26
+[op] 2. the relaying wallet syncs and serves, with proof relay on
+[op] 3. the payee has no route to the node; it syncs from the relaying wallet and makes an address
+  payee -> node directly: verdict: NOT TRUSTED (no tip heard)
+  verdict: Agreed
+  tip: height 27 id 216997c5c590f872455cf96456ee49f83564c44219c1a2618cac034287ec8d00 (6 s old)
+[op] 4. the payer pays the payee 0.1 ERG, submitting over the peer protocol, and gives it the receipt
+  receipt: ea0cc75e…
+    bbae1ff6… delivered on request (2 messages sent, 1062 ms held)
+  outbox done: 1 submitted, 0 refused
+  the receipt box is on chain
+[op] 5. the payee checks the receipt through the relaying wallet
+  node is 4 block(s) past the agreed tip; fetched those headers by id over the peer protocol (linked, work-checked)
+    ea0cc75e…  100000000 nanoERG, seen unspent at 31, above the tip the peers agree on (27): one source, confirmations 0 (added)
+  address <address>
+  balance 0.100000000 ERG in 1 boxes, proven at height 31
+  cost: 5 requests, 36 B sent, 6745 B received
+  note: height 31 is above the tip the peers agree on (27); the headers between came from this node alone
+[op] 6. control: a made-up receipt asked through the relay is proven absent
+    00000000…  ABSENT at height 31: not accepted
+  address <address>
+  balance 0.100000000 ERG in 1 boxes, proven at height 31
+  relay: tachys serve (devnet): 10 headers 18..27 on 10.9.22.1:9030 for 150 s
+  relaying wallet stopped: 0 listener(s) left on its port
+[op] 7. control: a serving wallet without relay on gives the payee nothing
+  proof from p2p://10.9.22.1:9030: no box proof in time (does the peer carry the patch?)
+  NOT PROVEN by any node given
+  no-relay: tachys serve (devnet): 10 headers 18..27 on 10.9.22.1:9030 for 14 s
+  no-relay: served: 1 connections, 1 sync pushes, 0 header requests (0 headers), 0 parcels taken, 0 proofs relayed, 0 reloads, 2216 B sent
+[op] verdict: PASS
+[rig] HEALTH A ok launches=1 exits=0 oom=0 jvm_fatal=0 restart_lines=0
+[rig] HEALTH: OK nodes=1
+[rig] COSTS no recovery events
+[rig] === hook done (verdict: PASS) ===
+[rig] all nodes stopped

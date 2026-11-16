@@ -1,0 +1,21 @@
+tachys tips: 24 candidate peers, want 4, quiet 1500 ms, wait 6 s, stored header: true
+  204.136.11.157:9031    -- connect: Connection refused (os error 111) (held 0 ms)
+  23.139.82.232:9031     -- handshake read: Connection reset by peer (os error 104) (held 0 ms)
+  167.233.240.191:9030   ergo-rust 6.0.7 pushed after 393 ms, 11103 B, 50 headers (50 pass), tip 1916017
+  54.36.120.105:9031     -- handshake read: Connection reset by peer (os error 104) (held 0 ms)
+  46.224.217.101:9030    ergoref 6.1.2 answered after 1899 ms, 891 B, 4 headers (4 pass), tip 1916017, announced 9 ids
+  64.120.95.14:9031      -- handshake read: Connection reset by peer (os error 104) (held 0 ms)
+  191.101.234.147:9030   ergoref 5.0.24 answered after 1930 ms, 891 B, 4 headers (4 pass), tip 1916017, announced 9 ids
+  69.87.191.11:9031      -- connect: Connection refused (os error 111) (held 0 ms)
+  128.253.41.49:9030     ergoref 6.1.2 answered after 1604 ms, 891 B, 4 headers (4 pass), tip 1916017, announced 9 ids
+  72.14.147.199:9031     -- closed during handshake (held 0 ms)
+  85.121.122.132:9030    ergoref 6.1.7 answered after 1983 ms, 891 B, 4 headers (4 pass), tip 1916017, announced 9 ids
+  104.250.129.106:9031   -- connect timeout (held 0 ms)
+  103.13.114.100:9030    -- connect timeout (held 0 ms)
+chain from 167.233.240.191:9030: 10 linked headers 1916008..1916017 in 9 requests, 13550 B, 1577 ms
+
+5 peers pushed a tip; 5 network groups have their tip on the fetched chain; off-chain: []
+neighbour cost: 6 connections, 13 messages sent, 9.4 connection-seconds held (failures included), 29494 B received, 11.6 s wall
+verdict: Agreed
+tip: height 1916017 id 3a28ed6ddceb543ef02bf3504eed2bdc253be884627eb426473e579bc5cb6869 (105 s old)
+state root: bb6076a73a95959887392e1bf8034e10e08f80d1ac1db2c0688d3fd4eea3f67819

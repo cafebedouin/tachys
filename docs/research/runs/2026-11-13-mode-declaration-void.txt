@@ -1,0 +1,20 @@
+VOID: node B never connected to node A in this run (both on 127.0.0.1), so B asked nobody for anything.
+
+== arm: nothing
+frames received from 127.0.0.1:19031 in 25 s:
+  code   1 GetPeers           x1  0 B
+  code  65 SyncInfo           x1  3 B
+asked us for data (RequestModifier): 0; asked us for a proof (GetNipopowProof): 0
+B after the arm: {"fullHeight":null,"headersHeight":null,"peersCount":1}  A: {"fullHeight":275}
+== arm: light
+frames received from 127.0.0.1:19031 in 25 s:
+  code   1 GetPeers           x1  0 B
+  code  65 SyncInfo           x1  3 B
+asked us for data (RequestModifier): 0; asked us for a proof (GetNipopowProof): 0
+B after the arm: {"fullHeight":null,"headersHeight":null,"peersCount":1}  A: {"fullHeight":280}
+== arm: full-claim-control
+frames received from 127.0.0.1:19031 in 25 s:
+  code   1 GetPeers           x1  0 B
+  code  65 SyncInfo           x1  3 B
+asked us for data (RequestModifier): 0; asked us for a proof (GetNipopowProof): 0
+B after the arm: {"fullHeight":null,"headersHeight":null,"peersCount":1}  A: {"fullHeight":285}

@@ -1,0 +1,23 @@
+  69.87.191.11:9031      -- connect: Connection refused (os error 111)
+  72.14.147.199:9031     -- handshake read: Connection reset by peer (os error 104)
+  23.139.82.232:9031     -- handshake read: Connection reset by peer (os error 104)
+  204.136.11.157:9031    -- connect: Connection refused (os error 111)
+  54.36.120.105:9031     -- handshake read: Connection reset by peer (os error 104)
+  167.233.240.191:9030   ergo-rust 6.0.7 sync message after 384 ms, 11103 B, 50 headers [1916013 1916012 1916011 1916010 1916009 1916008 1916007 1916006 1916005 1916004 1916003 1916002 1916001 1916000 1915999 1915998 1915997 1915996 1915995 1915994 1915993 1915992 1915991 1915990 1915989 1915988 1915987 1915986 1915985 1915984 1915983 1915982 1915981 1915980 1915979 1915978 1915977 1915976 1915975 1915974 1915973 1915972 1915971 1915970 1915969 1915968 1915967 1915966 1915965 1915964]
+  64.120.95.14:9031      -- handshake read: Connection reset by peer (os error 104)
+  72.14.147.199:9030     ergoref 6.1.7 sync message after 927 ms, 891 B, 4 headers [1916013 1915997 1915885 1915501]
+  85.121.122.132:9030    ergoref 6.1.7 sync message after 6020 ms, 891 B, 4 headers [1916013 1915997 1915885 1915501]
+  104.250.129.106:9031   -- connect timeout
+  103.13.114.100:9030    -- connect timeout
+  23.105.162.48:9030     -- no sync message within 45 s
+  128.253.41.49:9030     -- no sync message within 45 s
+  46.224.217.101:9030    -- no sync message within 45 s
+  46.4.58.220:9030       -- no sync message within 45 s
+  191.101.234.147:9030   -- no sync message within 45 s
+chain from 167.233.240.191:9030: 10 linked headers 1916004..1916013 in 9 requests, 13550 B, 1550 ms
+
+3 peers pushed a tip; 3 network groups have their tip on the fetched chain; off-chain: []
+neighbour cost: 26474 B received, 9 requests sent, 8.9 connection-seconds held, 46.8 s wall
+verdict: Agreed
+tip: height 1916013 id 164e41541a745c00e02c6c16e1f1959994698b61222a1fd35b9d6babab754d8d (197 s old)
+state root: 697705992698b0a8c381a11ac90f0412043121af5ddc36fa9bea445e0593b31c19

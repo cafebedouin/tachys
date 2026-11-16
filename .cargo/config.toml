@@ -1,0 +1,4 @@
+# The vendored codec's tests recurse deeply on purpose (a nested-script test); an unoptimised build needs more than
+# the 2 MB a test thread gets by default. With this, `cargo test --workspace` passes in debug as well as release.
+[env]
+RUST_MIN_STACK = "8388608"

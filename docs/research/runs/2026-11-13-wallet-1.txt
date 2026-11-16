@@ -1,0 +1,19 @@
+verdict: Agreed
+tip: height 1916021 id 4521697bd8ab9e3d2d989a9466645925b961f697c2a9fa0ba3e4aa21bbbfd949 (170 s old)
+== new
+new wallet: address <address>
+birthday height 1916021 (nothing before it is ever looked for)
+saved to <tmp>/wstate/wallet.json
+== status, empty
+address <address>
+no boxes tracked; balance 0 ERG
+== receive: a real box that pays someone else, and a made-up id
+  e9bab352…  exists but pays another address: not accepted
+  00000000…  ABSENT at height 1916021: not accepted
+address <address>
+balance 0.000000000 ERG in 0 boxes, proven at height 1916021
+cost: 1 requests, 135 B sent, 3308 B received
+== status --reconcile
+reconcile: node lists 0 boxes we were not tracking
+address <address>
+no boxes tracked; balance 0 ERG

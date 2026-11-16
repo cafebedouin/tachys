@@ -1,0 +1,10 @@
+# `cargo audit` reads this. One advisory is known and accepted for now; the reason is recorded, not hidden.
+[advisories]
+ignore = [
+    # crypto-bigint 0.5.5: timing in some constant-time operations. It arrives through k256, which sigma-rust (pinned
+    # by revision) depends on, so it cannot be raised from here. The scalar operations that touch a secret in signing
+    # and key derivation were built for x86_64, arm64 and 32-bit ARM and disassembled: no branch in them depends on a
+    # value (docs/research/findings.md, 48). Point multiplication was not looked at. Drop this line when sigma-rust
+    # moves to a k256 that carries the fix.
+    "RUSTSEC-2026-0387",
+]

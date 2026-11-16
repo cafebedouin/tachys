@@ -1,0 +1,21 @@
+PARTIAL: only the first arm is valid. Node B was not stopped between arms, so the light and full-claim arms ran against an already-synced node.
+
+== arm: nothing
+frames received from 127.0.0.2:19031 in 30 s:
+  code   1 GetPeers           x1  0 B
+  code  55 Inv                x1172  39848 B
+  code  65 SyncInfo           x2  669 B
+asked us for data (RequestModifier): 0; asked us for a proof (GetNipopowProof): 0
+B after the arm: {"fullHeight":293,"headersHeight":295,"peersCount":2}  A: {"fullHeight":295}
+== arm: light
+frames received from 127.0.0.2:19031 in 30 s:
+  code  55 Inv                x20  680 B
+  code  65 SyncInfo           x2  1332 B
+asked us for data (RequestModifier): 0; asked us for a proof (GetNipopowProof): 0
+B after the arm: {"fullHeight":298,"headersHeight":299,"peersCount":2}  A: {"fullHeight":300}
+== arm: full-claim-control
+frames received from 127.0.0.2:19031 in 30 s:
+  code  55 Inv                x20  680 B
+  code  65 SyncInfo           x2  1332 B
+asked us for data (RequestModifier): 0; asked us for a proof (GetNipopowProof): 0
+B after the arm: {"fullHeight":303,"headersHeight":304,"peersCount":2}  A: {"fullHeight":305}

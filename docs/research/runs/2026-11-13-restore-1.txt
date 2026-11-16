@@ -1,0 +1,31 @@
+neighbour cost: 5 connections, 3 messages sent, 7.1 connection-seconds held (failures included), 15545 B received, 4.4 s wall
+verdict: Agreed
+tip: height 1916025 id 754551b63f7d66b761543916df23112f83f38b995dbb747df5cd834299f220cc (172 s old)
+== restore
+restored wallet: address <address>
+reconcile: http://<own-node>:9053 lists 21 unspent boxes, 21 not yet tracked
+reconcile: http://213.239.193.208:9053 lists 21 unspent boxes, 0 not yet tracked
+  5732be0d…  972179778 nanoERG, proven unspent at 1916025 (added)
+  7e096ba2…  10000000 nanoERG, proven unspent at 1916025 (added)
+  6b49156d…  299000000 nanoERG, proven unspent at 1916025 (added)
+  e334f6b7…  708204200 nanoERG, proven unspent at 1916025 (added)
+  40850ea4…  170493065 nanoERG, proven unspent at 1916025 (added)
+  149c4597…  7731103183 nanoERG, proven unspent at 1916025 (added)
+  a28df24b…  100000 nanoERG, proven unspent at 1916025 (added)
+  613c6e1c…  300000000 nanoERG, proven unspent at 1916025 (added)
+  da1029e9…  7440074809 nanoERG, proven unspent at 1916025 (added)
+  05d1bd24…  300000000 nanoERG, proven unspent at 1916025 (added)
+  6dadd00b…  202000000 nanoERG, proven unspent at 1916025 (added)
+  89febd4c…  237500000 nanoERG, proven unspent at 1916025 (added)
+  73a32f73…  193000000 nanoERG, proven unspent at 1916025 (added)
+  3d627e54…  90000000 nanoERG, proven unspent at 1916025 (added)
+  4b9e3fb3…  1000000 nanoERG, proven unspent at 1916025 (added)
+  31cb2e7a…  300000000 nanoERG, proven unspent at 1916025 (added)
+  4b60fa0e…  300000000 nanoERG, proven unspent at 1916025 (added)
+  4909636e…  300000000 nanoERG, proven unspent at 1916025 (added)
+  a62e97a2…  672446 nanoERG, proven unspent at 1916025 (added)
+  32a16180…  675109939 nanoERG, proven unspent at 1916025 (added)
+  49b326ba…  63430592 nanoERG, proven unspent at 1916025 (added)
+address <address>
+balance 20.293868012 ERG in 21 boxes, proven at height 1916025
+cost: 3 requests, 1510 B sent, 59204 B received

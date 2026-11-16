@@ -1,0 +1,126 @@
+The wallet command taken apart, in two steps, and the vendored codec's tests made to pass. Host and a Galaxy Note 2,
+2026-11-15. The wallet is the public BIP-39 test phrase on testnet, synced once before the runs. Nothing was
+broadcast. Addresses and the node are left out; long codes are cut short.
+
+"before" is the binary built from commit fbd18b3 (main.rs split). Step 1 (29a84f6): one function a subcommand, a
+context struct and an opened-wallet struct in place of the closures. Step 2 (7ee699b): send and request hand a
+refusal back instead of stopping the process.
+
+== 71 wallet commands on copies of one state, before and after each step: output, exit codes, files written
+$ [plain] tachys wallet address	[exit 0]
+$ [plain] tachys wallet status	[exit 2]
+$ [plain] tachys wallet nosuch	[exit 2]
+$ [plain] tachys wallet send --to <address> --nanoerg 1000000000	[exit 0]
+$ [plain] tachys wallet send --to <address> --nanoerg 1000000000 --pay <address>:5000000 --purpose x --fee 2000000	[exit 0]
+$ [plain] tachys wallet send --to notanaddress --nanoerg 1000000000	[exit 1]
+$ [plain] tachys wallet send --to <address> --nanoerg 99000000000	[exit 1]
+$ [plain] tachys wallet send --to <address> --nanoerg 1000000000 --pay <address>:5	[exit 1]
+$ [plain] tachys wallet send --to <address> --nanoerg 1000000000 --also-token 00000000…:0	[exit 1]
+$ [plain] tachys wallet send --to <address> --nanoerg 1000000000 --token 00000000… --token-amount 5	[exit 1]
+$ [plain] tachys wallet send --to <address> --nanoerg 1000000000 --request-out	[exit 0]
+$ [plain] tachys wallet request --code ergopay:8wEBI3-CFH7r…	[exit 0]
+$ [plain] tachys wallet request --code ergopay:8wEBI3-CFH7r… --sign	[exit 1]
+$ [plain] tachys wallet request --code ergopay:8wEBI3-CFH7r… --sign --node <node>	[exit 1]
+$ [plain] tachys wallet request --code ergopay:AAAA	[exit 1]
+$ [plain] tachys wallet request --code ergopay://example.org/x	[exit 1]
+$ [plain] tachys wallet request --code nonsense	[exit 1]
+$ [plain] tachys wallet send --mint TEST --token-amount 1000 --decimals 2	[exit 0]
+$ [plain] tachys wallet consolidate	[exit 1]
+$ [plain] tachys wallet burn --token 00000000… --token-amount 1	[exit 1]
+$ [plain] tachys wallet babel-offer --token 00000000… --price 1000 --nanoerg 2000000	[exit 0]
+$ [plain] tachys wallet babel-offer --token 00000000… --price 0 --nanoerg 2000000	[exit 1]
+$ [plain] tachys wallet babel-list --token 00000000…	[exit 1]
+$ [plain] tachys wallet send --to <address> --nanoerg 1000000000 --babel 00000000…	[exit 1]
+$ [plain] tachys wallet send --to <address> --nanoerg 1000000000 --babel 00000000… --babel-max 5 --node <node>	[exi
+$ [plain] tachys wallet pubkey	[exit 0]
+$ [plain] tachys wallet mnemonic	[exit 0]
+$ [plain] tachys wallet name --name renamed	[exit 0]
+$ [plain] tachys wallet encrypt	[exit 2]
+$ [plain] tachys wallet address --add	[exit 0]
+$ [plain] tachys wallet address	[exit 0]
+$ [plain] tachys wallet send --to <address> --nanoerg 1000000000 --broadcast	[exit 1]
+$ [plain] tachys wallet send --to <address> --nanoerg 1000000000 --parcel-out T/parcel.json	[exit 0]
+$ [plain] tachys wallet send --to <address> --nanoerg 1000000000	[exit 1]
+$ [plain] tachys wallet promise --tx 00	[exit 1]
+$ [plain] tachys wallet promise --tx 01237f82147e…	[exit 0]
+$ [pol] tachys wallet send --to <address> --nanoerg 100000000	[exit 1]
+$ [pol] tachys wallet send --to <address> --nanoerg 1000000000	[exit 1]
+$ [pol] tachys wallet send --to <address> --nanoerg 100000000	[exit 1]
+$ [pol] tachys wallet send --to <address> --nanoerg 400000000 --purpose first	[exit 0]
+$ [pol] tachys wallet send --to <address> --nanoerg 400000000 --purpose second	[exit 1]
+$ [pol] tachys wallet mnemonic	[exit 2]
+$ [pol] tachys wallet send --to <address> --nanoerg 100000000 --request-out	[exit 0]
+$ [pol] tachys wallet request --code ergopay:8gEBI3-CFH7r… --sign --node <node>	[exit 1]
+$ [pol] tachys wallet request --code ergopay:8gEBI3-CFH7r… --sign --node <node> --purpose third	[exit 1]
+$ [sealed] tachys wallet restore --embed --mnemonic-file vec.txt	[exit 2]
+$ [sealed] tachys wallet send --to <address> --nanoerg 1000000000	[exit 0]
+$ [sealed] tachys wallet mnemonic	[exit 0]
+$ [sealed] tachys wallet encrypt	[exit 0]
+$ [sealed] tachys wallet restore --embed --mnemonic-file vec.txt	[exit 2]
+$ [sealed] tachys wallet restore --embed --mnemonic-file vec.txt --reseal	[exit 2]
+$ [sealed] tachys wallet send --to <address> --nanoerg 1000000000	[exit 1]
+$ [sealed] tachys wallet address	[exit 0]
+$ [sealed] tachys wallet mnemonic	[exit 2]
+$ [sealed] tachys wallet pubkey	[exit 2]
+$ [sealed] tachys wallet send --to <address> --nanoerg 1000000000	[exit 1]
+$ [sealed] tachys wallet send --to <address> --nanoerg 1000000000 --request-out	[exit 0]
+$ [sealed] tachys wallet address --add	[exit 2]
+$ [watch] tachys wallet watch --address notanaddress	[exit 2]
+$ [watch] tachys wallet watch --address <address> --name eye	[exit 0]
+$ [watch] tachys wallet watch --address <address>	[exit 2]
+$ [watch] tachys wallet address	[exit 0]
+$ [watch] tachys wallet address --add	[exit 2]
+$ [watch] tachys wallet mnemonic	[exit 2]
+$ [watch] tachys wallet restore --mnemonic-file vec.txt	[exit 2]
+$ [watch] tachys wallet address	[exit 0]
+$ [fresh] tachys wallet derive --mnemonic-file vec.txt	[exit 0]
+$ [fresh] tachys wallet derive --mnemonic-file /nonexistent	[exit 2]
+$ [fresh] tachys wallet new --name n	[exit 0]
+$ [fresh] tachys wallet new	[exit 2]
+$ [fresh] tachys wallet address	[exit 0]
+
+after step 1 and again after step 2, against before: the output differs in one line, the command line that
+carries a signed transaction (signatures are made with fresh randomness each time). Compared as well, and the
+same: the four signed transactions without their signatures, the four wallet files without the sealed bytes,
+the payments log without its times, and the mode of every file written.
+
+== cargo test --release -p tachys (after step 2)
+test policy::tests::a_log_that_cannot_be_read_stops_payments ... ok
+test policy::tests::a_policy_with_no_limits_allows_nothing ... ok
+test policy::tests::erg_limits_count_the_fee_and_the_day ... ok
+test policy::tests::payees_are_held_to_the_list ... ok
+test policy::tests::reserving_writes_the_log_first_and_needs_one_to_exist ... ok
+test policy::tests::tokens_need_leave_and_a_limit_of_their_own ... ok
+test tests::a_condition_that_names_our_key_makes_the_box_ours ... ok
+test tests::a_mistyped_phrase_is_caught ... ok
+test tests::text_from_a_node_is_never_sliced_inside_a_character ... ok
+test wallet::tests::a_payment_pays_the_payee_and_the_fee_and_returns_the_rest ... ok
+test wallet::tests::a_refusal_is_handed_back_and_nothing_is_signed ... ok
+test wallet::tests::a_spending_policy_holds_what_send_signs ... ok
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+== cargo test --release --workspace --no-fail-fast, before the fixture files were added (commit 7ee699b)
+ergo-primitives: 67 passed; 1 failed   (digest::tests::blake2b256_matches_published_mainnet_header_ids)
+ergo-ser: 468 passed; 5 failed   (ergo_box::whole::tests::mainnet_boxes_roundtrip, ergo_tree::tests::mainnet_ergotrees_roundtrip,
+  ergo_tree::tests::template_hash_consistent_across_mainnet_vectors, ergo_tree::tests::trace_failing_tree_0x59,
+  opcode::tests::method_registry_predicates_match_scala_oracle), each "No such file or directory"
+
+== the same, after (commit 2e31413): five files from the upstream repository at the vendored commit
+test result: ok. 299 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 68 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 473 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+== Galaxy Note 2 (SGH-T889, Android 7.1.2, armeabi-v7a), over adb
+the app already on it was signed with the debug key, so the build pushed is the release variant signed with
+the debug key (./gradlew assembleRelease with no release key given), from commit 2e31413, installed over it:
+$ adb install -r app-armeabi-v7a-release.apk
+Success
+firstInstallTime=2026-11-13 15:56:57   lastUpdateTime=2026-11-15 14:05:29   (an update in place, which keeps the app's data)
+sha256 of the APK on the phone and of the one built: 7bab9b73…65f5ee, the same
+the app was started once: its process ran and the log shows no crash. The screen was off; nothing was
+looked at or pressed. Testing by hand is the operator's.

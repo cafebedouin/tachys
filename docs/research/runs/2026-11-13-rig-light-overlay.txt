@@ -1,0 +1,35 @@
+[rig] === handing off to hook: rig/light-overlay.sh ===
+[overlay] A at height 21; A is 10.9.20.1 to T1; T1 is 10.9.21.1 to T2
+[overlay] 0. control: T2 has no route to the full node
+  tachys tips (devnet): 1 candidate peers, want 1, quiet 1500 ms, wait 6 s, header to offer: release checkpoint
+    10.9.20.1:9021         -- connect: Network is unreachable (os error 101) (held 0 ms)
+  no peer pushed a usable tip
+[overlay] 1. T1 syncs from the full node
+  neighbour cost: 2 connections, 10 messages sent, 2.1 connection-seconds held (failures included), 3258 B received, 2.1 s wall
+  verdict: Agreed
+  tip: height 21 id 997cc01376424ccd070486922f45c44d2d0eb67c428e1286c219d2ddd7369203 (5 s old)
+  state root: 91e6607b3b27de2043408b373652f7c69386a9764683250e9d45d0e5c3b0b3e006
+[overlay] 2. T1 serves; T2 syncs from T1 only
+  
+  1 peers pushed a tip; 1 network groups have their tip on the fetched chain; off-chain: []
+  neighbour cost: 1 connections, 0 messages sent, 0.2 connection-seconds held (failures included), 2216 B received, 0.3 s wall
+  verdict: Agreed
+  tip: height 21 id 997cc01376424ccd070486922f45c44d2d0eb67c428e1286c219d2ddd7369203 (8 s old)
+  state root: 91e6607b3b27de2043408b373652f7c69386a9764683250e9d45d0e5c3b0b3e006
+  T2's tip equals T1's: 21 997cc013…
+  and the full node has that header at that height: yes
+  T1: tachys serve (devnet): 10 headers 12..21 on 10.9.21.1:9030 for 12 s
+  T1: served: 1 connections, 1 sync pushes, 0 header requests (0 headers), 0 parcels taken, 0 proofs relayed, 0 reloads, 2216 B sent
+[overlay] 3. control: T1 serves a chain with one broken header; T2 must refuse it
+  chain from 10.9.21.1:9030: 5 linked headers 17..21 (5 already pushed) in 5 requests, 3551 B, 255 ms
+  
+  1 peers pushed a tip; 1 network groups have their tip on the fetched chain; off-chain: []
+  neighbour cost: 2 connections, 5 messages sent, 0.5 connection-seconds held (failures included), 5767 B received, 0.5 s wall
+  verdict: NOT TRUSTED (chain 5 of 10, groups 1 of 1, difficulty steady true, tip age 20 s)
+  T1: serving a TAMPERED chain (control): header at height 16 has a flipped nonce
+  T1: tachys serve (devnet): 10 headers 12..21 on 10.9.21.1:9030 for 12 s
+  T1: served: 2 connections, 2 sync pushes, 5 header requests (5 headers), 0 parcels taken, 0 proofs relayed, 0 reloads, 5767 B sent
+[overlay] 4. a serving wallet that keeps syncing serves a tip that moves
+  T2 saw height 21 from T1, then height 37 after T1 had synced three more times (node is at 38)
+[overlay] verdict: PASS
+[rig] === hook done (verdict: PASS) ===

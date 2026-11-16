@@ -1,0 +1,8 @@
+new wallet: address <address>
+== box proof over the peer protocol: a real box (not ours) and a made-up id
+node is 2 block(s) past the agreed tip; fetched those headers by id over the peer protocol (linked, work-checked)
+  db37ff4a…  exists but pays another address: not accepted
+  00000000…  ABSENT at height 252: not accepted
+address <address>
+balance 0.000000000 ERG in 0 boxes, proven at height 252
+cost: 4 requests, 68 B sent, 1602 B received

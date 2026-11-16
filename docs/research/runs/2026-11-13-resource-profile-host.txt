@@ -1,0 +1,16 @@
+== tip sync, mainnet (cold, no stored header)
+tip: height 1916106 id 7339390b1b2849f42fae95f95503123181689258e4abfb7838e9ff3448cc5eaa (135 s old)
+state root: a9208daaffe22171d80874f5e3eabc9992f980ac5fb6d8ae1f7e6c3ca34844a219
+    -> peak memory 5492 KB, cpu 0.07+0.00 s, wall 4.86 s
+== tip sync, mainnet (warm)
+tip: height 1916106 id 7339390b1b2849f42fae95f95503123181689258e4abfb7838e9ff3448cc5eaa (140 s old)
+state root: a9208daaffe22171d80874f5e3eabc9992f980ac5fb6d8ae1f7e6c3ca34844a219
+    -> peak memory 5356 KB, cpu 0.07+0.01 s, wall 4.58 s
+== re-prove 21 tracked boxes of the funded test wallet (REST node)
+balance 20.293868012 ERG in 21 boxes, proven at height 1916106
+cost: 1 requests, 1408 B sent, 30894 B received
+    -> peak memory 5600 KB, cpu 0.01+0.00 s, wall 0.25 s
+== verify a 162 KB NiPoPoW proof from disk
+  mainnet-1915810          162313 B: REJECTED [C8Recency]
+verdict: NO QUORUM; no tip is trusted
+    -> peak memory 5780 KB, cpu 0.09+0.00 s, wall 0.09 s

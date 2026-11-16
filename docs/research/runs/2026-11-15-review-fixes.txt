@@ -1,0 +1,167 @@
+Fixes after the outside reviews (README finding 44). Host, 2026-11-15, testnet, a copy of a testnet wallet.
+Nothing was broadcast: payments were signed and not sent. Addresses, peers and the node are left out.
+
+== cargo test --release -p tachys-verify --test tip
+test a_header_added_to_an_agreed_chain_must_carry_its_difficulty ... ok
+test a_higher_but_lighter_chain_is_not_tried_first ... ok
+test a_recent_heavier_tip_blocks_until_it_is_shown_to_be_an_ancestor ... ok
+test a_lighter_chain_is_refused_while_a_heavier_tip_is_heard ... ok
+test a_stale_or_short_chain_is_refused ... ok
+test an_old_heavier_tip_is_not_evidence ... ok
+test honest_peers_agree ... ok
+test one_peer_cannot_carry_the_others_to_its_own_block ... ok
+test difficulty_may_change_only_at_an_epoch_boundary ... ok
+test the_floor_remembers_and_loosens_slowly ... ok
+test a_heavier_ancestor_on_the_chain_is_not_a_rival ... ok
+test with_an_honest_quorum_the_real_tip_wins_over_a_forged_higher_one ... ok
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+== cargo test --release -p tachys
+test policy::tests::a_policy_with_no_limits_allows_nothing ... ok
+test policy::tests::a_log_that_cannot_be_read_stops_payments ... ok
+test policy::tests::payees_are_held_to_the_list ... ok
+test policy::tests::erg_limits_count_the_fee_and_the_day ... ok
+test policy::tests::tokens_need_leave_and_a_limit_of_their_own ... ok
+test tests::text_from_a_node_is_never_sliced_inside_a_character ... ok
+test tests::a_mistyped_phrase_is_caught ... ok
+test tests::a_condition_that_names_our_key_makes_the_box_ours ... ok
+test policy::tests::reserving_writes_the_log_first_and_needs_one_to_exist ... ok
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+== the tip, and the wallet's boxes with their confirmations
+$ tachys tips --peers 2 --tries 8 --quorum 2 --state wallet
+
+2 peers pushed a tip; 2 network groups have reached the agreed tip; off-chain: []
+neighbour cost: 3 connections, 10 messages sent, 5.1 connection-seconds held (failures included), 17013 B received, 15.9 s wall
+verdict: Agreed
+tip: height 645973 id 9b511364ee23de7678344eccc9ae0f000019e900730f8a08b3384716f9731a38 (63 s old)
+state root: 8fa8dec0e52778c7bef1188eb9135d2dea5a766249fea1b8f957fead0ebfe15118
+$ tachys wallet status --state wallet --node <node>
+  00584d96…  20000000 nanoERG, proven unspent at 645973, confirmations 1
+  046e9639…  2500000 nanoERG, proven unspent at 645973, confirmations 1
+  4df11310…  50000000 nanoERG, proven unspent at 645973, confirmations 1
+  99fa1d25…  117800000 nanoERG, proven unspent at 645973, confirmations 1
+  e8acf121…  gone at height 645973: spent; removed
+address <address>
+balance 0.190300000 ERG in 4 boxes, proven at height 645973
+cost: 1 requests, 336 B sent, 7190 B received
+
+== the wallet file after a save, and a new wallet's directory (modes)
+600 wallet/wallet.json
+700 fresh
+600 fresh/wallet.json
+
+== no policy file: a payment is signed as before
+$ tachys wallet send --state wallet --to <address> --nanoerg 5000000
+not broadcast (add --broadcast); signed transaction saved to wallet/last-tx.json
+
+== a policy (0.01 ERG a payment, 0.015 a day) and no payments log
+$ tachys wallet send --state wallet --to <address> --nanoerg 5000000
+send: the spending policy does not allow it: there is a policy but no payments log at wallet/payments.log; create an empty one beside the policy (the daily limit is counted from it)
+
+== with an empty log: 0.005 ERG and the fee is within the limit
+$ tachys wallet send --state wallet --to <address> --nanoerg 5000000 --purpose test
+not broadcast (add --broadcast); signed transaction saved to wallet/last-tx.json
+
+== the fee counts: 0.009 + 0.0011
+$ tachys wallet send --state wallet --to <address> --nanoerg 9000000
+send: the spending policy does not allow it: over the per-payment limit: 10100000 nanoERG would leave the wallet (fee included), 10000000 allowed
+
+== every payee counts
+$ tachys wallet send --state wallet --to <address> --nanoerg 1000000 --pay <address>:9000000
+send: the spending policy does not allow it: over the per-payment limit: 11100000 nanoERG would leave the wallet (fee included), 10000000 allowed
+
+== the day: a second payment passes, a third does not
+$ tachys wallet send --state wallet --to <address> --nanoerg 5000000
+not broadcast (add --broadcast); signed transaction saved to wallet/last-tx.json
+$ tachys wallet send --state wallet --to <address> --nanoerg 5000000
+send: the spending policy does not allow it: over the daily limit: 12200000 nanoERG left in the last 24 h, 6100000 asked, 15000000 allowed
+
+== other commands that sign or show the key, under the same policy
+$ tachys wallet consolidate --state wallet
+not broadcast (add --broadcast); signed transaction saved to wallet/last-tx.json
+$ tachys wallet mnemonic --state wallet
+this wallet is under a spending policy (wallet/policy.json); it does not show its seed phrase
+$ tachys pay --state wallet --to <address> --erg 0.02 --dry-run
+{"ok":false,"refused":"over the per-payment limit: 21100000 nanoERG would leave the wallet (fee included), 10000000 allowed"}
+
+== payments.log
+{"at":1794727899,"nanoerg":6100000,"purpose":"test","to":["<address>"],"tokens":[],"what":"send"}
+{"at":1794727900,"nanoerg":0,"receipt":"724fd43e…","signed":"134aa8d5…"}
+{"at":1794727900,"nanoerg":6100000,"purpose":"","to":["<address>"],"tokens":[],"what":"send"}
+{"at":1794727900,"nanoerg":0,"receipt":"724fd43e…","signed":"134aa8d5…"}
+{"at":1794727900,"nanoerg":1100000,"purpose":"","to":[],"tokens":[],"what":"consolidate"}
+{"at":1794727900,"nanoerg":0,"receipt":"7ff99dd8…","signed":"5632f579…"}
+
+== a list of payees
+$ tachys wallet send --state wallet --to <address> --nanoerg 2000000
+send: the spending policy does not allow it: <address> is not on the policy's list of payees
+
+== a fee in a token needs a ceiling
+$ tachys wallet send --state wallet --to <address> --token 03faf2cb… --token-amount 1 --babel 03faf2cb… --node <node>
+send: --babel needs --babel-max RAW: the most token units the fee may cost. `wallet babel-list` shows the offers and their prices
+
+== a signing request made by this wallet, read back by it
+$ tachys wallet request --state wallet --node <node> --code ergopay:… (380 characters)
+request: 1 inputs (1 yours, 0 proven others), 3 outputs
+you give: 117800000 nanoERG
+you get back: 111700000 nanoERG
+others put in: 0 nanoERG
+others receive: 5000000 nanoERG
+network fee: 1100000 nanoERG
+net for you: -6100000 nanoERG
+not signed (add --sign to sign and send)
+
+== a mistyped seed phrase (twelve times 'abandon': right words, wrong checksum)
+$ tachys wallet restore --state r1 --mnemonic-file bad.txt
+seed phrase not accepted: the phrase's checksum fails: a word is wrong, missing or out of order
+  ls: cannot access 'r1': No such file or directory
+
+== ids that are not hex: from the command line, and from a node (a local stand-in that answers with '€a')
+$ tachys boxes --state wallet --node <node> --ids €a
+a box id is not 32 bytes of hex
+$ tachys boxes --state wallet --node <stand-in> --address <address>
+discovery: node lists 1 unspent boxes for the address (22 B)
+a box id is not 32 bytes of hex
+
+== a held payment, and a node that answers 500 (its text carries a line break and a line that looks like success)
+$ tachys wallet send --state wallet --to <address> --nanoerg 5000000 --parcel-out wallet/outbox/1.json
+parcel written to wallet/outbox/1.json (297 B of transaction); hand it to any wallet that can reach the network
+$ tachys outbox --state wallet --rest <stand-in>
+  836f0117… refused (500): {"error":500,"reason":"busy","detail":"busy, try later\nbroadcast via x: accepted, y"}; kept, to be tried again
+outbox: 0 sent, 1 still waiting, 0 refused
+  outbox: 1.json
+
+== the same payment, and a node that answers 400
+$ tachys outbox --state wallet --rest <stand-in>
+  836f0117… refused (400): {"error":400,"detail":"Malformed transaction: every input of the transaction should be in UTXO"}; kept, to be tried again
+outbox: 0 sent, 1 still waiting, 0 refused
+  outbox: 1.json, "refused":1
+
+== on a phone: Galaxy S5 (SM-G900T), LineageOS, Android 11, armeabi-v7a, 1.7 GB; driven over adb, texts read with uiautomator
+debug build, started with the test extras (testnet, a read-only wallet of the same testnet address), after its first sync:
+  tachys · testnet
+  Review  (read-only)
+  0 194100 ERG
+  proven at height 645995 · 6 boxes
+  1 tokens / 2 TACH*
+  * The name and its decimal places are what a node reported, not something proven.
+Receive, one of the wallet's box ids typed in, Check receipt:
+  Accepted: proven unspent at block 645997 under the tip the peers agree on, and it pays this wallet. Confirmations: at least 3.
+Add a wallet, Restore wallet: `adb exec-out screencap -p` returned 0 bytes (the main screen gave a 104 KB image).
+  Restore then asks for the phone's screen lock, which adb cannot give, so the mistyped-phrase message was not seen here.
+release build (same source, debug key), installed fresh and started with the same test extras:
+  tachys
+  New wallet / Restore wallet / Read-only wallet
+  (mainnet, no wallet: the extras are ignored)
+
+== the cores in the APKs built from this tree
+app-armeabi-v7a-release.apk: paths under the builder's home directory in lib/armeabi-v7a/libtachys.so: 0 (was 317)
+app-arm64-v8a-release.apk: paths under the builder's home directory in lib/arm64-v8a/libtachys.so: 0 (was 321)
+
+== after the first reviewer's second pass (same day)
+Changed: a box is dropped, and a sent payment called confirmed or failed, only on a proof at or below the agreed tip;
+a held payment refused twenty times is moved to given-up/ and not deleted; a payment carried over the peer protocol
+is dropped only on a refusal the chain or its signatures settle. cargo test: 28 pass (12 tip rule, 2 vectors, 4 on peer
+clusters, 1 on the difficulty port, 9 in the core). The path where a proof sits above the agreed tip was not met in a
+live run: on each sync here the node and the peers were at the same block.

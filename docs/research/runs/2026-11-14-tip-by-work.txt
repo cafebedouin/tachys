@@ -1,0 +1,62 @@
+Tip chosen by work. Host, 2026-11-14 (UTC 2026-11-15). Addresses of peers left out.
+
+== cargo test --release -p tachys-verify --test tip
+test a_higher_but_lighter_chain_is_not_tried_first ... ok
+test a_heavier_ancestor_on_the_chain_is_not_a_rival ... ok
+test a_lighter_chain_is_refused_while_a_heavier_tip_is_heard ... ok
+test a_stale_or_short_chain_is_refused ... ok
+test a_header_added_to_an_agreed_chain_must_carry_its_difficulty ... ok
+test an_old_heavier_tip_is_not_evidence ... ok
+test honest_peers_agree ... ok
+test difficulty_may_change_only_at_an_epoch_boundary ... ok
+test the_floor_remembers_and_loosens_slowly ... ok
+test with_an_honest_quorum_the_real_tip_wins_over_a_forged_higher_one ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+== mainnet, run 1: tachys tips --peers 4 --tries 24 --state DIR
+tachys tips (mainnet): 24 candidate peers, want 4, quiet 1500 ms, wait 6 s, header to offer: release checkpoint
+least difficulty a header may claim: 14679132864512 (release floor; no earlier tip remembered)
+chain from 191.101.234.147:9030: 10 linked headers 1917018..1917027 (1 already pushed) in 9 requests, 2421 B, 1810 ms
+
+7 peers pushed a tip; 7 network groups have their tip on the agreed chain; off-chain: []
+neighbour cost: 8 connections, 16 messages sent, 16.2 connection-seconds held (failures included), 24695 B received, 8.3 s wall
+verdict: Agreed
+tip: height 1917027 id f67726a5f3cf04225f9c3178e4171f623be1b3fd389ff7a1738e8cf1f967ee2e (162 s old)
+state root: 680205299f1055cd7b81a524e7033990d7066ad5518acbd80ee115aa43d2bf5219
+
+== mainnet, run 2: tachys tips --peers 4 --tries 24 --state DIR
+tachys tips (mainnet): 24 candidate peers, want 4, quiet 1500 ms, wait 6 s, header to offer: stored from last run
+least difficulty a header may claim: 36577627602944 (from the tip agreed on last run, or the release floor if higher)
+chain: 10 linked headers 1917018..1917027 taken from pushed headers; no extra connection
+
+6 peers pushed a tip; 6 network groups have their tip on the agreed chain; off-chain: []
+neighbour cost: 6 connections, 5 messages sent, 11.0 connection-seconds held (failures included), 18015 B received, 6.2 s wall
+verdict: Agreed
+tip: height 1917027 id f67726a5f3cf04225f9c3178e4171f623be1b3fd389ff7a1738e8cf1f967ee2e (170 s old)
+state root: 680205299f1055cd7b81a524e7033990d7066ad5518acbd80ee115aa43d2bf5219
+
+== testnet, run 1: tachys tips --peers 2 --tries 8 --quorum 2 --state DIR --network testnet
+tachys tips (testnet): 8 candidate peers, want 2, quiet 1500 ms, wait 6 s, header to offer: release checkpoint
+least difficulty a header may claim: 0 (release floor; no earlier tip remembered)
+chain from <peer> 10 linked headers 645573..645582 (1 already pushed) in 9 requests, 2421 B, 1742 ms
+
+2 peers pushed a tip; 2 network groups have their tip on the agreed chain; off-chain: []
+neighbour cost: 3 connections, 9 messages sent, 3.0 connection-seconds held (failures included), 4229 B received, 14.5 s wall
+verdict: Agreed
+tip: height 645582 id 159b9aec633638635c86b07715596f405f995f089d5907a65b7248b8a6119b50 (49 s old)
+state root: 0cec779bed592fe6a7770d0e0732e6c4d2685351f4dccd0d3ec369b9f5b4db1d18
+
+== testnet, run 2: tachys tips --peers 2 --tries 8 --quorum 2 --state DIR --network testnet
+tachys tips (testnet): 8 candidate peers, want 2, quiet 1500 ms, wait 6 s, header to offer: stored from last run
+least difficulty a header may claim: 256 (from the tip agreed on last run, or the release floor if higher)
+chain from <peer> 10 linked headers 645573..645582 (1 already pushed) in 9 requests, 3513 B, 1759 ms
+
+2 peers pushed a tip; 2 network groups have their tip on the agreed chain; off-chain: []
+neighbour cost: 3 connections, 10 messages sent, 5.0 connection-seconds held (failures included), 5848 B received, 17.0 s wall
+verdict: Agreed
+tip: height 645582 id 159b9aec633638635c86b07715596f405f995f089d5907a65b7248b8a6119b50 (66 s old)
+state root: 0cec779bed592fe6a7770d0e0732e6c4d2685351f4dccd0d3ec369b9f5b4db1d18
+
+== earlier the same evening: mainnet balance proof four minutes after a sync (the node had moved on)
+node is 1 block(s) past the agreed tip; extended with work-checked, linked headers from <node>
+balance 20.071668012 ERG in 22 boxes, proven at height 1917026

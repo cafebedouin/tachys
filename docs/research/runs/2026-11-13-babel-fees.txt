@@ -1,0 +1,15 @@
+testnet; token has 2 decimals; the test wallet holds 500 units and 0.0029 ERG
+== 1. the payer offers 0.05 ERG for the token at 100000 nanoERG per unit
+balance 0.484700000 ERG in 2 boxes, proven at height 643323
+offering 50000000 nanoERG for token 4f348458… at 100000
+broadcast via http://213.239.193.208:9052: accepted, "9005e93679530e99d76be015fdd5c72185095de2f4587064e2835beb
+offer e157807f…  49000000 nanoERG available at 100000 nanoERG per token unit
+== 3. control: the payment without Babel
+balance 0.002900000 ERG in 2 boxes, proven at height 643325
+send: box selection: NotEnoughCoins(700000)
+== 4. with the fee in tokens
+fee in tokens: taking 1700000 nanoERG from offer e157807f… at 100000 nanoERG per unit, paying 17 token units
+broadcast via http://213.239.193.208:9052: accepted, "faa6df51…"
+balance 0.001000000 ERG in 1 boxes, proven at height 643327
+test wallet token units: 383
+offer 8aa60607…  47300000 nanoERG available at 100000 nanoERG per token unit

@@ -1,0 +1,37 @@
+[package]
+name = "tachys"
+version = "0.0.1"
+edition = "2021"
+# File::lock (the payments log) is in the standard library from 1.89
+rust-version = "1.89"
+publish = false
+license = "CC0-1.0"
+
+[dependencies]
+tachys-verify = { path = "../tachys-verify" }
+tachys-net = { path = "../tachys-net" }
+ergo-nipopow = { git = "https://github.com/ergoplatform/sigma-rust", rev = "688511dff3e3436dfdd6bd368e3eeef6f67d59e9" }
+ergo-merkle-tree = { git = "https://github.com/ergoplatform/sigma-rust", rev = "688511dff3e3436dfdd6bd368e3eeef6f67d59e9" }
+ergo-chain-types = { git = "https://github.com/ergoplatform/sigma-rust", rev = "688511dff3e3436dfdd6bd368e3eeef6f67d59e9" }
+sigma-ser = { git = "https://github.com/ergoplatform/sigma-rust", rev = "688511dff3e3436dfdd6bd368e3eeef6f67d59e9" }
+num-bigint = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = "2"
+base64 = "0.22"
+qrcode = { version = "0.14", default-features = false }
+ergo-lib = { git = "https://github.com/ergoplatform/sigma-rust", rev = "688511dff3e3436dfdd6bd368e3eeef6f67d59e9", default-features = false, features = ["std", "json", "mnemonic_gen"] }
+ergo_avltree_rust = "0.1.1"
+bytes = "1"
+ergotree-ir = { git = "https://github.com/ergoplatform/sigma-rust", rev = "688511dff3e3436dfdd6bd368e3eeef6f67d59e9" }
+sigma-util = { git = "https://github.com/ergoplatform/sigma-rust", rev = "688511dff3e3436dfdd6bd368e3eeef6f67d59e9" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+sha2 = "0.10"
+# the seed phrase at rest, as ergo-wallet keeps its secret: PBKDF2-HMAC-SHA256 into AES-256-GCM
+aes-gcm = "0.10"
+pbkdf2 = "0.12"
+getrandom = "0.2"
+# the password, the seed phrase and the key made from the password are wiped from memory when done with
+zeroize = "1"
+ripemd = "0.1"
+bs58 = { version = "0.5", features = ["check"] }
