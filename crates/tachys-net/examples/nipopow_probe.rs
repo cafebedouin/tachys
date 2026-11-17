@@ -54,6 +54,29 @@ async fn main() {
                 Err(e) => println!("extension section={} error: {e}", to_hex(&section_id)),
             }
         }
+        "run" => {
+            // nipopow_probe <magic> run <host:port> <id of a header the node has> <how many headers>
+            use ergo_chain_types::Header;
+            use sigma_ser::ScorexSerializable;
+            let want: usize = a[4].parse().expect("count");
+            let (first, _) = tachys_net::fetch_sections(&a[2], tachys_net::HEADER_TYPE, &[id32(&a[3])], wait).await.expect("the starting header");
+            let mut from = first.into_iter().next().expect("the node has the starting header").1;
+            let start = Header::scorex_parse_bytes(&from).expect("header").height;
+            let (mut all, mut connections, mut requests, mut bytes, mut ms): (Vec<Header>, usize, usize, usize, u128) = (vec![], 0, 0, 0, 0);
+            while all.len() < want {
+                let (got, cost) = tachys_net::fetch_run_forward(&a[2], from.clone(), want - all.len(), wait).await.expect("run");
+                connections += 1; requests += cost.requests_sent; bytes += cost.bytes_received; ms += cost.held_ms;
+                println!("run connection {connections}: headers={} requests={} bytes={} held_ms={}", got.len(), cost.requests_sent, cost.bytes_received, cost.held_ms);
+                let Some(last) = got.last() else { break };
+                from = last.1.clone();
+                all.extend(got.iter().map(|g| Header::scorex_parse_bytes(&g.1).expect("header")));
+            }
+            let linked = all.windows(2).all(|w| w[1].parent_id == w[0].id && w[1].height == w[0].height + 1)
+                && all.first().is_some_and(|h| h.height == start + 1);
+            println!("run from={} headers={} connections={} requests={} bytes={} held_ms={} consecutive={} last_height={} last_id={}",
+                start, all.len(), connections, requests, bytes, ms, linked,
+                all.last().map_or(0, |h| h.height), all.last().map_or(String::new(), |h| String::from(h.id.0)));
+        }
         other => panic!("unknown command {other}"),
     }
 }

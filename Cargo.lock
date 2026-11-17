@@ -2031,6 +2031,7 @@ dependencies = [
  "ergo-p2p",
  "ergo-primitives",
  "ergo-ser",
+ "sigma-ser",
  "tachys-verify",
  "tokio",
 ]
