@@ -84,6 +84,7 @@ fn other_proofs() {
     for path in paths.split(':') {
         let p: NipopowProof = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let r = describe(path.rsplit('/').next().unwrap(), &p);
+        println!("  as the peer protocol carries it: {} bytes", p.scorex_serialize_bytes().unwrap().len());
         assert_eq!(r.reached.len() + r.unreached.len(), p.prefix.len());
     }
 }
