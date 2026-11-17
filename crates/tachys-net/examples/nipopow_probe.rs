@@ -1,5 +1,8 @@
-//! A probe for a private rig network: what a node does with a proof request that carries a pad, and with a
-//! request for a block's Extension section by id. Not for public nodes (docs/good-neighbour.md).
+//! A probe written for a private rig network: what a node does with a proof request that carries a pad or asks
+//! for another sample, with a request for a block's Extension section by id, and with one sync message that
+//! offers a header it has. Most of that is outside what docs/good-neighbour.md lists for public nodes (a pad, a
+//! sample other than 6, a section request, some hundreds of headers in one request, a wait of 15 s). Against a
+//! public node, `proof` with no pad and `run` were used once, on one mainnet peer.
 //!
 //!   nipopow_probe <magic a,b,c,d> proof <host:port> <pad hex, or -> <file for the proof bytes> [m]
 //!   nipopow_probe <magic a,b,c,d> section <host:port> <type id> <section id hex>
@@ -149,9 +152,10 @@ async fn main() {
             use std::collections::HashSet;
             let (addr, p, dir) = (&a[2], params(&a[3]), std::path::Path::new(&a[4]));
             std::fs::create_dir_all(dir).expect("directory");
-            // With a sample as the last argument, that sample is asked for first: a node which offers it answers with
-            // a proof for its current tip. A node which does not gives no answer, and the node's own sample is asked
-            // for, with the pad that asks for the current tip.
+            // With a sample as the last argument, that sample is asked for first. A released node offers only its own
+            // sample and gives no answer; the node's own sample is then asked for, with a pad of one byte, which a
+            // released node reads and skips. The larger sample and the pad are for a node change run on a private
+            // network: such a node answers either with a proof for its current tip.
             let sample: Option<i32> = a.get(5).map(|x| x.parse().expect("m"));
             let larger = match sample {
                 Some(m) if m != 6 => match tachys_net::fetch_proof_padded(addr, m, 10, &[], wait).await {

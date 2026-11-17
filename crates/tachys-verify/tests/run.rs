@@ -40,7 +40,7 @@ fn on_a_stretch_of_mainnet() {
         assert!(exact.wrong.is_empty());
         assert_eq!(exact.exact_from, Some(newest_start), "cut {cut}: the newest epoch is recomputed from the run");
         assert_eq!(check_run(&headers[end - (need - 1)..end], &p).unwrap().exact_from, None, "cut {cut}: one header fewer is not enough");
-        // nine epochs of 128, the figure in our notes, and one more
+        // nine epochs of 128, the first estimate, and one more
         if check_run(&headers[end - 1152..end], &p).unwrap().exact_from != Some(newest_start) { one_short.push(tip); }
         assert_eq!(check_run(&headers[end - 1153..end], &p).unwrap().exact_from, Some(newest_start), "cut {cut}: 1,153 always suffice");
         if cut == 0 { show("the run for the tip", &exact); println!("  it needs {need} headers"); }

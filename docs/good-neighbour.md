@@ -10,6 +10,7 @@ running from the same address.
 | handshake | session id plus the **truthful light Mode**: digest state, not verifying transactions, NiPoPoW-bootstrapped (so not all headers), keeps no blocks; own agent name | the reference node downloads headers only from peers whose mode says all headers, block sections only from peers whose mode says all blocks, and asks for NiPoPoW proofs from every peer *not* marked NiPoPoW-bootstrapped, which includes peers with no mode. Measured on our devnet: with no mode a proof-bootstrapping node asked us for a proof 10 times in 30 s; with the light mode, never (`docs/research/experiments/2026-11-13-mode-declaration.md`) |
 | header request (`RequestModifier`) | by id, few at a time | the handler has no penalty path |
 | proof request (`GetNipopowProof`) | m=6, k=10, no header id | anything else is logged and refused; no penalty |
+| run fetch (one `SyncInfo` v2, then `RequestModifier`) | one sync message per connection, offering a header that peer served; the ids it announces in answer are asked for in one request | used by the probe only, once on one mainnet peer; no tachys command does this yet |
 | sync message (`SyncInfo` v2) | **at most one per connection; only a genuine, work-checked header that is behind the network tip** | a header that looks *ahead* of the peer is applied by it, and it then requests that block's sections from us; an invalid header is a misbehaviour penalty. Syncs closer than 100 ms apart are dropped as spam |
 
 ## What tachys never sends
