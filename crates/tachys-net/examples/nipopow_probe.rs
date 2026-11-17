@@ -88,6 +88,8 @@ async fn main() {
                 from = last.1.clone();
                 from_id = last.0;
                 all.extend(got.iter().map(|g| Header::scorex_parse_bytes(&g.1).expect("header")));
+                // less than a full announcement: the peer's tip is reached, and asking again would hold a slot for nothing
+                if got.len() < 300 { break }
             }
             let linked = all.windows(2).all(|w| w[1].parent_id == w[0].id && w[1].height == w[0].height + 1)
                 && all.first().is_some_and(|h| h.height == start + 1);
