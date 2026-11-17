@@ -12,6 +12,10 @@ pub struct ChainParams {
     pub block_interval_ms: u64,
     pub v2_activation_height: u32,
     pub initial_difficulty: BigInt,
+    /// `None` where EIP-37 gives a header's difficulty: mainnet, since height 844,673. The other networks keep the
+    /// rule from before it (the node's `calculate`), which has no limit on one change, and give this difficulty to
+    /// the two headers at which version 2 starts.
+    pub earlier_rule: Option<BigInt>,
 }
 
 impl ChainParams {
@@ -22,6 +26,7 @@ impl ChainParams {
             block_interval_ms: 120_000,
             v2_activation_height: 417_792,
             initial_difficulty: BigInt::from(1_199_990_374_400u64),
+            earlier_rule: None,
         }
     }
 }
@@ -88,6 +93,12 @@ fn predictive(hs: &[Header], p: &ChainParams) -> Option<BigInt> {
         if d >= BigInt::one() { d } else { p.initial_difficulty.clone() }
     };
     Some(normalize(&d))
+}
+
+/// The difficulty of the block after `hs.last()` by the rule this network uses. `hs` are the epoch-boundary
+/// headers the rule reads, oldest first.
+pub fn required_after(hs: &[Header], p: &ChainParams) -> Option<BigInt> {
+    if p.earlier_rule.is_some() { predictive(hs, p) } else { eip37_calculate(hs, p) }
 }
 
 /// The node's `eip37Calculate`: difficulty for the block after `hs.last()`.

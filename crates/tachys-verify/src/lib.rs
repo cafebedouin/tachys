@@ -1,6 +1,7 @@
 //! Strict single-proof checks for a light wallet, plus the rule for choosing among several peers' proofs.
 //! Runs every check and reports every failure; it never stops at the first.
 pub mod difficulty;
+pub mod evidence;
 pub mod peers;
 pub mod run;
 pub mod threshold;
@@ -146,13 +147,17 @@ pub struct Reach {
 /// Walks down from the suffix head. A prefix header is reached when a header already reached commits to it:
 /// as its parent, one height below; or as an interlink, at a lower height, when that header's interlinks are
 /// bound. The walk needs the prefix in order of height, which check C3 enforces.
-pub fn reach(proof: &NipopowProof) -> Reach {
-    use std::collections::HashMap;
+pub fn reach(proof: &NipopowProof) -> Reach { reach_with(proof, &std::collections::HashSet::new()) }
+
+/// `reach`, where `settled` names the headers whose interlinks, not bound by the proof's bytes, were found to be
+/// the ones their Extension section holds (`interlinks_from_extension`).
+pub fn reach_with(proof: &NipopowProof, settled: &std::collections::HashSet<BlockId>) -> Reach {
+    use std::collections::{HashMap, HashSet};
     type Links = HashMap<BlockId, u32>;
     // records what a reached header commits to, and says whether its interlinks were bound
-    fn follow(h: &ergo_nipopow::PoPowHeader, as_parent: &mut Links, as_interlink: &mut Links) -> Binding {
+    fn follow(h: &ergo_nipopow::PoPowHeader, settled: &HashSet<BlockId>, as_parent: &mut Links, as_interlink: &mut Links) -> Binding {
         as_parent.insert(h.header.parent_id, h.header.height);
-        let binding = interlinks_binding(h);
+        let binding = if settled.contains(&h.header.id) { Binding::Bound } else { interlinks_binding(h) };
         if binding == Binding::Bound {
             for l in &h.interlinks {
                 let from = as_interlink.entry(*l).or_insert(0);
@@ -163,7 +168,7 @@ pub fn reach(proof: &NipopowProof) -> Reach {
     }
     let (mut as_parent, mut as_interlink) = (Links::new(), Links::new());
     let mut out = Reach::default();
-    follow(&proof.suffix_head, &mut as_parent, &mut as_interlink);
+    follow(&proof.suffix_head, settled, &mut as_parent, &mut as_interlink);
     let mut prefix: Vec<&ergo_nipopow::PoPowHeader> = proof.prefix.iter().collect();
     prefix.sort_by_key(|h| std::cmp::Reverse(h.header.height));
     for h in prefix {
@@ -171,7 +176,7 @@ pub fn reach(proof: &NipopowProof) -> Reach {
         let by_interlink = as_interlink.get(&h.header.id).is_some_and(|from| *from > h.header.height);
         if by_parent || by_interlink {
             out.reached.push(h.header.height);
-            if follow(h, &mut as_parent, &mut as_interlink) == Binding::Unbound {
+            if follow(h, settled, &mut as_parent, &mut as_interlink) == Binding::Unbound {
                 out.unbound.push(h.header.height);
             }
         } else {

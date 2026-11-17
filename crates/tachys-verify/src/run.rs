@@ -20,6 +20,9 @@ pub enum Declared {
     /// First header of an epoch whose nine inputs reach back before the run: not recomputed, and within the
     /// bounds the rule puts on any one change (at most half as much again, at least half).
     WithinBounds,
+    /// First header of an epoch on a network that keeps the earlier rule, with inputs before the run: that rule
+    /// puts no limit on one change, so there is nothing to check it against.
+    Unchecked,
     /// The first header of the run: nothing to compare with.
     Start,
     /// Not what the rule gives.
@@ -34,6 +37,7 @@ pub struct RunReport {
     pub recomputed: usize,
     pub as_parent: usize,
     pub within_bounds: usize,
+    pub unchecked: usize,
     pub wrong: Vec<u32>,
     /// From this height on, every epoch's difficulty was recomputed from headers of the run (`None`: no epoch
     /// start was recomputed).
@@ -55,16 +59,23 @@ pub fn check_run(headers: &[Header], p: &ChainParams) -> Option<RunReport> {
     let (first, last) = (headers.first()?, headers.last()?);
     if headers.windows(2).any(|w| w[1].parent_id != w[0].id || w[1].height != w[0].height + 1) { return None; }
     let by_height: BTreeMap<u32, &Header> = headers.iter().map(|h| (h.height, h)).collect();
-    let mut r = RunReport { first_height: first.height, last_height: last.height, recomputed: 0, as_parent: 0, within_bounds: 0,
+    let mut r = RunReport { first_height: first.height, last_height: last.height, recomputed: 0, as_parent: 0, within_bounds: 0, unchecked: 0,
         wrong: vec![], exact_from: None, work: headers.iter().map(difficulty).sum(), work_exact: BigInt::from(0) };
     for w in headers.windows(2) {
         let (parent, h) = (&w[0], &w[1]);
-        let inputs = previous_heights_required(h.height, p.epoch_length, p.use_last_epochs);
-        let standing = if inputs.len() == 1 {
+        // there is no header at height 0: near the start of a chain the earlier rule reads the boundaries that exist
+        let inputs: Vec<u32> = previous_heights_required(h.height, p.epoch_length, p.use_last_epochs).into_iter().filter(|x| *x >= 1).collect();
+        let enough = if p.earlier_rule.is_some() { !inputs.is_empty() } else { inputs.len() == p.use_last_epochs as usize + 1 };
+        let at_v2 = parent.height == p.v2_activation_height || parent.height + 1 == p.v2_activation_height;
+        let standing = if let Some(d) = p.earlier_rule.as_ref().filter(|_| at_v2) {
+            if difficulty(h) == *d { Declared::Recomputed } else { Declared::Wrong }
+        } else if inputs.len() == 1 && inputs[0] + 1 == h.height && !(h.height - 1).is_multiple_of(p.epoch_length) {
             if h.n_bits == parent.n_bits { Declared::AsParent } else { Declared::Wrong }
-        } else if inputs.len() == p.use_last_epochs as usize + 1 && inputs.iter().all(|x| by_height.contains_key(x)) {
+        } else if enough && inputs.iter().all(|x| by_height.contains_key(x)) {
             let hs: Vec<Header> = inputs.iter().map(|x| (*by_height[x]).clone()).collect();
-            if eip37_calculate(&hs, p) == Some(difficulty(h)) { Declared::Recomputed } else { Declared::Wrong }
+            if required_after(&hs, p) == Some(difficulty(h)) { Declared::Recomputed } else { Declared::Wrong }
+        } else if p.earlier_rule.is_some() {
+            Declared::Unchecked
         } else {
             let (d, dp) = (difficulty(h), difficulty(parent));
             let lo = ergo_chain_types::autolykos_pow_scheme::decode_compact_bits(
@@ -75,6 +86,7 @@ pub fn check_run(headers: &[Header], p: &ChainParams) -> Option<RunReport> {
             Declared::Recomputed => { r.recomputed += 1; if r.exact_from.is_none() { r.exact_from = Some(h.height); } }
             Declared::AsParent => r.as_parent += 1,
             Declared::WithinBounds => { r.within_bounds += 1; r.exact_from = None; }
+            Declared::Unchecked => { r.unchecked += 1; r.exact_from = None; }
             Declared::Wrong => { r.wrong.push(h.height); r.exact_from = None; }
             Declared::Start => {}
         }
