@@ -68,7 +68,8 @@ async fn main() {
             }
         }
         "run" => {
-            // nipopow_probe <magic> run <host:port> <id of a header the node has> <how many headers>
+            // nipopow_probe <magic> run <host:port> <id of a header the node has> <how many headers> [mainnet [<file for "height id" lines>]]
+            // with `mainnet`, the run's difficulty is recomputed by the chain's rule and each header's work is checked
             use ergo_chain_types::Header;
             use sigma_ser::ScorexSerializable;
             let want: usize = a[4].parse().expect("count");
@@ -93,6 +94,20 @@ async fn main() {
             println!("run from={} headers={} connections={} requests={} bytes={} held_ms={} consecutive={} last_height={} last_id={}",
                 start, all.len(), connections, requests, bytes, ms, linked,
                 all.last().map_or(0, |h| h.height), all.last().map_or(String::new(), |h| String::from(h.id.0)));
+            if a.get(5).map(String::as_str) == Some("mainnet") {
+                let p = tachys_verify::difficulty::ChainParams::mainnet();
+                let invalid_pow = all.iter().filter(|h| !matches!(h.check_pow(), Ok(true))).count();
+                match tachys_verify::run::check_run(&all, &p) {
+                    Some(r) => println!("check first={} last={} recomputed={} as_parent={} within_bounds={} wrong={:?} exact_from={:?} exact_headers={} work={} work_exact={} invalid_pow={}",
+                        r.first_height, r.last_height, r.recomputed, r.as_parent, r.within_bounds, r.wrong, r.exact_from,
+                        r.exact_from.map_or(0, |f| r.last_height + 1 - f), r.work, r.work_exact, invalid_pow),
+                    None => println!("check: the headers are not one run"),
+                }
+                if let Some(path) = a.get(6) {
+                    let lines: Vec<String> = all.iter().map(|h| format!("{} {}", h.height, String::from(h.id.0))).collect();
+                    std::fs::write(path, lines.join("\n") + "\n").expect("write");
+                }
+            }
         }
         other => panic!("unknown command {other}"),
     }
