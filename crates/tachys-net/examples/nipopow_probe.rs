@@ -4,8 +4,8 @@
 //!   nipopow_probe <magic a,b,c,d> proof <host:port> <pad hex, or -> <file for the proof bytes> [m]
 //!   nipopow_probe <magic a,b,c,d> section <host:port> <type id> <section id hex>
 //!   nipopow_probe <magic a,b,c,d> extension <host:port> <header id hex> <extension root hex>
-//!   nipopow_probe <magic a,b,c,d> gather <host:port> <mainnet|rig> <directory>
-//!   nipopow_probe <magic a,b,c,d> judge <mainnet|rig> <k> <directory>...
+//!   nipopow_probe <magic a,b,c,d> gather <host:port> <mainnet|rig> <directory> [m]
+//!   nipopow_probe <magic a,b,c,d> judge <mainnet|rig> <k, or auto> <directory>...
 use std::time::Duration;
 
 fn hex(s: &str) -> Vec<u8> { (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex")).collect() }
@@ -149,14 +149,28 @@ async fn main() {
             use std::collections::HashSet;
             let (addr, p, dir) = (&a[2], params(&a[3]), std::path::Path::new(&a[4]));
             std::fs::create_dir_all(dir).expect("directory");
-            let pp = match tachys_net::fetch_proof_padded(addr, 6, 10, &[1], wait).await {
-                Ok(pp) => pp,
-                Err(e) => { println!("gather proof error: {e}"); return }
+            // With a sample as the last argument, that sample is asked for first: a node which offers it answers with
+            // a proof for its current tip. A node which does not gives no answer, and the node's own sample is asked
+            // for, with the pad that asks for the current tip.
+            let sample: Option<i32> = a.get(5).map(|x| x.parse().expect("m"));
+            let larger = match sample {
+                Some(m) if m != 6 => match tachys_net::fetch_proof_padded(addr, m, 10, &[], wait).await {
+                    Ok(pp) => Some(pp),
+                    Err(e) => { println!("gather sample m={m} not served ({e}); asking for the node's own"); None }
+                },
+                _ => None,
+            };
+            let pp = match larger {
+                Some(pp) => pp,
+                None => match tachys_net::fetch_proof_padded(addr, 6, 10, &[1], wait).await {
+                    Ok(pp) => pp,
+                    Err(e) => { println!("gather proof error: {e}"); return }
+                },
             };
             let Ok(proof) = ergo_nipopow::NipopowProof::scorex_parse_bytes(&pp.proof) else { println!("gather proof does not parse"); return };
             std::fs::write(dir.join("proof.bin"), &pp.proof).expect("write");
             let tip = tip_of(&proof);
-            println!("gather proof bytes={} tip={} headers={} agent={} version={} ms={}", pp.proof.len(), tip,
+            println!("gather proof m={} bytes={} tip={} headers={} agent={} version={} ms={}", proof.m, pp.proof.len(), tip,
                 proof.prefix.len() + 1 + proof.suffix_tail.len(), pp.agent, pp.version, pp.total_ms);
             // settle what the bytes leave unbound, as long as settling one brings another onto the path
             let with_links: Vec<&ergo_nipopow::PoPowHeader> = proof.prefix.iter().chain(std::iter::once(&proof.suffix_head)).collect();
@@ -222,11 +236,14 @@ async fn main() {
             // nipopow_probe <magic> judge <mainnet|rig> <k> <directory>...
             // What each peer's saved answers tie to its tip, and which of them showed the most work.
             use tachys_verify::evidence::{assemble, pick, Basis};
-            let (p, k): (_, usize) = (params(&a[2]), a[3].parse().expect("k"));
+            // k may be `auto`: the smallest sample among the proofs, since a count needs k headers from each side
+            let p = params(&a[2]);
+            let loaded: Vec<_> = a[4..].iter().map(|d| load(std::path::Path::new(d))).collect();
+            let k: usize = if a[3] == "auto" { loaded.iter().map(|l| l.0.m as usize).min().unwrap_or(6) } else { a[3].parse().expect("k") };
+            println!("judge k={k} samples={:?}", loaded.iter().map(|l| l.0.m).collect::<Vec<_>>());
             let (mut names, mut all) = (vec![], vec![]);
-            for d in &a[4..] {
+            for (d, (proof, settled, run)) in a[4..].iter().zip(loaded) {
                 let name = std::path::Path::new(d).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-                let (proof, settled, run) = load(std::path::Path::new(d));
                 match assemble(&proof, &settled, &run, &p) {
                     Ok(e) => {
                         let run = e.run.as_ref().map_or("none".to_string(), |r| format!("{}..{} recomputed={} as_parent={} within_bounds={} unchecked={} exact_from={:?}",
