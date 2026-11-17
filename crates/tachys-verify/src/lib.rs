@@ -70,16 +70,94 @@ pub fn pack_interlinks(links: &[BlockId]) -> Vec<([u8; 2], Vec<u8>)> {
     out
 }
 
+/// Merkle root of an extension that holds these interlinks and nothing else.
+pub fn interlinks_root(links: &[BlockId]) -> ergo_chain_types::Digest32 {
+    let leaves: Vec<ergo_merkle_tree::MerkleNode> = pack_interlinks(links).into_iter()
+        .map(|(k, v)| std::iter::once(2u8).chain(k).chain(v).collect::<Vec<u8>>())
+        .map(ergo_merkle_tree::MerkleNode::from_bytes).collect();
+    ergo_merkle_tree::MerkleTree::new(leaves).root_hash()
+}
+
 /// The node's `PoPowHeader.checkInterlinksProof`. In today's wire format the root is rebuilt from
 /// the asserted interlinks, so this does not bind them to the header.
 pub fn interlinks_proof_ok(h: &ergo_nipopow::PoPowHeader) -> bool {
     if h.interlinks.is_empty() && h.interlinks_proof.get_indices().is_empty() && h.interlinks_proof.get_proofs().is_empty() {
         return true;
     }
-    let leaves: Vec<ergo_merkle_tree::MerkleNode> = pack_interlinks(&h.interlinks).into_iter()
-        .map(|(k, v)| std::iter::once(2u8).chain(k).chain(v).collect::<Vec<u8>>())
-        .map(ergo_merkle_tree::MerkleNode::from_bytes).collect();
-    h.interlinks_proof.valid(ergo_merkle_tree::MerkleTree::new(leaves).root_hash().as_ref())
+    h.interlinks_proof.valid(interlinks_root(&h.interlinks).as_ref())
+}
+
+/// Whether the interlinks a proof shows for a header are the ones the header commits to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Binding {
+    /// The genesis header, which has no interlinks.
+    Genesis,
+    /// The root of the interlinks shown is the header's `extension_root`: the block's extension holds exactly
+    /// these interlinks and nothing else. No proof is needed to see it.
+    Bound,
+    /// The root differs: the extension holds other fields as well, or other interlinks. The bytes of the
+    /// proof do not say which; the block's Extension section does.
+    Unbound,
+}
+
+pub fn interlinks_binding(h: &ergo_nipopow::PoPowHeader) -> Binding {
+    if h.header.height == 1 && h.interlinks.is_empty() {
+        Binding::Genesis
+    } else if !h.interlinks.is_empty() && interlinks_root(&h.interlinks) == h.header.extension_root {
+        Binding::Bound
+    } else {
+        Binding::Unbound
+    }
+}
+
+/// What a proof ties to its suffix head by links that headers commit to.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Reach {
+    /// Heights of the prefix headers reached from the suffix head.
+    pub reached: Vec<u32>,
+    /// Reached headers whose interlinks are not bound: their parent id is followed, their interlinks are not.
+    pub unbound: Vec<u32>,
+    /// Prefix headers that no reached header points at. Nothing shows the tip descends from them.
+    pub unreached: Vec<u32>,
+}
+
+/// Walks down from the suffix head. A prefix header is reached when a header already reached commits to it:
+/// as its parent, one height below; or as an interlink, at a lower height, when that header's interlinks are
+/// bound. The walk needs the prefix in order of height, which check C3 enforces.
+pub fn reach(proof: &NipopowProof) -> Reach {
+    use std::collections::HashMap;
+    type Links = HashMap<BlockId, u32>;
+    // records what a reached header commits to, and says whether its interlinks were bound
+    fn follow(h: &ergo_nipopow::PoPowHeader, as_parent: &mut Links, as_interlink: &mut Links) -> Binding {
+        as_parent.insert(h.header.parent_id, h.header.height);
+        let binding = interlinks_binding(h);
+        if binding == Binding::Bound {
+            for l in &h.interlinks {
+                let from = as_interlink.entry(*l).or_insert(0);
+                *from = (*from).max(h.header.height);
+            }
+        }
+        binding
+    }
+    let (mut as_parent, mut as_interlink) = (Links::new(), Links::new());
+    let mut out = Reach::default();
+    follow(&proof.suffix_head, &mut as_parent, &mut as_interlink);
+    let mut prefix: Vec<&ergo_nipopow::PoPowHeader> = proof.prefix.iter().collect();
+    prefix.sort_by_key(|h| std::cmp::Reverse(h.header.height));
+    for h in prefix {
+        let by_parent = as_parent.get(&h.header.id) == Some(&(h.header.height + 1));
+        let by_interlink = as_interlink.get(&h.header.id).is_some_and(|from| *from > h.header.height);
+        if by_parent || by_interlink {
+            out.reached.push(h.header.height);
+            if follow(h, &mut as_parent, &mut as_interlink) == Binding::Unbound {
+                out.unbound.push(h.header.height);
+            }
+        } else {
+            out.unreached.push(h.header.height);
+        }
+    }
+    out.reached.sort(); out.unbound.sort(); out.unreached.sort();
+    out
 }
 
 fn epoch_of(height: u32, p: &ChainParams) -> u32 { (height.max(1) - 1) / p.epoch_length }
