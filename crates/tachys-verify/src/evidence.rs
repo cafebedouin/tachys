@@ -48,11 +48,16 @@ pub enum Refused {
     RunNotTied,
     /// At this height the run and the proof name different headers.
     RunLeavesProof(u32),
+    /// The proof's first header is not the genesis header this client was given.
+    OtherGenesis,
+    /// The proof does not tie its tip to its own first header: it shows no chain from the start.
+    NotTiedFromStart,
 }
 
 /// `settled` names the proof headers whose interlinks an Extension section showed to be the committed ones.
-/// `run` is empty when none was fetched.
-pub fn assemble(proof: &NipopowProof, settled: &HashSet<BlockId>, run: &[Header], p: &ChainParams) -> Result<Evidence, Refused> {
+/// `run` is empty when none was fetched. `genesis` is the id of the network's first header, when the caller
+/// has it: every result accepted with it shares that header, so any two of them can be compared.
+pub fn assemble(proof: &NipopowProof, settled: &HashSet<BlockId>, run: &[Header], p: &ChainParams, genesis: Option<&BlockId>) -> Result<Evidence, Refused> {
     let suffix: Vec<&Header> = std::iter::once(&proof.suffix_head.header).chain(proof.suffix_tail.iter()).collect();
     let all: Vec<&Header> = proof.prefix.iter().map(|x| &x.header).chain(suffix.iter().copied()).collect();
     if let Some(w) = all.windows(2).find(|w| w[0].height >= w[1].height) { return Err(Refused::ProofShape(w[1].height)) }
@@ -67,6 +72,8 @@ pub fn assemble(proof: &NipopowProof, settled: &HashSet<BlockId>, run: &[Header]
     let reached: HashSet<u32> = reach.reached.iter().copied().collect();
     let mut tied: BTreeMap<u32, Header> = proof.prefix.iter().map(|x| &x.header).filter(|h| reached.contains(&h.height))
         .chain(suffix.iter().copied()).map(|h| (h.height, h.clone())).collect();
+    if genesis.is_some_and(|g| all[0].id != *g) { return Err(Refused::OtherGenesis) }
+    if !tied.get(&all[0].height).is_some_and(|h| h.id == all[0].id) { return Err(Refused::NotTiedFromStart) }
     let mut report = None;
     if let Some(first) = run.first() {
         let r = check_run(run, p).ok_or(Refused::NotOneRun)?;
@@ -156,10 +163,11 @@ pub fn compare(a: &Evidence, b: &Evidence, k: usize) -> Comparison {
     }
 }
 
-/// The index of a result that no other beats, and how each of the others compares with it (`Greater`: the
-/// picked one is better). `None` for an empty list; when some result shares no header with the candidate
-/// (results that cannot be compared are not ranked by the order they came in); and when some result beats the
-/// candidate after all, which can happen because each pair is compared above its own common header.
+/// The index of the result that is ahead of every other, and how each of the others compares with it
+/// (`Greater`: the picked one is better). A result is picked only if, against each of the others, it was
+/// weighed and found better, or is on the same chain and not behind. `None` otherwise: for an empty list, and
+/// whenever some pair could not be decided. A result that nothing could be weighed against is not picked for
+/// having come first.
 pub fn pick(all: &[Evidence], k: usize) -> Option<(usize, Vec<Comparison>)> {
     if all.is_empty() { return None }
     let mut best = 0;
@@ -167,6 +175,7 @@ pub fn pick(all: &[Evidence], k: usize) -> Option<(usize, Vec<Comparison>)> {
         if compare(&all[i], &all[best], k).better == Ordering::Greater { best = i }
     }
     let against: Vec<Comparison> = all.iter().map(|e| compare(&all[best], e, k)).collect();
-    if against.iter().any(|c| c.basis == Basis::NoCommonHeader || c.better == Ordering::Less) { return None }
+    let ahead = |c: &Comparison| c.better == Ordering::Greater || (c.basis == Basis::SameChain && c.better == Ordering::Equal);
+    if against.iter().enumerate().any(|(i, c)| i != best && !ahead(c)) { return None }
     Some((best, against))
 }

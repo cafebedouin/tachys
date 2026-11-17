@@ -34,7 +34,7 @@ fn side(shared: std::ops::RangeInclusive<u32>, own: std::ops::RangeInclusive<u32
 #[test]
 fn a_proof_alone_ties_what_its_suffix_head_reaches() {
     let p = real();
-    let e = assemble(&p, &none(), &[], &ChainParams::mainnet()).expect("a served proof");
+    let e = assemble(&p, &none(), &[], &ChainParams::mainnet(), None).expect("a served proof");
     let reach = tachys_verify::reach(&p);
     assert_eq!(e.tip.height, 1_915_819);
     assert_eq!(e.tied.len(), reach.reached.len() + p.k as usize);
@@ -44,29 +44,39 @@ fn a_proof_alone_ties_what_its_suffix_head_reaches() {
     assert!(e.unbound_on_path.is_empty());
     assert_eq!(e.work_unchecked, e.tied.keys().filter(|h| **h < 417_792).count());
     assert!(e.run.is_none());
+    // the genesis header given must be the proof's first header
+    let genesis = p.prefix[0].header.id;
+    assert!(assemble(&p, &none(), &[], &ChainParams::mainnet(), Some(&genesis)).is_ok());
+    assert_eq!(assemble(&p, &none(), &[], &ChainParams::mainnet(), Some(&p.suffix_head.header.id)).unwrap_err(), Refused::OtherGenesis);
+    // a proof whose suffix head names nothing in the prefix does not tie its tip to its first header
+    let mut cut = p.clone();
+    let below = cut.prefix.len() - 1;
+    cut.suffix_head = ergo_nipopow::PoPowHeader { header: cut.suffix_head.header.clone(), interlinks: cut.prefix[1].interlinks.clone(), interlinks_proof: cut.prefix[1].interlinks_proof.clone() };
+    cut.prefix.truncate(below);
+    assert_eq!(assemble(&cut, &none(), &[], &unchecked_work(), None).unwrap_err(), Refused::NotTiedFromStart);
 }
 
 #[test]
 fn a_run_must_start_at_a_header_the_proof_ties_and_stay_on_its_chain() {
     let p = real();
     let params = unchecked_work();
-    let tied = assemble(&p, &none(), &[], &params).unwrap().tied;
+    let tied = assemble(&p, &none(), &[], &params, None).unwrap().tied;
     // a real header of the proof whose parent the proof does not hold
     let lone = p.prefix.iter().map(|x| &x.header).find(|h| h.height > 1000 && tied.contains_key(&h.height) && !tied.contains_key(&(h.height - 1))).unwrap().clone();
-    assert_eq!(assemble(&p, &none(), std::slice::from_ref(&lone), &params).unwrap_err(), Refused::RunNotTied);
+    assert_eq!(assemble(&p, &none(), std::slice::from_ref(&lone), &params, None).unwrap_err(), Refused::RunNotTied);
     // a run from the suffix head's own child onward is tied
     let tail = p.suffix_tail.clone();
-    let ok = assemble(&p, &none(), &tail, &params).expect("the proof's own suffix as a run");
+    let ok = assemble(&p, &none(), &tail, &params, None).expect("the proof's own suffix as a run");
     assert_eq!(ok.run.as_ref().map(|r| (r.first_height, r.last_height)), Some((tail[0].height, 1_915_819)));
     // the same run with another header at one height: consecutive, tied at its start, and not the proof's chain
     let mut other = tail.clone();
     other[4].id = made(other[4].height, 9, other[4].n_bits).id;
     other[5].parent_id = other[4].id;
-    assert_eq!(assemble(&p, &none(), &other, &params).unwrap_err(), Refused::RunLeavesProof(other[4].height));
+    assert_eq!(assemble(&p, &none(), &other, &params, None).unwrap_err(), Refused::RunLeavesProof(other[4].height));
     // headers that do not follow one another are not a run
-    assert_eq!(assemble(&p, &none(), &[tail[0].clone(), tail[2].clone()], &params).unwrap_err(), Refused::NotOneRun);
+    assert_eq!(assemble(&p, &none(), &[tail[0].clone(), tail[2].clone()], &params, None).unwrap_err(), Refused::NotOneRun);
     // work is checked where it can be: the altered header fails under the real parameters
-    assert_eq!(assemble(&p, &none(), &other, &ChainParams::mainnet()).unwrap_err(), Refused::InvalidWork(other[5].height));
+    assert_eq!(assemble(&p, &none(), &other, &ChainParams::mainnet(), None).unwrap_err(), Refused::InvalidWork(other[5].height));
 }
 
 #[test]
@@ -125,6 +135,11 @@ fn without_a_run_on_both_sides_headers_are_counted_and_too_few_decide_nothing() 
     shifted.tied = shifted.tied.into_iter().map(|(h, x)| (h, made(h, 7, x.n_bits))).collect();
     assert_eq!(compare(&apart, &shifted, 6).basis, Basis::NoCommonHeader);
     assert!(pick(&[apart, shifted], 6).is_none(), "results with no common header are not ranked by their order");
+    // a result that could not be weighed against the others is not picked for having come first
+    let (few_first, many) = (side(90..=100, 101..=103, 2, 0x0500_0100, false), side(90..=100, 101..=110, 4, 0x0500_0001, false));
+    assert_eq!(compare(&few_first, &many, 6).basis, Basis::Undecided);
+    assert!(pick(&[few_first.clone(), many.clone()], 6).is_none());
+    assert!(pick(&[many, few_first], 6).is_none());
 }
 
 /// `TACHYS_HEADERS_JSON=<stretch> TACHYS_PROOF_JSON=<a proof whose tip the stretch reaches> cargo test --test evidence -- --ignored --nocapture`
@@ -139,11 +154,11 @@ fn on_real_proofs_and_a_stretch_of_mainnet() {
     headers.sort_by_key(|h| h.height);
     let newer: NipopowProof = serde_json::from_str(&std::fs::read_to_string(std::env::var("TACHYS_PROOF_JSON").expect("TACHYS_PROOF_JSON")).unwrap()).unwrap();
     let tip = newer.suffix_tail.last().unwrap().height;
-    let alone = assemble(&newer, &none(), &[], &p).expect("the newer proof");
+    let alone = assemble(&newer, &none(), &[], &p, None).expect("the newer proof");
     // the run a wallet would fetch: from the highest tied header far enough below the tip, to the tip
     let from = *alone.tied.keys().filter(|h| **h + tachys_verify::run::run_length_for(tip, &p) <= tip).next_back().expect("a tied header below the run");
     let run: Vec<Header> = headers.iter().filter(|h| h.height > from && h.height <= tip).cloned().collect();
-    let with_run = assemble(&newer, &none(), &run, &p).expect("the newer proof with its run");
+    let with_run = assemble(&newer, &none(), &run, &p, None).expect("the newer proof with its run");
     let r = with_run.run.clone().unwrap();
     println!("newer proof: tip {tip}, tied alone {}, run from {} ({} headers), exact from {:?}, tied with the run {}",
         alone.tied.len(), from + 1, run.len(), r.exact_from, with_run.tied.len());
@@ -152,7 +167,7 @@ fn on_real_proofs_and_a_stretch_of_mainnet() {
     println!("the proof alone against the proof with its run: {:?} {:?}", c.basis, c.better);
     assert_eq!((c.basis, c.better), (Basis::SameChain, Ordering::Equal));
 
-    let older = assemble(&real(), &none(), &[], &p).expect("the older proof");
+    let older = assemble(&real(), &none(), &[], &p, None).expect("the older proof");
     for (name, e) in [("alone", &alone), ("with its run", &with_run)] {
         let c = compare(e, &older, 6);
         println!("newer {name} against the proof at {}: common {:?} {:?} ours {} theirs {} {:?}", older.tip.height, c.common, c.basis, c.ours, c.theirs, c.better);

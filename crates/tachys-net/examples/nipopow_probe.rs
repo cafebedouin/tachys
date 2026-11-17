@@ -5,7 +5,7 @@
 //!   nipopow_probe <magic a,b,c,d> section <host:port> <type id> <section id hex>
 //!   nipopow_probe <magic a,b,c,d> extension <host:port> <header id hex> <extension root hex>
 //!   nipopow_probe <magic a,b,c,d> gather <host:port> <mainnet|rig> <directory> [m]
-//!   nipopow_probe <magic a,b,c,d> judge <mainnet|rig> <k, or auto> <directory>...
+//!   nipopow_probe <magic a,b,c,d> judge <mainnet|rig> <k, or auto> [genesis:<id>] <directory>...
 use std::time::Duration;
 
 fn hex(s: &str) -> Vec<u8> { (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex")).collect() }
@@ -242,14 +242,17 @@ async fn main() {
             // What each peer's saved answers tie to its tip, and which of them showed the most work.
             use tachys_verify::evidence::{assemble, pick, Basis};
             // k may be `auto`: the smallest sample among the proofs, since a count needs k headers from each side
+            // a directory argument of the form genesis:<id> gives the network's first header: results not from it are refused
             let p = params(&a[2]);
-            let loaded: Vec<_> = a[4..].iter().map(|d| load(std::path::Path::new(d))).collect();
+            let genesis: Option<ergo_chain_types::BlockId> = a[4..].iter().find_map(|d| d.strip_prefix("genesis:")).map(|g| ergo_chain_types::BlockId(ergo_chain_types::Digest32::from(id32(g))));
+            let dirs: Vec<&String> = a[4..].iter().filter(|d| !d.starts_with("genesis:")).collect();
+            let loaded: Vec<_> = dirs.iter().map(|d| load(std::path::Path::new(d.as_str()))).collect();
             let k: usize = if a[3] == "auto" { loaded.iter().map(|l| l.0.m as usize).min().unwrap_or(6) } else { a[3].parse().expect("k") };
             println!("judge k={k} samples={:?}", loaded.iter().map(|l| l.0.m).collect::<Vec<_>>());
             let (mut names, mut all) = (vec![], vec![]);
-            for (d, (proof, settled, run)) in a[4..].iter().zip(loaded) {
-                let name = std::path::Path::new(d).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-                match assemble(&proof, &settled, &run, &p) {
+            for (d, (proof, settled, run)) in dirs.iter().zip(loaded) {
+                let name = std::path::Path::new(d.as_str()).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                match assemble(&proof, &settled, &run, &p, genesis.as_ref()) {
                     Ok(e) => {
                         let run = e.run.as_ref().map_or("none".to_string(), |r| format!("{}..{} recomputed={} as_parent={} within_bounds={} unchecked={} exact_from={:?}",
                             r.first_height, r.last_height, r.recomputed, r.as_parent, r.within_bounds, r.unchecked, r.exact_from));
