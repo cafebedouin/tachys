@@ -2,6 +2,7 @@
 //! Runs every check and reports every failure; it never stops at the first.
 pub mod difficulty;
 pub mod peers;
+pub mod run;
 pub mod threshold;
 pub mod tip;
 
