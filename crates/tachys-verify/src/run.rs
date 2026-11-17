@@ -3,8 +3,8 @@
 //! A proof's sampled headers say what difficulty they were mined at; nothing in the proof says that was the
 //! difficulty the chain's rule gave. In a run of consecutive headers it can be recomputed: inside an epoch a
 //! header has its parent's difficulty, and the first header of an epoch has the one the rule derives from
-//! the nine epoch-boundary headers before it. With 1,152 headers (nine epochs of 128) the run always holds
-//! all nine for the newest epoch, whatever the tip's place in it.
+//! the nine epoch-boundary headers before it. How far back the run must reach depends on the tip's place in
+//! its epoch (`run_length_for`): on mainnet 1,026 headers when the tip opens an epoch, 1,153 when it closes one.
 use crate::difficulty::*;
 use ergo_chain_types::Header;
 use num_bigint::BigInt;
@@ -41,6 +41,13 @@ pub struct RunReport {
     /// Sum of the declared difficulty of the whole run, and of the part from `exact_from`.
     pub work: BigInt,
     pub work_exact: BigInt,
+}
+
+/// How many headers, ending at a tip of this height, a run must hold for the tip's own epoch to be recomputed
+/// from the run: back to the ninth epoch boundary below the epoch's first header.
+pub fn run_length_for(tip_height: u32, p: &ChainParams) -> u32 {
+    let epoch_start = ((tip_height - 1) / p.epoch_length) * p.epoch_length + 1;
+    tip_height - epoch_start + 2 + p.use_last_epochs * p.epoch_length
 }
 
 /// `None` when the headers are not consecutive by height and parent id.

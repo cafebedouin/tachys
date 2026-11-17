@@ -27,31 +27,30 @@ fn on_a_stretch_of_mainnet() {
     assert_eq!(whole.within_bounds, starts.len() - recomputable);
     assert_eq!(whole.recomputed + whole.as_parent + whole.within_bounds, headers.len() - 1);
 
-    // the run a wallet would fetch: the last 1,152 headers, for every place the tip can have in its epoch
-    let mut exact_runs = 0;
+    // the run a wallet would fetch, for every place the tip can have in its epoch
+    let mut one_short = vec![];
     for cut in 0..128 {
         let end = headers.len() - cut;
-        let run = &headers[end - 1152..end];
-        let r = check_run(run, &p).unwrap();
-        assert!(r.wrong.is_empty());
-        if cut == 0 || cut == 127 { show(&format!("last 1,152 ending {} blocks before the tip", cut), &r); }
-        // the newest epoch start is recomputed, so the tip's own difficulty rests on headers of the run
-        let newest_start = run.iter().map(|h| h.height).filter(|h| (h - 1) % 128 == 0).max().unwrap();
-        assert_eq!(r.exact_from, Some(newest_start), "cut {cut}");
-        exact_runs += 1;
+        let tip = headers[end - 1].height;
+        let newest_start = ((tip - 1) / 128) * 128 + 1;
+        // exactly as many headers as the rule needs for this tip, and one fewer
+        let need = run_length_for(tip, &p) as usize;
+        assert_eq!(need as u32, tip - newest_start + 1026);
+        let exact = check_run(&headers[end - need..end], &p).unwrap();
+        assert!(exact.wrong.is_empty());
+        assert_eq!(exact.exact_from, Some(newest_start), "cut {cut}: the newest epoch is recomputed from the run");
+        assert_eq!(check_run(&headers[end - (need - 1)..end], &p).unwrap().exact_from, None, "cut {cut}: one header fewer is not enough");
+        // nine epochs of 128, the figure in our notes, and one more
+        if check_run(&headers[end - 1152..end], &p).unwrap().exact_from != Some(newest_start) { one_short.push(tip); }
+        assert_eq!(check_run(&headers[end - 1153..end], &p).unwrap().exact_from, Some(newest_start), "cut {cut}: 1,153 always suffice");
+        if cut == 0 { show("the run for the tip", &exact); println!("  it needs {need} headers"); }
     }
-    println!("runs of 1,152 checked: {exact_runs}, each with its newest epoch recomputed from its own headers");
-
-    // a run one header short of nine epochs can miss it
-    let short: Vec<usize> = (0..128).filter(|cut| {
-        let end = headers.len() - cut;
-        check_run(&headers[end - 1151..end], &p).unwrap().exact_from.is_none()
-    }).collect();
-    println!("runs of 1,151 that recompute no epoch: {} of 128", short.len());
-    assert!(!short.is_empty());
+    println!("of 128 tips, 1,152 headers are one short at: {:?} (a tip that closes an epoch); 1,153 suffice at all 128", one_short);
+    assert_eq!(one_short.len(), 1);
+    assert_eq!(one_short[0] % 128, 0);
 
     // a difficulty the rule does not give is seen: change one epoch's declared difficulty by its smallest step
-    let mut bent = headers[headers.len() - 1152..].to_vec();
+    let mut bent = headers[headers.len() - 1153..].to_vec();
     let start = bent.iter().position(|h| (h.height - 1) % 128 == 0 && h.height == check_run(&bent, &p).unwrap().exact_from.unwrap()).unwrap();
     let n_bits = bent[start].n_bits + 1;
     for h in bent[start..].iter_mut() { h.n_bits = n_bits; }
