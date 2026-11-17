@@ -24,11 +24,19 @@ async fn main() {
                 Ok(p) => {
                     std::fs::write(&a[4], &p.proof).expect("write");
                     use sigma_ser::ScorexSerializable;
-                    let (tip, headers) = match ergo_nipopow::NipopowProof::scorex_parse_bytes(&p.proof) {
-                        Ok(parsed) => (parsed.suffix_tail.last().map_or(parsed.suffix_head.header.height, |h| h.height), parsed.prefix.len() + 1 + parsed.suffix_tail.len()),
-                        Err(_) => (0, 0),
+                    // the tip, and which headers' interlinks are the committed ones by the bytes alone; a header whose
+                    // extension holds other fields does not bind this way (on the rig: every 128th, a voting-epoch start)
+                    let (tip, headers, bound, unbound): (u32, usize, usize, Vec<u32>) = match ergo_nipopow::NipopowProof::scorex_parse_bytes(&p.proof) {
+                        Ok(parsed) => {
+                            let hs: Vec<&ergo_nipopow::PoPowHeader> = parsed.prefix.iter().chain(std::iter::once(&parsed.suffix_head)).collect();
+                            (parsed.suffix_tail.last().map_or(parsed.suffix_head.header.height, |h| h.height), hs.len() + parsed.suffix_tail.len(),
+                             hs.iter().filter(|h| tachys_verify::interlinks_binding(h) == tachys_verify::Binding::Bound).count(),
+                             hs.iter().filter(|h| tachys_verify::interlinks_binding(h) == tachys_verify::Binding::Unbound).map(|h| h.header.height).collect())
+                        }
+                        Err(_) => (0, 0, 0, vec![]),
                     };
-                    println!("proof pad={} bytes={} tip={} headers={} agent={} version={} ms={}", to_hex(&pad), p.proof.len(), tip, headers, p.agent, p.version, p.total_ms);
+                    println!("proof pad={} bytes={} tip={} headers={} bound={} unbound={:?} unbound_elsewhere={} agent={} version={} ms={}",
+                        to_hex(&pad), p.proof.len(), tip, headers, bound, unbound, unbound.iter().filter(|h| *h % 128 != 0).count(), p.agent, p.version, p.total_ms);
                 }
                 Err(e) => println!("proof pad={} none: {e}", to_hex(&pad)),
             }
