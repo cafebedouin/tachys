@@ -28,7 +28,7 @@ fn side(shared: std::ops::RangeInclusive<u32>, own: std::ops::RangeInclusive<u32
     let tip = tied.values().next_back().unwrap().clone();
     let run = with_run.then(|| RunReport { first_height: *shared.start(), last_height: tip.height, recomputed: 0, as_parent: 0, within_bounds: 0,
         unchecked: 0, wrong: vec![], exact_from: Some(*shared.start()), work: 0.into(), work_exact: 0.into() });
-    Evidence { tied, tip, run, unbound_on_path: vec![], unreached: vec![], work_unchecked: 0 }
+    Evidence { tied, tip, run, unbound_on_path: vec![], unreached: vec![], work_unchecked: 0, work_checked_from: 0 }
 }
 
 #[test]
@@ -76,7 +76,14 @@ fn a_tip_on_the_other_chain_is_behind_it() {
     assert_eq!((c.common, c.basis.clone(), c.better), (Some(103), Basis::SameChain, Ordering::Less));
     assert_eq!(compare(&long, &short, 6).better, Ordering::Greater);
     assert_eq!(compare(&long, &long, 6).better, Ordering::Equal);
-    assert_eq!(pick(&[short.clone(), long.clone(), short], 6).map(|x| x.0), Some(1));
+    assert_eq!(pick(&[short.clone(), long.clone(), short.clone()], 6).map(|x| x.0), Some(1));
+    // headers that go on from another result's tip count only from a run: a proof alone shows them at a
+    // difficulty nobody checked
+    let mut no_run = long.clone();
+    no_run.run = None;
+    let c = compare(&no_run, &short, 6);
+    assert_eq!((c.basis, c.better), (Basis::Undecided, Ordering::Equal));
+    assert_eq!(compare(&short, &no_run, 6).better, Ordering::Equal);
 }
 
 #[test]
@@ -96,14 +103,28 @@ fn without_a_run_on_both_sides_headers_are_counted_and_too_few_decide_nothing() 
     let (a, b) = (side(90..=100, 101..=105, 1, 0x0500_0001, true), side(90..=100, 101..=103, 2, 0x0500_0100, false));
     let c = compare(&a, &b, 6);
     assert_eq!((c.common, c.basis, c.better), (Some(100), Basis::Undecided, Ordering::Equal));
-    // with a lower bar the five outweigh the three whatever difficulty they state: the count reads hits alone
+    // with a lower bar both sides have a count, which reads hits alone, whatever difficulty they state
     let c = compare(&a, &b, 1);
     assert_eq!(c.basis, Basis::Count);
+    // a side with enough headers does not win against a side with too few to be weighed, nor lose to it
+    let many = side(90..=100, 101..=110, 4, 0x0500_0001, false);
+    for (x, y) in [(&many, &b), (&b, &many)] {
+        let c = compare(x, y, 6);
+        assert_eq!((c.basis, c.better), (Basis::Undecided, Ordering::Equal));
+    }
+    // headers whose work was not checked are not weighed: from height 104 on, the ten have seven, the three none
+    let (mut many_late, mut few_late) = (many.clone(), b.clone());
+    many_late.work_checked_from = 104; few_late.work_checked_from = 104;
+    assert_eq!(compare(&many_late, &few_late, 6).basis, Basis::Undecided);
+    let mut both_runs = (side(90..=100, 101..=110, 4, 0x0500_0001, true), side(90..=100, 101..=103, 2, 0x0500_0100, true));
+    both_runs.0.work_checked_from = 104; both_runs.1.work_checked_from = 104;
+    assert_ne!(compare(&both_runs.0, &both_runs.1, 6).basis, Basis::Run { exact: true }, "a sum must not include headers whose work was not checked");
     // two results that share no header are not compared
     let apart = side(10..=20, 21..=25, 3, 0x0500_0001, true);
     let mut shifted = apart.clone();
     shifted.tied = shifted.tied.into_iter().map(|(h, x)| (h, made(h, 7, x.n_bits))).collect();
     assert_eq!(compare(&apart, &shifted, 6).basis, Basis::NoCommonHeader);
+    assert!(pick(&[apart, shifted], 6).is_none(), "results with no common header are not ranked by their order");
 }
 
 /// `TACHYS_HEADERS_JSON=<stretch> TACHYS_PROOF_JSON=<a proof whose tip the stretch reaches> cargo test --test evidence -- --ignored --nocapture`
