@@ -4,11 +4,37 @@
 //!   nipopow_probe <magic a,b,c,d> proof <host:port> <pad hex, or -> <file for the proof bytes>
 //!   nipopow_probe <magic a,b,c,d> section <host:port> <type id> <section id hex>
 //!   nipopow_probe <magic a,b,c,d> extension <host:port> <header id hex> <extension root hex>
+//!   nipopow_probe <magic a,b,c,d> gather <host:port> <mainnet|rig> <directory>
+//!   nipopow_probe <magic a,b,c,d> judge <mainnet|rig> <k> <directory>...
 use std::time::Duration;
 
 fn hex(s: &str) -> Vec<u8> { (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex")).collect() }
 fn to_hex(b: &[u8]) -> String { b.iter().map(|x| format!("{x:02x}")).collect() }
 fn id32(s: &str) -> [u8; 32] { hex(s).try_into().expect("32 bytes") }
+
+/// The parameters of a network: `mainnet`, or `rig` for the peeryard rig's devnet (difficulty epochs of 16
+/// blocks under the rule from before EIP-37, version 2 from height 128 at difficulty 32, a 2 s block interval).
+fn params(name: &str) -> tachys_verify::difficulty::ChainParams {
+    use tachys_verify::difficulty::ChainParams;
+    match name {
+        "mainnet" => ChainParams::mainnet(),
+        "rig" => ChainParams { epoch_length: 16, use_last_epochs: 8, block_interval_ms: 2000, v2_activation_height: 128,
+            initial_difficulty: 1.into(), earlier_rule: Some(32.into()) },
+        other => panic!("unknown network {other}"),
+    }
+}
+
+fn tip_of(p: &ergo_nipopow::NipopowProof) -> u32 { p.suffix_tail.last().map_or(p.suffix_head.header.height, |h| h.height) }
+
+/// What `gather` saved for one peer: its proof, the ids of the headers an Extension section settled, its run.
+fn load(dir: &std::path::Path) -> (ergo_nipopow::NipopowProof, std::collections::HashSet<ergo_chain_types::BlockId>, Vec<ergo_chain_types::Header>) {
+    use sigma_ser::ScorexSerializable;
+    let proof = ergo_nipopow::NipopowProof::scorex_parse_bytes(&std::fs::read(dir.join("proof.bin")).expect("proof.bin")).expect("proof parses");
+    let lines = |f: &str| -> Vec<String> { std::fs::read_to_string(dir.join(f)).unwrap_or_default().lines().filter(|l| !l.is_empty()).map(String::from).collect() };
+    let settled = lines("settled.txt").iter().map(|l| ergo_chain_types::BlockId(ergo_chain_types::Digest32::from(id32(l)))).collect();
+    let run = lines("run.hex").iter().map(|l| ergo_chain_types::Header::scorex_parse_bytes(&hex(l)).expect("header")).collect();
+    (proof, settled, run)
+}
 
 #[tokio::main]
 async fn main() {
@@ -108,6 +134,116 @@ async fn main() {
                 if let Some(path) = a.get(6) {
                     let lines: Vec<String> = all.iter().map(|h| format!("{} {}", h.height, String::from(h.id.0))).collect();
                     std::fs::write(path, lines.join("\n") + "\n").expect("write");
+                }
+            }
+        }
+        "gather" => {
+            // nipopow_probe <magic> gather <host:port> <mainnet|rig> <directory>
+            // One peer's answers, saved for `judge`: its proof, asked for the current tip; the Extension of each header
+            // on the path that the proof's bytes leave unbound; and the run from a tied header to the peer's tip.
+            use ergo_chain_types::{BlockId, Header};
+            use sigma_ser::ScorexSerializable;
+            use std::collections::HashSet;
+            let (addr, p, dir) = (&a[2], params(&a[3]), std::path::Path::new(&a[4]));
+            std::fs::create_dir_all(dir).expect("directory");
+            let pp = match tachys_net::fetch_proof_padded(addr, 6, 10, &[1], wait).await {
+                Ok(pp) => pp,
+                Err(e) => { println!("gather proof error: {e}"); return }
+            };
+            let Ok(proof) = ergo_nipopow::NipopowProof::scorex_parse_bytes(&pp.proof) else { println!("gather proof does not parse"); return };
+            std::fs::write(dir.join("proof.bin"), &pp.proof).expect("write");
+            let tip = tip_of(&proof);
+            println!("gather proof bytes={} tip={} headers={} agent={} version={} ms={}", pp.proof.len(), tip,
+                proof.prefix.len() + 1 + proof.suffix_tail.len(), pp.agent, pp.version, pp.total_ms);
+            // settle what the bytes leave unbound, as long as settling one brings another onto the path
+            let with_links: Vec<&ergo_nipopow::PoPowHeader> = proof.prefix.iter().chain(std::iter::once(&proof.suffix_head)).collect();
+            let (mut settled, mut asked): (HashSet<BlockId>, HashSet<BlockId>) = (HashSet::new(), HashSet::new());
+            let (mut ext_bytes, mut ext_requests) = (0usize, 0usize);
+            for _ in 0..4 {
+                let r = tachys_verify::reach_with(&proof, &settled);
+                let todo: Vec<&ergo_nipopow::PoPowHeader> = with_links.iter().copied()
+                    .filter(|h| r.unbound.contains(&h.header.height)
+                        || (h.header.id == proof.suffix_head.header.id && tachys_verify::interlinks_binding(h) == tachys_verify::Binding::Unbound))
+                    .filter(|h| !settled.contains(&h.header.id) && asked.insert(h.header.id)).collect();
+                if todo.is_empty() { break }
+                let ids: Vec<[u8; 32]> = todo.iter().map(|h| ergo_ser::modifier_id::compute_section_id(tachys_net::EXTENSION_TYPE,
+                    &<[u8; 32]>::from(h.header.id.0), &<[u8; 32]>::from(h.header.extension_root))).collect();
+                let got = match tachys_net::fetch_sections(addr, tachys_net::EXTENSION_TYPE, &ids, wait).await {
+                    Ok((got, cost)) => { ext_requests += cost.requests_sent; ext_bytes += cost.bytes_received; got }
+                    Err(e) => { println!("gather extension error: {e}"); vec![] }
+                };
+                for (h, id) in todo.iter().zip(ids.iter()) {
+                    let Some(bytes) = got.iter().find(|g| g.0 == *id).map(|g| &g.1) else { continue };
+                    let Ok(ext) = ergo_ser::extension::read_extension(&mut ergo_primitives::reader::VlqReader::new(bytes)) else { continue };
+                    let fields: Vec<(Vec<u8>, Vec<u8>)> = ext.fields.iter().map(|f| (f.key.to_vec(), f.value.clone())).collect();
+                    if tachys_verify::interlinks_from_extension(&h.header.extension_root, &fields).as_ref() == Some(&h.interlinks) {
+                        settled.insert(h.header.id);
+                    }
+                }
+            }
+            let r = tachys_verify::reach_with(&proof, &settled);
+            let settled_heights: Vec<u32> = with_links.iter().filter(|h| settled.contains(&h.header.id)).map(|h| h.header.height).collect();
+            std::fs::write(dir.join("settled.txt"), settled.iter().map(|id| String::from(id.0)).collect::<Vec<_>>().join("\n")).expect("write");
+            println!("gather binding reached={} asked={} settled={:?} unbound_on_path={:?} unreached={:?} requests={} bytes={}",
+                r.reached.len(), asked.len(), settled_heights, r.unbound, r.unreached, ext_requests, ext_bytes);
+            // the run: from the highest tied header far enough below the tip for the tip's own epoch to be recomputed
+            // (the lowest tied header when the chain is shorter than that), to the peer's tip
+            let reached: HashSet<u32> = r.reached.iter().copied().collect();
+            let tied: Vec<&Header> = with_links.iter().map(|h| &h.header).filter(|h| reached.contains(&h.height) || h.id == proof.suffix_head.header.id).collect();
+            let need = tachys_verify::run::run_length_for(tip, &p);
+            let from: &Header = tied.iter().copied().filter(|h| h.height + need <= tip).max_by_key(|h| h.height)
+                .unwrap_or_else(|| tied.iter().copied().min_by_key(|h| h.height).expect("a proof has headers"));
+            // the peer's tip may be well past its proof's (a stored proof is old): go on for up to 2,000 headers more
+            let want = (tip - from.height) as usize + 2000;
+            let (mut all, mut connections, mut requests, mut bytes, mut ms): (Vec<Vec<u8>>, usize, usize, usize, u128) = (vec![], 0, 0, 0, 0);
+            let (mut next, mut next_id) = (from.scorex_serialize_bytes().expect("header bytes"), <[u8; 32]>::from(from.id.0));
+            while all.len() < want && connections < want / 300 + 2 {
+                let (got, cost) = match tachys_net::fetch_run_forward(addr, next.clone(), next_id, want - all.len(), wait,
+                    |b| Header::scorex_parse_bytes(b).ok().map(|h| h.parent_id.0.into())).await {
+                    Ok(x) => x,
+                    Err(e) => { println!("gather run error: {e}"); break }
+                };
+                connections += 1; requests += cost.requests_sent; bytes += cost.bytes_received; ms += cost.held_ms;
+                let Some(last) = got.last() else { break };
+                next = last.1.clone();
+                next_id = last.0;
+                all.extend(got.iter().map(|g| g.1.clone()));
+                if got.len() < 300 { break }
+            }
+            std::fs::write(dir.join("run.hex"), all.iter().map(|b| to_hex(b)).collect::<Vec<_>>().join("\n")).expect("write");
+            let last = all.last().and_then(|b| Header::scorex_parse_bytes(b).ok());
+            println!("gather run from={} headers={} connections={} requests={} bytes={} held_ms={} last_height={} last_id={}", from.height, all.len(),
+                connections, requests, bytes, ms, last.as_ref().map_or(0, |h| h.height), last.as_ref().map_or(String::new(), |h| String::from(h.id.0)));
+        }
+        "judge" => {
+            // nipopow_probe <magic> judge <mainnet|rig> <k> <directory>...
+            // What each peer's saved answers tie to its tip, and which of them showed the most work.
+            use tachys_verify::evidence::{assemble, pick, Basis};
+            let (p, k): (_, usize) = (params(&a[2]), a[3].parse().expect("k"));
+            let (mut names, mut all) = (vec![], vec![]);
+            for d in &a[4..] {
+                let name = std::path::Path::new(d).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                let (proof, settled, run) = load(std::path::Path::new(d));
+                match assemble(&proof, &settled, &run, &p) {
+                    Ok(e) => {
+                        let run = e.run.as_ref().map_or("none".to_string(), |r| format!("{}..{} recomputed={} as_parent={} within_bounds={} unchecked={} exact_from={:?}",
+                            r.first_height, r.last_height, r.recomputed, r.as_parent, r.within_bounds, r.unchecked, r.exact_from));
+                        println!("judge {name} evidence proof_tip={} tip={} id={} tied={} unreached={:?} unbound_on_path={:?} work_unchecked={} run={run}",
+                            tip_of(&proof), e.tip.height, String::from(e.tip.id.0), e.tied.len(), e.unreached, e.unbound_on_path, e.work_unchecked);
+                        names.push(name); all.push(e);
+                    }
+                    Err(why) => println!("judge {name} refused {why:?}"),
+                }
+            }
+            match pick(&all, k) {
+                None => println!("judge pick none"),
+                Some((best, against)) => {
+                    for (i, c) in against.iter().enumerate().filter(|(i, _)| *i != best) {
+                        let basis = match &c.basis { Basis::SameChain => "same-chain".to_string(), Basis::Run { exact } => format!("run(exact={exact})"),
+                            Basis::Count => "count".to_string(), Basis::Undecided => "undecided".to_string(), Basis::NoCommonHeader => "no-common-header".to_string() };
+                        println!("judge compare {} {} common={:?} basis={basis} picked={} other={} picked_is={:?}", names[best], names[i], c.common, c.ours, c.theirs, c.better);
+                    }
+                    println!("judge pick {} tip={} id={}", names[best], all[best].tip.height, String::from(all[best].tip.id.0));
                 }
             }
         }
