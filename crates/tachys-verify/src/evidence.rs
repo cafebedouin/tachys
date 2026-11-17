@@ -157,8 +157,9 @@ pub fn compare(a: &Evidence, b: &Evidence, k: usize) -> Comparison {
 }
 
 /// The index of a result that no other beats, and how each of the others compares with it (`Greater`: the
-/// picked one is better). `None` for an empty list, and when some result shares no header with the candidate:
-/// results that cannot be compared are not ranked by the order they came in.
+/// picked one is better). `None` for an empty list; when some result shares no header with the candidate
+/// (results that cannot be compared are not ranked by the order they came in); and when some result beats the
+/// candidate after all, which can happen because each pair is compared above its own common header.
 pub fn pick(all: &[Evidence], k: usize) -> Option<(usize, Vec<Comparison>)> {
     if all.is_empty() { return None }
     let mut best = 0;
@@ -166,6 +167,6 @@ pub fn pick(all: &[Evidence], k: usize) -> Option<(usize, Vec<Comparison>)> {
         if compare(&all[i], &all[best], k).better == Ordering::Greater { best = i }
     }
     let against: Vec<Comparison> = all.iter().map(|e| compare(&all[best], e, k)).collect();
-    if against.iter().any(|c| c.basis == Basis::NoCommonHeader) { return None }
+    if against.iter().any(|c| c.basis == Basis::NoCommonHeader || c.better == Ordering::Less) { return None }
     Some((best, against))
 }

@@ -160,6 +160,7 @@ async fn main() {
                 },
                 _ => None,
             };
+            let larger_served = larger.is_some();
             let pp = match larger {
                 Some(pp) => pp,
                 None => match tachys_net::fetch_proof_padded(addr, 6, 10, &[1], wait).await {
@@ -168,6 +169,10 @@ async fn main() {
                 },
             };
             let Ok(proof) = ergo_nipopow::NipopowProof::scorex_parse_bytes(&pp.proof) else { println!("gather proof does not parse"); return };
+            // a proof with another sample or suffix length than was asked for is not what was asked for: the sample
+            // is the bar the comparison uses, and it is the wallet's to set, not the peer's
+            let asked_m = if larger_served { sample.unwrap_or(6) as u32 } else { 6 };
+            if proof.m != asked_m || proof.k != 10 { println!("gather proof refused: m={} k={} where m={asked_m} k=10 was asked for", proof.m, proof.k); return }
             std::fs::write(dir.join("proof.bin"), &pp.proof).expect("write");
             let tip = tip_of(&proof);
             println!("gather proof m={} bytes={} tip={} headers={} agent={} version={} ms={}", proof.m, pp.proof.len(), tip,
