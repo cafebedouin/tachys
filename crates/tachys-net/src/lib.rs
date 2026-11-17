@@ -264,39 +264,49 @@ pub async fn fetch_chain_back(addr: &str, start_id: [u8; 32], max: usize, wait: 
 
 /// From a header the peer has, fetch the headers that follow it on the peer's chain, at most `max`: ONE sync
 /// message offering `from` (a genuine header behind the tip: docs/good-neighbour.md), the ids the peer
-/// announces in answer, and those headers by id in ONE request. Returns them in the order announced. A
-/// longer run is fetched by calling again, on a new connection, with the last header received.
-pub async fn fetch_run_forward(addr: &str, from: Vec<u8>, max: usize, wait: Duration) -> Result<(Vec<([u8; 32], Vec<u8>)>, Cost), String> {
+/// announces in answer, and those headers by id. Returns them in the order announced. A longer run is fetched
+/// by calling again, on a new connection, with the last header received.
+///
+/// A peer also announces each new block to everyone connected, in the same kind of message as its answer. So
+/// an announcement is taken for the answer only once its first header is seen to be the child of the header
+/// offered (`parent_of` reads a header's parent id); at most three announcements are asked for.
+pub async fn fetch_run_forward(addr: &str, from: Vec<u8>, from_id: [u8; 32], max: usize, wait: Duration,
+    parent_of: impl Fn(&[u8]) -> Option<[u8; 32]>) -> Result<(Vec<([u8; 32], Vec<u8>)>, Cost), String> {
     let (_hs, mut conn, t0, connect_ms) = open(addr).await?;
     let payload = serialize_sync_info(&SyncInfo::V2 { headers: vec![from] }).map_err(|e| format!("sync encode: {e}"))?;
     conn.send(CODE_SYNC_INFO, payload).await.map_err(|e| format!("sync send: {e}"))?;
     let deadline = Instant::now() + wait;
-    let (mut bytes, mut requests) = (0usize, 1usize);
-    let mut ids: Vec<[u8; 32]> = vec![];
+    let (mut bytes, mut requests, mut asked) = (0usize, 1usize, 0usize);
+    let mut batches: Vec<Vec<[u8; 32]>> = vec![];
     let mut got: std::collections::HashMap<[u8; 32], Vec<u8>> = std::collections::HashMap::new();
-    while ids.is_empty() || got.len() < ids.len() {
-        let Some(left) = deadline.checked_duration_since(Instant::now()) else { break };
+    let mut out = vec![];
+    'read: while let Some(left) = deadline.checked_duration_since(Instant::now()) {
         let Ok(read) = tokio::time::timeout(left, conn.read_message()).await else { break };
         let frame = read.map_err(|e| format!("read: {e}"))?;
         bytes += frame.payload.len() + 13;
-        if frame.code == CODE_INV && ids.is_empty() {
+        if frame.code == CODE_INV && asked < 3 {
             if let Ok(inv) = deserialize_inv(&frame.payload) {
                 if inv.type_id == HEADER_TYPE && !inv.ids.is_empty() {
-                    ids = inv.ids.into_iter().take(max).collect();
+                    let ids: Vec<[u8; 32]> = inv.ids.into_iter().take(max).collect();
                     let request = serialize_inv(&InvData { type_id: HEADER_TYPE, ids: ids.clone() }).map_err(|e| format!("request encode: {e}"))?;
                     conn.send(CODE_REQUEST_MODIFIER, request).await.map_err(|e| format!("request send: {e}"))?;
-                    requests += 1;
+                    requests += 1; asked += 1;
+                    batches.push(ids);
                 }
             }
         } else if frame.code == CODE_MODIFIER {
             if let Ok(data) = deserialize_modifiers(&frame.payload) {
-                if data.type_id == HEADER_TYPE {
-                    for (id, b) in data.modifiers { if ids.contains(&id) { got.insert(id, b); } }
+                if data.type_id == HEADER_TYPE { got.extend(data.modifiers); }
+            }
+            for ids in &batches {
+                // the answer to our sync message: complete, and its first header is the child of the one offered
+                if ids.iter().all(|id| got.contains_key(id)) && parent_of(&got[&ids[0]]) == Some(from_id) {
+                    out = ids.iter().map(|id| (*id, got[id].clone())).collect();
+                    break 'read;
                 }
             }
         }
     }
-    let out = ids.iter().filter_map(|id| got.remove(id).map(|b| (*id, b))).collect();
     Ok((out, Cost { connect_ms, held_ms: t0.elapsed().as_millis(), requests_sent: requests, bytes_received: bytes }))
 }
 

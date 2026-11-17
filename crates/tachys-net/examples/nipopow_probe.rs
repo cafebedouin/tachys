@@ -63,12 +63,16 @@ async fn main() {
             let mut from = first.into_iter().next().expect("the node has the starting header").1;
             let start = Header::scorex_parse_bytes(&from).expect("header").height;
             let (mut all, mut connections, mut requests, mut bytes, mut ms): (Vec<Header>, usize, usize, usize, u128) = (vec![], 0, 0, 0, 0);
-            while all.len() < want {
-                let (got, cost) = tachys_net::fetch_run_forward(&a[2], from.clone(), want - all.len(), wait).await.expect("run");
+            let mut from_id = id32(&a[3]);
+            // never more connections than a run of this length can need, whatever the peer does
+            while all.len() < want && connections < want / 300 + 2 {
+                let (got, cost) = tachys_net::fetch_run_forward(&a[2], from.clone(), from_id, want - all.len(), wait,
+                    |b| Header::scorex_parse_bytes(b).ok().map(|h| h.parent_id.0.into())).await.expect("run");
                 connections += 1; requests += cost.requests_sent; bytes += cost.bytes_received; ms += cost.held_ms;
                 println!("run connection {connections}: headers={} requests={} bytes={} held_ms={}", got.len(), cost.requests_sent, cost.bytes_received, cost.held_ms);
                 let Some(last) = got.last() else { break };
                 from = last.1.clone();
+                from_id = last.0;
                 all.extend(got.iter().map(|g| Header::scorex_parse_bytes(&g.1).expect("header")));
             }
             let linked = all.windows(2).all(|w| w[1].parent_id == w[0].id && w[1].height == w[0].height + 1)
