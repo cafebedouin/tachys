@@ -2028,6 +2028,7 @@ name = "tachys-net"
 version = "0.0.1"
 dependencies = [
  "ergo-chain-types",
+ "ergo-nipopow",
  "ergo-p2p",
  "ergo-primitives",
  "ergo-ser",

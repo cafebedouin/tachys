@@ -23,7 +23,12 @@ async fn main() {
             match tachys_net::fetch_proof_padded(&a[2], 6, 10, &pad, wait).await {
                 Ok(p) => {
                     std::fs::write(&a[4], &p.proof).expect("write");
-                    println!("proof pad={} bytes={} agent={} version={} ms={}", to_hex(&pad), p.proof.len(), p.agent, p.version, p.total_ms);
+                    use sigma_ser::ScorexSerializable;
+                    let (tip, headers) = match ergo_nipopow::NipopowProof::scorex_parse_bytes(&p.proof) {
+                        Ok(parsed) => (parsed.suffix_tail.last().map_or(parsed.suffix_head.header.height, |h| h.height), parsed.prefix.len() + 1 + parsed.suffix_tail.len()),
+                        Err(_) => (0, 0),
+                    };
+                    println!("proof pad={} bytes={} tip={} headers={} agent={} version={} ms={}", to_hex(&pad), p.proof.len(), tip, headers, p.agent, p.version, p.total_ms);
                 }
                 Err(e) => println!("proof pad={} none: {e}", to_hex(&pad)),
             }
