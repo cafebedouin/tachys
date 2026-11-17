@@ -1,7 +1,7 @@
 //! A probe for a private rig network: what a node does with a proof request that carries a pad, and with a
 //! request for a block's Extension section by id. Not for public nodes (docs/good-neighbour.md).
 //!
-//!   nipopow_probe <magic a,b,c,d> proof <host:port> <pad hex, or -> <file for the proof bytes>
+//!   nipopow_probe <magic a,b,c,d> proof <host:port> <pad hex, or -> <file for the proof bytes> [m]
 //!   nipopow_probe <magic a,b,c,d> section <host:port> <type id> <section id hex>
 //!   nipopow_probe <magic a,b,c,d> extension <host:port> <header id hex> <extension root hex>
 //!   nipopow_probe <magic a,b,c,d> gather <host:port> <mainnet|rig> <directory>
@@ -46,12 +46,15 @@ async fn main() {
     match a[1].as_str() {
         "proof" => {
             let pad = if a[3] == "-" { vec![] } else { hex(&a[3]) };
-            match tachys_net::fetch_proof_padded(&a[2], 6, 10, &pad, wait).await {
+            // an optional last argument asks for another sample than 6 headers a level
+            let m: i32 = a.get(5).map_or(6, |x| x.parse().expect("m"));
+            match tachys_net::fetch_proof_padded(&a[2], m, 10, &pad, wait).await {
                 Ok(p) => {
                     std::fs::write(&a[4], &p.proof).expect("write");
                     use sigma_ser::ScorexSerializable;
                     // the tip, and which headers' interlinks are the committed ones by the bytes alone; a header whose
                     // extension holds other fields does not bind this way (on the rig: every 128th, a voting-epoch start)
+                    let got_m = ergo_nipopow::NipopowProof::scorex_parse_bytes(&p.proof).map_or(0, |x| x.m);
                     let (tip, headers, bound, unbound): (u32, usize, usize, Vec<u32>) = match ergo_nipopow::NipopowProof::scorex_parse_bytes(&p.proof) {
                         Ok(parsed) => {
                             let hs: Vec<&ergo_nipopow::PoPowHeader> = parsed.prefix.iter().chain(std::iter::once(&parsed.suffix_head)).collect();
@@ -61,7 +64,7 @@ async fn main() {
                         }
                         Err(_) => (0, 0, 0, vec![]),
                     };
-                    println!("proof pad={} bytes={} tip={} headers={} bound={} unbound={:?} unbound_elsewhere={} agent={} version={} ms={}",
+                    println!("proof pad={} asked_m={m} m={got_m} bytes={} tip={} headers={} bound={} unbound={:?} unbound_elsewhere={} agent={} version={} ms={}",
                         to_hex(&pad), p.proof.len(), tip, headers, bound, unbound, unbound.iter().filter(|h| *h % 128 != 0).count(), p.agent, p.version, p.total_ms);
                 }
                 Err(e) => println!("proof pad={} none: {e}", to_hex(&pad)),
