@@ -55,6 +55,27 @@ fn what_the_proof_ties_to_its_suffix_head() {
     assert!(r.unreached.contains(&1_914_880));
 }
 
+#[test]
+fn the_extension_section_binds_the_header_the_bytes_leave_unbound() {
+    let p = real();
+    let h = p.prefix.iter().find(|h| h.header.height == 1_914_880).unwrap();
+    assert_eq!(interlinks_binding(h), Binding::Unbound);
+    let v: serde_json::Value = serde_json::from_str(include_str!("../../../vectors/extension-1914880.json")).unwrap();
+    assert_eq!(v["header_id"].as_str().unwrap(), String::from(h.header.id.0));
+    let hex = |s: &str| (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect::<Vec<u8>>();
+    let fields: Vec<(Vec<u8>, Vec<u8>)> = v["fields"].as_array().unwrap().iter()
+        .map(|f| (hex(f[0].as_str().unwrap()), hex(f[1].as_str().unwrap()))).collect();
+    // the section's fields hash to the root in the header, and its interlinks are the ones the proof shows
+    assert_eq!(interlinks_from_extension(&h.header.extension_root, &fields), Some(h.interlinks.clone()));
+    // parameters and validation settings sit beside the interlinks, which is why the bytes alone did not bind
+    assert!(fields.iter().any(|(k, _)| k[0] == 0x00) && fields.iter().any(|(k, _)| k[0] == 0x01));
+    // a section with one byte changed, or a section offered for another header, binds nothing
+    let mut altered = fields.clone();
+    altered[0].1[0] ^= 1;
+    assert_eq!(interlinks_from_extension(&h.header.extension_root, &altered), None);
+    assert_eq!(interlinks_from_extension(&p.suffix_head.header.extension_root, &fields), None);
+}
+
 /// Other proofs, as JSON from a node's REST API: `TACHYS_PROOF_JSON=a.json:b.json cargo test -- --ignored`.
 #[test]
 #[ignore]

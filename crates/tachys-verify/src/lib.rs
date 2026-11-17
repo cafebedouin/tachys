@@ -111,6 +111,26 @@ pub fn interlinks_binding(h: &ergo_nipopow::PoPowHeader) -> Binding {
     }
 }
 
+/// The interlinks an Extension section holds, when its fields are the ones a header commits to: `fields` are
+/// the section's keys and values in order, `extension_root` is the header's. `None` when the fields do not
+/// hash to that root, or an interlinks field is malformed. This settles a header that `interlinks_binding`
+/// leaves `Unbound`.
+pub fn interlinks_from_extension(extension_root: &ergo_chain_types::Digest32, fields: &[(Vec<u8>, Vec<u8>)]) -> Option<Vec<BlockId>> {
+    let leaves: Vec<ergo_merkle_tree::MerkleNode> = fields.iter()
+        .map(|(k, v)| std::iter::once(k.len() as u8).chain(k.iter().copied()).chain(v.iter().copied()).collect::<Vec<u8>>())
+        .map(ergo_merkle_tree::MerkleNode::from_bytes).collect();
+    if fields.is_empty() || ergo_merkle_tree::MerkleTree::new(leaves).root_hash() != *extension_root {
+        return None;
+    }
+    let mut links = vec![];
+    for (k, v) in fields.iter().filter(|(k, _)| k.first() == Some(&ergo_nipopow::INTERLINK_VECTOR_PREFIX)) {
+        let id: [u8; 32] = v.get(1..)?.try_into().ok()?;
+        if k.len() != 2 { return None; }
+        links.extend(std::iter::repeat_n(BlockId(ergo_chain_types::Digest32::from(id)), v[0] as usize));
+    }
+    Some(links)
+}
+
 /// What a proof ties to its suffix head by links that headers commit to.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Reach {

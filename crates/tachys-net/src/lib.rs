@@ -85,6 +85,13 @@ async fn handshake(stream: &mut TcpStream) -> Result<(Handshake, Vec<u8>), Strin
 
 /// Connect, shake hands, ask for a proof with parameters `m`, `k`, and wait up to `wait` for it.
 pub async fn fetch_proof(addr: &str, m: i32, k: i32, wait: Duration) -> Result<PeerProof, String> {
+    fetch_proof_padded(addr, m, k, &[], wait).await
+}
+
+/// As `fetch_proof`, with `pad` carried in the request's padding. The request ends with a length and that
+/// many bytes "to allow adding new data in future"; a node that knows nothing of them reads and skips them.
+pub async fn fetch_proof_padded(addr: &str, m: i32, k: i32, pad: &[u8], wait: Duration) -> Result<PeerProof, String> {
+    if pad.len() > 127 { return Err("a pad of more than 127 bytes is not supported here".into()) }
     let t0 = Instant::now();
     let mut stream = tokio::time::timeout(Duration::from_secs(10), TcpStream::connect(addr)).await
         .map_err(|_| "connect timeout".to_string())?.map_err(|e| format!("connect: {e}"))?;
@@ -95,8 +102,13 @@ pub async fn fetch_proof(addr: &str, m: i32, k: i32, wait: Duration) -> Result<P
     let v = hs.peer_spec.version;
     let rest_url = hs.peer_spec.features.iter().find_map(|f| match f { PeerFeature::RestApiUrl { url } => Some(url.clone()), _ => None });
     let mut conn = Connection::new_with_buffer(stream, magic(), leftover);
-    conn.send(CODE_GET_NIPOPOW_PROOF, serialize_get_nipopow_proof(&NipopowProofData { m, k, header_id_opt: None }))
-        .await.map_err(|e| format!("request send: {e}"))?;
+    let mut request = serialize_get_nipopow_proof(&NipopowProofData { m, k, header_id_opt: None });
+    if !pad.is_empty() {
+        request.pop();                  // the serializer's own pad length, zero
+        request.push(pad.len() as u8);  // a length under 128 is one byte in this encoding
+        request.extend_from_slice(pad);
+    }
+    conn.send(CODE_GET_NIPOPOW_PROOF, request).await.map_err(|e| format!("request send: {e}"))?;
     let deadline = Instant::now() + wait;
     let (mut other_frames, mut other_bytes) = (0, 0);
     loop {
@@ -248,6 +260,31 @@ pub async fn fetch_chain_back(addr: &str, start_id: [u8; 32], max: usize, wait: 
         match nxt { Some(id) => want = id, None => break }
     }
     Ok((out, Cost { connect_ms, held_ms: t0.elapsed().as_millis(), requests_sent: requests, bytes_received: bytes }))
+}
+
+pub const EXTENSION_TYPE: u8 = 108;
+
+/// Ask one peer for block sections of one type by id, in a single request. A peer leaves out what it does not
+/// hold, so the answer may be shorter than the request, and is empty when `wait` runs out with nothing sent.
+pub async fn fetch_sections(addr: &str, type_id: u8, ids: &[[u8; 32]], wait: Duration) -> Result<(Vec<([u8; 32], Vec<u8>)>, Cost), String> {
+    let (_hs, mut conn, t0, connect_ms) = open(addr).await?;
+    let payload = serialize_inv(&InvData { type_id, ids: ids.to_vec() }).map_err(|e| format!("request encode: {e}"))?;
+    conn.send(CODE_REQUEST_MODIFIER, payload).await.map_err(|e| format!("request send: {e}"))?;
+    let deadline = Instant::now() + wait;
+    let (mut out, mut bytes): (Vec<([u8; 32], Vec<u8>)>, usize) = (vec![], 0);
+    while out.len() < ids.len() {
+        let Some(left) = deadline.checked_duration_since(Instant::now()) else { break };
+        let Ok(got) = tokio::time::timeout(left, conn.read_message()).await else { break };
+        let frame = got.map_err(|e| format!("read: {e}"))?;
+        bytes += frame.payload.len() + 13;
+        if frame.code == CODE_MODIFIER {
+            let data = deserialize_modifiers(&frame.payload).map_err(|e| format!("modifiers parse: {e}"))?;
+            if data.type_id == type_id {
+                out.extend(data.modifiers.into_iter().filter(|(id, _)| ids.contains(id)));
+            }
+        }
+    }
+    Ok((out, Cost { connect_ms, held_ms: t0.elapsed().as_millis(), requests_sent: 1, bytes_received: bytes }))
 }
 
 // ---- box proofs over the peer protocol (prototype message; needs a node carrying our patch) ----

@@ -13,3 +13,6 @@ tokio = { version = "1", features = ["net", "io-util", "time", "sync"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["net", "io-util", "time", "sync", "macros", "rt-multi-thread"] }
+tachys-verify = { path = "../tachys-verify" }
+ergo-ser = { path = "../../vendor/arkadianet-codec/ergo-ser" }
+ergo-chain-types = { git = "https://github.com/ergoplatform/sigma-rust", rev = "688511dff3e3436dfdd6bd368e3eeef6f67d59e9" }
