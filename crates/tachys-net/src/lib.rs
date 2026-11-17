@@ -312,14 +312,17 @@ pub async fn fetch_run_forward(addr: &str, from: Vec<u8>, from_id: [u8; 32], max
 
 pub const EXTENSION_TYPE: u8 = 108;
 
+/// A block section as a peer serves it: its id and its bytes.
+pub type Section = ([u8; 32], Vec<u8>);
+
 /// Ask one peer for block sections of one type by id, in a single request. A peer leaves out what it does not
 /// hold, so the answer may be shorter than the request, and is empty when `wait` runs out with nothing sent.
-pub async fn fetch_sections(addr: &str, type_id: u8, ids: &[[u8; 32]], wait: Duration) -> Result<(Vec<([u8; 32], Vec<u8>)>, Cost), String> {
+pub async fn fetch_sections(addr: &str, type_id: u8, ids: &[[u8; 32]], wait: Duration) -> Result<(Vec<Section>, Cost), String> {
     let (_hs, mut conn, t0, connect_ms) = open(addr).await?;
     let payload = serialize_inv(&InvData { type_id, ids: ids.to_vec() }).map_err(|e| format!("request encode: {e}"))?;
     conn.send(CODE_REQUEST_MODIFIER, payload).await.map_err(|e| format!("request send: {e}"))?;
     let deadline = Instant::now() + wait;
-    let (mut out, mut bytes): (Vec<([u8; 32], Vec<u8>)>, usize) = (vec![], 0);
+    let (mut out, mut bytes): (Vec<Section>, usize) = (vec![], 0);
     while out.len() < ids.len() {
         let Some(left) = deadline.checked_duration_since(Instant::now()) else { break };
         let Ok(got) = tokio::time::timeout(left, conn.read_message()).await else { break };

@@ -156,7 +156,7 @@ fn on_real_proofs_and_a_stretch_of_mainnet() {
     let tip = newer.suffix_tail.last().unwrap().height;
     let alone = assemble(&newer, &none(), &[], &p, None).expect("the newer proof");
     // the run a wallet would fetch: from the highest tied header far enough below the tip, to the tip
-    let from = *alone.tied.keys().filter(|h| **h + tachys_verify::run::run_length_for(tip, &p) <= tip).next_back().expect("a tied header below the run");
+    let from = *alone.tied.keys().rfind(|h| **h + tachys_verify::run::run_length_for(tip, &p) <= tip).expect("a tied header below the run");
     let run: Vec<Header> = headers.iter().filter(|h| h.height > from && h.height <= tip).cloned().collect();
     let with_run = assemble(&newer, &none(), &run, &p, None).expect("the newer proof with its run");
     let r = with_run.run.clone().unwrap();
