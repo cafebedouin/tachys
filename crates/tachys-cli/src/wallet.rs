@@ -1065,7 +1065,11 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
             }
         }
     }
-    done.truncate(20);
+    // The last twenty settled payments are kept, and beyond them any payment given up as "not included" whose coins this
+    // wallet still tracks: the next payment spends one of those coins (`cmd_send`), which is what keeps that payment and
+    // the next from both confirming. Once its coins are spent or gone it ages out like the rest, so this stays bounded.
+    let mut n = 0;
+    done.retain(|d| { n += 1; n <= 20 || (d.result == "not included" && d.inputs.iter().any(|i| w.boxes.contains_key(i))) });
     // boxes of a payment still waiting are not this wallet's to count or spend again; boxes of a failed one are
     let held: Vec<String> = still.iter().flat_map(|p| p.inputs.iter().cloned()).collect();
     let quiet: Vec<String> = still.iter().flat_map(|p| p.inputs.iter().chain(std::iter::once(&p.watch))).chain(done.iter().flat_map(|d| d.inputs.iter().chain(std::iter::once(&d.watch)))).cloned().chain(made).collect();

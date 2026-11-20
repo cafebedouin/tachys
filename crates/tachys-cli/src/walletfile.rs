@@ -66,7 +66,8 @@ pub(crate) struct WalletFile {
     /// Payments sent and not yet settled.
     #[serde(default, deserialize_with = "or_default", skip_serializing_if = "Vec::is_empty")]
     pub(crate) pending: Vec<Pending>,
-    /// The last twenty payments that were settled, newest first.
+    /// The last twenty payments that were settled, newest first, and any older one given up as "not included" whose
+    /// coins the wallet still tracks.
     #[serde(default, deserialize_with = "or_default", skip_serializing_if = "Vec::is_empty")]
     pub(crate) done: Vec<Done>,
     /// Anything else in the file is kept as it was found.

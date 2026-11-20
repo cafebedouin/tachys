@@ -229,8 +229,10 @@ fn w2_a_given_up_payment_still_pins_its_coins_after_more_than_twenty_later_payme
     let paid: Vec<(String, Vec<u8>)> = (0..2).map(|i| ergo_box(ERG, &payee, 1, 10 + i)).collect();
     let state: Vec<Vec<u8>> = vec![small.clone(), big.clone(), paid[0].1.clone(), paid[1].1.clone()];
     let root = root_of(&state);
+    // the same chain after the small box is spent elsewhere: a node a block behind the tip still has this state
+    let gone_state: Vec<Vec<u8>> = vec![big.clone(), paid[0].1.clone(), paid[1].1.clone()];
     let top = cp.height + 50;
-    let hs = chain(10, top, now_ms() - 60_000, cp.n_bits, false, |_| root.clone());
+    let hs = chain(10, top, now_ms() - 60_000, cp.n_bits, false, |h| if h == top - 1 { root_of(&gone_state) } else { root.clone() });
     let node = node_at(state, vec![]);
     let tracked = json!({ &small_id: { "value": 10 * ERG, "confirmed_at": top - 60, "proven_at": top - 60, "bytes": hex(&small) },
                           &big_id: { "value": 50 * ERG, "confirmed_at": top - 60, "proven_at": top - 60, "bytes": hex(&big) } });
@@ -238,13 +240,13 @@ fn w2_a_given_up_payment_still_pins_its_coins_after_more_than_twenty_later_payme
     // `earlier`: settled payments already in `done` above the given-up one (None: no given-up payment at all).
     // Returns the inputs of the payment `wallet send` signs after one `wallet status`, and how many `done` entries the
     // sync left, and whether the given-up one is among them.
-    let run = |name: &str, earlier: Option<usize>| -> (Vec<String>, usize, bool) {
+    let run = |name: &str, earlier: Option<usize>, node: &str| -> (Vec<String>, usize, bool) {
         let st = dir(name);
         store_chain(&st, &hs, &hs[0]);
         let mut done: Vec<Value> = (0..earlier.unwrap_or(0)).map(|i| json!({ "tx": format!("{:064x}", 0x100 + i), "inputs": [format!("{:064x}", 0x200 + i)], "watch": format!("{:064x}", 0x300 + i), "result": "confirmed", "seen_at": top - 30 })).collect();
         if earlier.is_some() { done.push(json!({ "tx": "ab".repeat(32), "inputs": [small_id], "watch": "cd".repeat(32), "result": "not included", "seen_at": top - 40 })); }
         wallet(&st, false, tracked.clone(), json!(done), pending.clone());
-        let s = tachys(&["wallet", "status", "--state", &st, "--node", &node, "--json"]);
+        let s = tachys(&["wallet", "status", "--state", &st, "--node", node, "--json"]);
         assert_eq!(s.code, 0, "{name}: the sync runs ({}): {}", s.out, s.err);
         assert_eq!(s.json()["settled"], json!(true), "{name}: the proof is at the agreed tip");
         let w = read_wallet(&st);
@@ -256,16 +258,20 @@ fn w2_a_given_up_payment_still_pins_its_coins_after_more_than_twenty_later_payme
         (tx["inputs"].as_array().unwrap().iter().map(|i| i["boxId"].as_str().unwrap().to_string()).collect(), left, kept)
     };
     // control: with no payment given up, selection alone spends the big box and not the small
-    let (ins, _, _) = run("w2-control", None);
+    let (ins, _, _) = run("w2-control", None, &node);
     assert_eq!(ins, vec![big_id.clone()], "control: selection alone takes the big box");
     // positive arm: a payment given up, and only the two settled by this sync after it: the next payment spends its coin
-    let (ins, left, kept) = run("w2-few", Some(0));
+    let (ins, left, kept) = run("w2-few", Some(0), &node);
     assert!(kept && left == 3, "positive arm: the given-up record is kept ({left} entries)");
     assert!(ins.contains(&small_id), "positive arm: the given-up payment's coin is spent: {ins:?}");
     // the lead: nineteen settled payments already above it, and two more settled by this sync (twenty-one in all)
-    let (ins, left, kept) = run("w2-many", Some(19));
+    let (ins, left, kept) = run("w2-many", Some(19), &node);
     assert!(ins.contains(&small_id),
         "W2: after 21 later payments settled, the next payment does not spend the given-up payment's coin {small_id}: it spends {ins:?}; the sync left {left} done entries, given-up record kept: {kept}");
+    // and once its coin is gone from the chain it is settled ("coins spent") and ages out like the rest: `done` stays bounded
+    let gone = node_at(gone_state.clone(), vec![]);
+    let (_, left, kept) = run("w2-gone", Some(19), &gone);
+    assert!(!kept && left == 20, "a given-up record whose coin is gone ages out ({left} entries, kept: {kept})");
 }
 
 // ---- W3 ----
