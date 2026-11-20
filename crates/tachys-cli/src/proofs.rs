@@ -107,8 +107,17 @@ pub(crate) struct RestCost { pub(crate) requests: usize, pub(crate) sent: usize,
 
 /// Ask `node` for a batch proof of `ids` and check it against the newest headers of the stored chain. Returns the
 /// height it proves at and, per id, the box bytes (None = proven absent).
-pub(crate) fn prove(node: &str, chain: &[Header], ids: &[String], cost: &mut RestCost) -> Result<Proven, String> {
-    fresh_enough(chain, now_ms(), release_anchor().max_tip_age_ms)?;
+pub(crate) fn prove(node: &str, chain: &[Header], ids: &[String], cost: &mut RestCost) -> Result<Proven, String> { prove_reading(node, chain, None, ids, cost) }
+
+/// `prove`, and if the proof matches none of the newest headers, against the newest `FRESH` at or below the agreed tip
+/// (`agreed`, its height). Headers a node added above the agreed tip are kept in the stored chain for the next proof,
+/// and enough of them push the agreed tip out of the newest few; an honest node at the agreed tip, or a little behind
+/// it, is then still read. What is proven at or below the agreed tip is what may settle; nothing above it does. Each of
+/// those headers is held to the age a proof may rest on, as the newest is: added headers keep the chain's head recent
+/// while the agreed tip grows old, and a proof against an old tip would show coins spent since as unspent.
+pub(crate) fn prove_reading(node: &str, chain: &[Header], agreed: Option<u32>, ids: &[String], cost: &mut RestCost) -> Result<Proven, String> {
+    let max_age = release_anchor().max_tip_age_ms;
+    fresh_enough(chain, now_ms(), max_age)?;
     let keys = keys_of(ids)?;
     let body = serde_json::to_string(ids).map_err(|e| e.to_string())?;
     cost.requests += 1; cost.sent += body.len();
@@ -116,8 +125,10 @@ pub(crate) fn prove(node: &str, chain: &[Header], ids: &[String], cost: &mut Res
         .map_err(|e| format!("proof request failed: {e}"))?.into_string().map_err(|e| e.to_string())?;
     cost.received += text.len();
     let proof = serde_json::from_str::<String>(&text).ok().and_then(|h| unhex(&h)).ok_or_else(|| format!("node did not return a proof: {}", clip(&one_line(&text), 120)))?;
-    // try the proof against the state roots of the newest stored headers, newest first
-    for h in chain.iter().take(FRESH) {
+    // try the proof against the state roots of the newest stored headers, newest first; then the newest at or below the agreed tip
+    let below_agreed = chain.iter().filter(|h| agreed.is_some_and(|a| h.height <= a)).take(FRESH).filter(|h| fresh_enough(std::slice::from_ref(*h), now_ms(), max_age).is_ok());
+    let newest: Vec<&Header> = chain.iter().take(FRESH).collect();
+    for h in newest.iter().copied().chain(below_agreed.filter(|h| !newest.iter().any(|n| n.id == h.id))) {
         let root: Vec<u8> = h.state_root.into();
         if let Some(found) = lookup_all(&root, &proof, &keys) { return Ok((h.height, found)) }
     }

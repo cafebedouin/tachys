@@ -125,10 +125,11 @@ fn chain(n: u32, top: u32, top_ts: u64, n_bits: u32, work: bool, root: impl Fn(u
     out
 }
 /// Headers above `below` (newest first), linked onto it.
-fn above(below: &Header, n: u32, n_bits: u32, root: impl Fn(u32) -> Vec<u8>) -> Vec<Header> {
+/// `first_ts`: the timestamp of the first of them; one a minute after it.
+fn above(below: &Header, n: u32, first_ts: u64, n_bits: u32, root: impl Fn(u32) -> Vec<u8>) -> Vec<Header> {
     let mut out = vec![];
     let mut parent = below.clone();
-    for i in 1..=n { let h = mined(below.height + i, parent.id, below.timestamp + i as u64 * 60_000, n_bits, &root(below.height + i)); parent = h.clone(); out.push(h); }
+    for i in 1..=n { let h = mined(below.height + i, parent.id, first_ts + (i - 1) as u64 * 60_000, n_bits, &root(below.height + i)); parent = h.clone(); out.push(h); }
     out.reverse();
     out
 }
@@ -423,16 +424,19 @@ fn w5_a_node_supplied_header_below_the_remembered_floor_is_refused_by_extend_cha
 /// above it that some nodes have, and the wallet's one box B, created long before. Each height's state holds B and a
 /// filler of its own, so a proof matches one header only.
 struct W6 { st: Tmp, nf: String, b_id: String, agreed: Header, all: Vec<Header>, state: Box<dyn Fn(u32) -> Vec<Vec<u8>>> }
-fn w6(name: &str, above_n: u32) -> W6 {
+fn w6(name: &str, above_n: u32) -> W6 { w6_aged(name, above_n, 20 * 60_000) }
+/// `w6`, with the agreed tip `age_ms` old; the headers above it come up to a minute ago.
+fn w6_aged(name: &str, above_n: u32, age_ms: u64) -> W6 {
     let st = dir(name);
     let now = now_ms();
     let cp = make(1000, BlockId(Digest32::from([5u8; 32])), now - 3_600_000, bits(1), &[0u8; 33], 0);
     let nf = net_file(&st, &cp, 120_000);
     let (b_id, b) = ergo_box(3 * ERG, &address(0), 1500, 0);
     let state = move |h: u32| -> Vec<Vec<u8>> { vec![filler(h), b.clone()] };
-    let agreed_chain = chain(10, 2000, now - 20 * 60_000, bits(1), true, |h| root_of(&state(h)));
+    let agreed_chain = chain(10, 2000, now - age_ms, bits(1), true, |h| root_of(&state(h)));
     let agreed = agreed_chain[0].clone();
-    let mut all = above(&agreed, above_n, bits(1), |h| root_of(&state(h)));
+    let first = (agreed.timestamp + 60_000).max(now.saturating_sub(above_n as u64 * 60_000));
+    let mut all = above(&agreed, above_n, first, bits(1), |h| root_of(&state(h)));
     all.extend(agreed_chain.clone());
     store_chain(&st, &agreed_chain, &agreed);
     wallet(&st, true, json!({}), json!([]), json!([]));
@@ -508,4 +512,43 @@ fn w6c_after_one_sync_extended_over_the_peer_protocol_an_honest_node_at_the_agre
     assert_eq!(stored_heights(&w.st)[..6], [2005, 2004, 2003, 2002, 2001, 2000]);
     let (ok, r) = w.honest_settles();
     assert!(ok, "W6c: after one sync extended over the peer protocol, an honest node at the agreed tip does not settle the box: exit {}; stored chain {:?}; said: {:#?}", r.code, stored_heights(&w.st), said(&r));
+}
+
+/// W6, far past the agreed tip: a sync over the peer protocol twelve blocks ahead, then two REST syncs three more each,
+/// eighteen headers above the agreed tip in all, more than the sixteen the stored chain used to keep. Correct: the
+/// agreed tip stays stored, and an honest node at it still settles the box.
+#[test]
+fn w6d_after_eighteen_headers_added_above_the_agreed_tip_an_honest_node_at_it_still_settles() {
+    let w = w6("w6d", 18);
+    let top: Vec<Header> = w.all.iter().filter(|h| h.height > 2000 && h.height <= 2012).cloned().collect();
+    let (named, state) = (id32(&top[0]), (w.state)(2012));
+    let relay: tachys_net::ProofRelay = std::sync::Arc::new(move |ids: Vec<[u8; 32]>| {
+        let proof = unhex(&proof_of(&state, &ids.iter().map(|i| hex(i)).collect::<Vec<_>>()));
+        Box::pin(async move { Some(tachys_net::RelayAnswer { header_id: named, proof, new_headers: vec![] }) })
+    });
+    let r = w.sync("receive", &format!("p2p://{}", peer(top, Some(relay), 40)));
+    assert_eq!((r.code, &r.json()["proven_at"]), (0, &json!(2012)), "over the peer protocol: {}", r.err);
+    for h in [2015, 2018] {
+        let r = w.sync("status", &w.node(h));
+        assert_eq!((r.code, &r.json()["proven_at"], &r.json()["settled"]), (0, &json!(h), &json!(false)), "REST sync to {h}: {}", r.err);
+    }
+    let stored = stored_heights(&w.st);
+    assert!(stored.contains(&2000) && stored[0] == 2018, "the agreed tip is still stored: {stored:?}");
+    let (ok, r) = w.honest_settles();
+    assert!(ok, "W6d: exit {}; stored chain {:?}; said: {:#?}", r.code, stored_heights(&w.st), said(&r));
+}
+
+/// W6's fix reads the proof against the agreed tip's header even when added headers fill the newest few; it must not
+/// read it against an agreed tip older than a proof may rest on. Here the agreed tip is four hours old, and two syncs
+/// added six recent headers above it: an honest node at the old agreed tip does not settle the box (run `tachys tips` again).
+#[test]
+fn w6e_a_proof_is_not_settled_against_an_agreed_tip_older_than_a_proof_may_rest_on() {
+    let w = w6_aged("w6e", 6, 4 * 3_600_000);
+    for h in [2003, 2006] {
+        let r = w.sync(if h == 2003 { "receive" } else { "status" }, &w.node(h));
+        assert_eq!((r.code, &r.json()["proven_at"], &r.json()["settled"]), (0, &json!(h), &json!(false)), "sync extended to {h}: {}", r.err);
+    }
+    assert_eq!(stored_heights(&w.st)[..4], [2006, 2005, 2004, 2003], "the agreed tip is out of the newest four");
+    let (ok, r) = w.honest_settles();
+    assert!(!ok && r.code == 1, "a proof against a four-hour-old agreed tip was read: exit {}; said: {:#?}", r.code, said(&r));
 }

@@ -18,7 +18,7 @@ use crate::network::{net, private_net};
 use crate::out::{Ended, Fail};
 use crate::policy;
 use crate::walletfile::{Asset, Done, Pending, TrackedBox, WalletFile};
-use crate::proofs::{extend_chain, prove, prove_any, prove_included, prove_p2p, send_tx, NotSent, RestCost};
+use crate::proofs::{extend_chain, prove_any, prove_included, prove_p2p, prove_reading, send_tx, NotSent, RestCost};
 use crate::seal::{open_phrase, phrase_problem, seal_phrase};
 use crate::util::{arg, clip, hex, http, one_line, private_dir, stdin_line, unhex, write_private, write_whole};
 
@@ -950,29 +950,32 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
     }
     let mut proven = None;
     let mut chain = chain.clone();
+    // the tip the peers agreed on: a proof at or below it settles (below); one above it is only seen
+    let agreed = agreed_height(state);
     for n in &nodes {
         if let Some(peer) = n.strip_prefix("p2p://") {
             match prove_p2p(peer, &mut chain, &ids, &mut cost) { Ok(x) => { proven = Some(x); break } Err(e) => { say!("proof from {n}: {e}"); continue } }
         }
-        match prove(n, &chain, &ids, &mut cost) {
+        match prove_reading(n, &chain, Some(agreed), &ids, &mut cost) {
             Ok(x) => { proven = Some(x); break }
             Err(e) => {
                 let added = extend_chain(n, &mut chain, 3, &mut cost);
                 if added == 0 { say!("proof from {n}: {e}"); continue }
                 say!("node is {added} block(s) past the agreed tip; extended with work-checked, linked headers from {n}");
-                match prove(n, &chain, &ids, &mut cost) { Ok(x) => { proven = Some(x); break } Err(e) => say!("proof from {n}: {e}") }
+                match prove_reading(n, &chain, Some(agreed), &ids, &mut cost) { Ok(x) => { proven = Some(x); break } Err(e) => say!("proof from {n}: {e}") }
             }
         }
     }
     if proven.is_some() {
         // headers this node added are kept for the next proof, but the file stays short and `agreed-tip.bin` is not
-        // touched: what the peers agreed on is still what it was
-        if let Err(e) = write_whole(&format!("{state}/agreed-chain.bin"), &chain_bytes(chain.iter().take(16))) { say!("note: the chain could not be saved in {state} ({e}); the one from before is kept"); }
+        // touched: what the peers agreed on is still what it was. However many a node has added, the agreed tip and the
+        // few below it stay in the file, so a proof from an honest node at the agreed tip can still be read (`prove_reading`)
+        let keep = chain.iter().position(|h| h.height <= agreed).map_or(16, |i| 16.max(i + crate::chain::FRESH));
+        if let Err(e) = write_whole(&format!("{state}/agreed-chain.bin"), &chain_bytes(chain.iter().take(keep))) { say!("note: the chain could not be saved in {state} ({e}); the one from before is kept"); }
     }
     let Some((height, found)) = proven else { say!("NOT PROVEN by any node given"); return Err(crate::out::Fail::said(1)) };
     // A box counts as confirmed once it has been proven at or below the tip the peers agreed on. A proof against a
     // newer header rests on that header's one source and its own work: seen, not confirmed.
-    let agreed = agreed_height(state);
     // The same goes for what is taken away. A box is dropped, and a payment called confirmed or failed, only on a proof
     // at or below the agreed tip; a proof above it can add what it shows (marked as seen) and settles nothing.
     let settled = height <= agreed;
