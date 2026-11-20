@@ -418,8 +418,14 @@ pub struct BoxProof {
     pub cost: Cost,
 }
 
-/// Ask a peer for a batch proof of `ids` (at most 100). One request, one answer.
+/// The most box ids one box-proof request may carry: what a node carrying the patch takes (`MaxIds` in
+/// `node-patches/0001-box-proof-message.patch`). A caller with more asks in batches.
+pub const MAX_BOX_PROOF_IDS: usize = 100;
+
+/// Ask a peer for a batch proof of `ids` (1 to `MAX_BOX_PROOF_IDS`). One request, one answer.
 pub async fn fetch_box_proof(addr: &str, ids: &[[u8; 32]], wait: Duration) -> Result<BoxProof, String> {
+    // the count goes out as two bytes, and a node refuses more than its limit: refused here, before anything is sent
+    if ids.is_empty() || ids.len() > MAX_BOX_PROOF_IDS { return Err(format!("a box-proof request carries 1 to {MAX_BOX_PROOF_IDS} ids, not {}: ask in batches", ids.len())) }
     use ergo_primitives::reader::VlqReader;
     use ergo_primitives::writer::VlqWriter;
     let (_hs, mut conn, t0, connect_ms) = open(addr).await?;

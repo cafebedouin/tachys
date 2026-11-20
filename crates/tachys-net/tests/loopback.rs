@@ -203,3 +203,17 @@ async fn a_silent_peer_is_offered_one_header_and_then_left() {
     assert!(learn_tip(&addr, Duration::from_millis(200), Duration::from_millis(400), nothing_to_offer()).await.err().unwrap().0.contains("no header to offer"));
     assert!(t.elapsed() < Duration::from_secs(3));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_box_proof_request_carries_one_to_a_hundred_ids_or_is_not_sent() {
+    // the count goes out as two bytes and a node carrying the patch takes at most 100: more is refused before anything is
+    // sent (no peer listens at this address, and the answer says why, not that it could not connect)
+    let nowhere = free_addr().await;
+    for n in [0usize, MAX_BOX_PROOF_IDS + 1, 70_000] {
+        let ids = vec![[1u8; 32]; n];
+        let e = fetch_box_proof(&nowhere, &ids, SHORT).await.err().unwrap();
+        assert!(e.contains("1 to 100 ids"), "{n} ids: {e}");
+    }
+    let e = fetch_box_proof(&nowhere, &[[1u8; 32]; MAX_BOX_PROOF_IDS], SHORT).await.err().unwrap();
+    assert!(!e.contains("1 to 100 ids"), "a hundred are sent (and here find no peer): {e}");
+}

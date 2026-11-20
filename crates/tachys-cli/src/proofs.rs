@@ -223,9 +223,18 @@ pub(crate) fn send_tx(nodes: &str, json: &str) -> Result<(String, String), NotSe
 pub(crate) fn prove_p2p(peer: &str, chain: &mut Vec<Header>, ids: &[String], cost: &mut RestCost) -> Result<Proven, String> {
     fresh_enough(chain, now_ms(), release_anchor().max_tip_age_ms)?;
     let keys = keys_of(ids)?;
+    // A node takes at most `MAX_BOX_PROOF_IDS` ids a request: more are asked in batches, each read against the block the
+    // first answer names, and joined in the order asked. A later answer naming another block (one came between) is not
+    // mixed in: the proof is asked again on the next sync.
+    let batches: Vec<&[[u8; 32]]> = keys.chunks(tachys_net::MAX_BOX_PROOF_IDS).collect();
+    let Some(first_batch) = batches.first() else { return Err("no box ids to prove".into()) };
     let rt = tokio::runtime::Handle::current();
-    let bp = tokio::task::block_in_place(|| rt.block_on(tachys_net::fetch_box_proof(peer, &keys, Duration::from_secs(8))))?;
-    cost.requests += 1; cost.sent += 4 + 32 * keys.len(); cost.received += bp.cost.bytes_received;
+    let fetch = |ks: &[[u8; 32]], cost: &mut RestCost| -> Result<tachys_net::BoxProof, String> {
+        let bp = tokio::task::block_in_place(|| rt.block_on(tachys_net::fetch_box_proof(peer, ks, Duration::from_secs(8))))?;
+        cost.requests += 1; cost.sent += 4 + 32 * ks.len(); cost.received += bp.cost.bytes_received;
+        Ok(bp)
+    };
+    let bp = fetch(first_batch, cost)?;
     if !chain.iter().any(|h| id32(h) == bp.header_id) {
         // fetch the named header and its recent ancestors by id; accept only if they link onto our tip
         let anchor = release_anchor();
@@ -244,9 +253,15 @@ pub(crate) fn prove_p2p(peer: &str, chain: &mut Vec<Header>, ids: &[String], cos
         add.append(chain);
         *chain = add;
     }
-    let h = chain.iter().find(|h| id32(h) == bp.header_id).ok_or("named header missing after extension")?;
+    let h = chain.iter().find(|h| id32(h) == bp.header_id).ok_or("named header missing after extension")?.clone();
     let root: Vec<u8> = h.state_root.into();
-    let found = lookup_all(&root, &bp.proof, &keys).ok_or("the proof does not answer for every id asked, or does not reproduce the state root of the block the node named")?;
+    let unread = "the proof does not answer for every id asked, or does not reproduce the state root of the block the node named";
+    let mut found = lookup_all(&root, &bp.proof, first_batch).ok_or(unread)?;
+    for ks in &batches[1..] {
+        let more = fetch(ks, cost)?;
+        if more.header_id != bp.header_id { return Err("the node's proofs for the batches of ids name different blocks (a block came between); asked again on the next sync".into()) }
+        found.extend(lookup_all(&root, &more.proof, ks).ok_or(unread)?);
+    }
     Ok((h.height, found))
 }
 
