@@ -96,7 +96,7 @@ impl MillerProof {
         (0..=max_level)
             .map(|mu| {
                 let count = self.blocks().filter(|b| b.level >= mu).count() as u64;
-                BigInt::from(1u64 << mu) * BigInt::from(count)
+                (BigInt::from(1u64) << mu) * BigInt::from(count)
             })
             .max()
             .unwrap_or_else(|| BigInt::from(0))
@@ -115,7 +115,7 @@ impl MillerProof {
             if (count as u32) < m {
                 break;
             }
-            let val = BigInt::from(1u64 << mu) * BigInt::from(count);
+            let val = (BigInt::from(1u64) << mu) * BigInt::from(count);
             if val > best {
                 best = val;
             }

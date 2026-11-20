@@ -80,3 +80,16 @@ fn k_depth_flag_reflects_post_lca_block_count() {
     let (_ord, enough2) = compare(&honest, &adversary, 40);
     assert!(enough2);
 }
+
+#[test]
+fn a_block_at_level_sixty_four_or_more_is_weighed_without_overflow() {
+    // `2^µ` was a shift of a u64, which overflows from level 64 (a panic in a debug build, a wrong weight in a release one)
+    let blk = |id: u64, level: u32| Blk { id, parent: id.saturating_sub(1), height: id as u32, level, difficulty: BigInt::from(1) };
+    let p = MillerProof { d: vec![blk(0, 0), blk(1, 64), blk(2, 70)], x: vec![], omega: vec![] };
+    // level 70 holds one block: 2^70 · 1, the largest of the levels
+    assert_eq!(p.best_arg(), BigInt::from(1u64) << 70usize);
+    // with m = 1 every level up to 70 has a block: the same
+    assert_eq!(p.best_arg_m(1), BigInt::from(1u64) << 70usize);
+    let at64 = MillerProof { d: vec![blk(0, 64)], x: vec![], omega: vec![] };
+    assert_eq!(at64.best_arg(), BigInt::from(1u64) << 64usize);
+}
