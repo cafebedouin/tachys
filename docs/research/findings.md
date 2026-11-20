@@ -145,10 +145,15 @@ measured, not whose coins they were.
     same build peaks at about 5.5 MB of memory for every operation measured (tip sync, re-proving
     21 boxes, verifying a 162 KB proof), with 0.07 s of CPU for a tip sync
     (`docs/research/runs/2026-11-13-resource-profile-host.txt`).
+    Note (added on review): in this run and in the device runs of 24, 26 and 28 the 162 KB proof was older than
+    the release allows against the machine's clock, and each log records `REJECTED [C8Recency]`. Verification
+    runs every check and reports every failure (recency was the only one), so these times are for the whole
+    verification, work checks included, ending in a rejection on age; they are not times for an accepted proof.
+    The logs are kept as captured.
 24. **It runs under Android 7 with 1 GB of memory.** In the Android emulator (API 24, x86_64, 1 GB RAM,
     2 cores) the wallet binary, pushed with adb, synced the mainnet tip (five network groups agreed),
     generated a wallet, and proved a funded address's 21 boxes against the agreed tip. Peak memory
-    was about 3 MB in every step; verifying a 162 KB proof took 0.09 s
+    was about 3 MB in every step; verifying a 162 KB proof took 0.09 s (rejected on age; see the note under 23)
     (`docs/research/runs/2026-11-13-android-emulator.txt`). This is Android, not ARM: speed on a real low-end
     phone is still unmeasured.
 
@@ -160,7 +165,7 @@ measured, not whose coins they were.
 26. **It runs on a real phone.** On a Pixel 6 (arm64, GrapheneOS, Android 17) over Wi-Fi, the arm64 build
     pushed with adb synced the mainnet tip (five network groups agreed, 24 KB first run, 12 KB
     second), generated a wallet, proved a funded address's 21 boxes, and verified a 162 KB proof in
-    0.19 s. Peak memory was 7.6 MB (`docs/research/runs/2026-11-13-pixel6.txt`). A Pixel 6 is far above the
+    0.19 s (rejected on age; see the note under 23). Peak memory was 7.6 MB (`docs/research/runs/2026-11-13-pixel6.txt`). A Pixel 6 is far above the
     target device; an old 32-bit phone is the run that matters and is still to do.
 
 27. **A first app runs on a phone.** `android/` is a Kotlin and Compose app with two screens modelled on
@@ -175,7 +180,7 @@ measured, not whose coins they were.
 28. **It runs well on an old phone, and Compose stays.** On a Galaxy Note 2 (2012; Exynos 4412 at 1.6 GHz,
     32-bit ARM, 1.8 GB RAM, LineageOS on Android 7.1.2) the command-line wallet synced the mainnet tip
     in 6.6 s with 2.3 MB peak memory, proved 21 boxes with 1.9 MB, and verified a 162 KB proof with
-    its 127 work checks in 1.0 s, about eleven times the desktop's time
+    its 127 work checks in 1.0 s (rejected on age; see the note under 23), about eleven times the desktop's time
     (`docs/research/runs/2026-11-13-note2.txt`). The app installed from the 2.29 MB APK, cold-started in 0.7 to
     0.9 s, and showed both screens with the proven balance and tokens (a screenshot was taken; screenshots are not in the public tree);
     Android reported 13 MB for the app (this ROM does not count graphics memory) and a median frame
