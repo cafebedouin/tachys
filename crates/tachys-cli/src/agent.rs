@@ -128,10 +128,12 @@ impl Agent {
         // not tell a late payment from a double-spent one.
         let r = self_run(&["wallet", "receive", "--state", &self.state, "--node", &self.node, "--ids", receipt, "--pools"]);
         let found = if r.ok { r.json["checked"].as_array().and_then(|a| a.iter().find(|c| c["id"] == receipt)).cloned().unwrap_or(serde_json::Value::Null) } else { serde_json::Value::Null };
-        // pending: held, its coins unspent and its signatures checked (true); no node holding one, among nodes that answered
-        // (false); nobody answered, or nothing to say (null)
+        // pending: held with its coins proven unspent and its signatures verified when it was taken (true); no node holding
+        // one, among nodes that answered (false); nobody answered, or nothing to say (null), which is also what a payment
+        // held by `wallet promise` gets: it was handed over and nothing about it was checked
         let answered = r.json["pools"].as_array().is_some_and(|a| a.iter().any(|p| p["id"] == receipt && p["answered"] == true));
-        let pending = match found["state"].as_str() { Some("expected") => Some(true), Some("absent") if answered => Some(false), _ => None };
+        let proven = found["held_proven"] == true;
+        let pending = match found["state"].as_str() { Some("expected") if proven => Some(true), Some("absent") if answered => Some(false), _ => None };
         let confirmations: u64 = found["confirmations"].as_u64().unwrap_or(0);
         let (accepted, code, why) = match found["state"].as_str() {
             Some("proven") if confirmations >= 1 => (true, "", if found["added"] == true { "proven unspent and pays this wallet" } else { "already in this wallet, proven unspent" }),
@@ -143,7 +145,8 @@ impl Agent {
             // the block that confirmed it left the chain: not a payment now, and perhaps one again later
             Some("undone") => (false, "not_yet", "the block that confirmed this box is no longer in the chain the peers agree on (a reorganisation): it is not a payment now. It may be included again (then it is accepted with first_seen false: the same payment); or its coins were spent elsewhere, and it never will be"),
             // the payment is held and none of its coins is gone: it is on its way
-            Some("expected") => (false, "not_yet", "the payment that makes this box is held by this wallet and its coins are unspent: it is not in a block yet"),
+            Some("expected") if proven => (false, "not_yet", "the payment that makes this box is held by this wallet, its coins proven unspent and its signatures verified: it is not in a block yet"),
+            Some("expected") => (false, "not_yet", "the payment that makes this box is held by this wallet as it was handed over, nothing about it proven: it is not in a block yet"),
             // nothing to go on but the box id: no node asked holds a payment that makes it
             Some("absent") => (false, "not_yet", "no such unspent box, and no node asked holds a payment that makes it: not sent, not yet seen, already dropped, or not a real receipt"),
             _ => (false, "not_proven", "could not be checked"),
