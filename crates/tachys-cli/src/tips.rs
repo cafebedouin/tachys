@@ -200,6 +200,8 @@ pub(crate) async fn tips(args: &[String]) -> crate::out::Ended {
     let first = remembered.is_none();
     // the chain from just above the checkpoint to just below the agreed chain, oldest first, once it is linked
     let mut linked: Vec<Header> = vec![];
+    // a later run whose link failed (a peer that dropped, or does not hold the headers): the kept chain is left as it was
+    let mut kept_as_was = false;
     if first || keep {
         let low = chain.last().expect("non-empty").clone();
         let cp = checkpoint_header();
@@ -230,7 +232,7 @@ pub(crate) async fn tips(args: &[String]) -> crate::out::Ended {
                 crate::out::set("code", "not_linked"); crate::out::set("refusals", vec![format!("not linked to the checkpoint: {why}")]);
                 return Err(crate::out::Fail::said(1))
             }
-            Err((why, _, _)) => say!("note: the kept chain could not be extended ({why}); it is dropped and rebuilt on the next run"),
+            Err((why, _, _)) => { kept_as_was = true; say!("note: the kept chain could not be extended ({why}); it is left as it was, and the next run goes on from it"); }
         }
         if first {
             let least = cp.height as u64 + now.saturating_sub(cp.timestamp) / (2 * chain_params().block_interval_ms.max(1));
@@ -259,7 +261,7 @@ pub(crate) async fn tips(args: &[String]) -> crate::out::Ended {
             .and_then(|_| write_whole(&format!("{state}/behind-header.bin"), &agreed_chain.last().expect("non-empty").scorex_serialize_bytes().map_err(std::io::Error::other)?));
         if let Err(e) = saved { say!("verdict: NOT TRUSTED (a tip was agreed on but could not be saved in {state}: {e})"); return Err(crate::out::Fail::said(1)) }
         // the whole chain from the checkpoint, oldest last, for a wallet that serves others their first run
-        if keep {
+        if keep && !kept_as_was {
             let path = format!("{state}/linked-chain.bin");
             if linked.is_empty() { let _ = std::fs::remove_file(&path); }
             else { let _ = write_whole(&path, &chain_bytes(agreed_chain.iter().chain(linked.iter().rev()))); }
