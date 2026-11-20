@@ -283,7 +283,7 @@ fn recipes() -> serde_json::Value {
             { "to": "get a wallet, or find the one already there", "run": "tachys setup --state DIR", "gives": "address (give it to whoever pays you), created, can_pay, sealed", "network": false,
               "mind": "sealed:false means the seed phrase is in plain text in DIR; it is sealed only if TACHYS_PASS was set when the wallet was made" },
             { "to": "know where to be paid", "run": "tachys address --state DIR", "gives": "address", "network": false },
-            { "to": "know what you hold", "run": "tachys balance --state DIR", "gives": "nanoerg, erg, tokens, unconfirmed_nanoerg (the part of nanoerg in a block only one node has shown yet), waiting (payments of yours not yet in a block; their coins are held back)" },
+            { "to": "know what you hold", "run": "tachys balance --state DIR", "gives": "nanoerg, erg, tokens, unconfirmed_nanoerg (beside nanoerg, not part of it: what is in a block only one node has shown yet), waiting (payments of yours not yet in a block; their coins are held back)" },
             { "to": "check a payment would be allowed, and what it would cost, without making it", "run": "tachys pay --state DIR --to ADDRESS --erg AMOUNT --dry-run", "gives": "would_leave_wallet_nanoerg, fee_nanoerg" },
             { "to": "pay someone", "run": "tachys pay --state DIR --to ADDRESS --erg AMOUNT --purpose WHY", "gives": "tx, receipt (a box id: hand it to the payee, it is how they check they were paid)",
               "mind": "ok:true means a node took it, not that it is in a block. If the answer has outcome_unknown:true, do NOT pay again: run the next recipe with its tx." },

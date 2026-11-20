@@ -39,8 +39,9 @@ block), `timeout`, `node_refused`, `outcome_unknown`, `misuse`, `failed`.
 
 - `balance`: `{"ok":true,"proven":true,"complete":true,"address":…,"erg":"0.564200000","nanoerg":564200000,"unconfirmed_nanoerg":0,"tokens":[{"id":…,"amount":…}],"boxes":2,"waiting":[],"settled":[],"tip_height":…,"network":…}`.
   The chain tip came from several peers and was checked for work. The nodes were asked what the wallet's addresses
-  hold, and every box counted was proven unspent against that chain, or against a block one node has shown above
-  it: `unconfirmed_nanoerg` is the part of `nanoerg` in such boxes. `complete` is false if a node did not answer
+  hold, and every box counted was proven unspent against that chain. `nanoerg`, `erg`, `boxes` and `tokens` count only
+  boxes confirmed under that tip, which is what can be spent; `unconfirmed_nanoerg` is what sits beside them, not
+  inside them, in boxes proven only in a block one node has shown above it. `complete` is false if a node did not answer
   for an address. `waiting` lists payments of this wallet not yet in a block (their coins are held back);
   `settled` what became of any that were settled by this call.
 - `pay`: `{"ok":true,"tx":…,"receipt":…,"to":…,"nanoerg":…,"fee_nanoerg":1100000,"purpose":…}`. The
