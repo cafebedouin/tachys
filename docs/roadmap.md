@@ -92,6 +92,9 @@ instead, which as far as we know is new for Ergo:
 
 ## Smaller things
 
+- A peer that pushes a header heavier than its parent allows is no longer refused as a whole: that header is not
+  taken as its tip and the chain under it is judged instead. A warning when a peer pushes such a header would keep the
+  signal.
 - Rig tests the public networks cannot give: congestion, a lying node; and a shallow reorganisation, where `undone`
   would show (finding 54): JVM nodes need mining on demand, since the rig switches mining only by relaunching a node,
   after which the nodes did not always reconnect. The rig's devnet retargets difficulty its own way, not within
