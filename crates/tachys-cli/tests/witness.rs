@@ -310,18 +310,21 @@ fn w3_a_box_confirmed_at_h_is_not_dropped_by_a_proof_against_a_stored_header_bel
 
 // ---- W4 ----
 
-/// W4 (`tips.rs:81`): a peer's tip is the highest of the headers it pushed that pass their checks, while the module
-/// says tips are ranked by the difficulty they claim. Correct: of a peer's pushed headers, the one taken as its tip is
-/// the heaviest by claimed work, not the highest: a cheap header pushed beside a real chain does not become its tip.
+/// W4 (`tips.rs:81`): a peer's tip was the highest of the headers it pushed that pass their checks, so one cheap header
+/// higher than the rest became its tip. Correct (the rule now in `tips`): a peer's tip is the highest of its headers
+/// that follows another it pushed (its parent, at a difficulty the chain's rule allows). Not the heaviest: after an
+/// honest fall in difficulty at an epoch boundary the newest header is lighter than its ancestors. A peer whose headers
+/// follow none of each other (the reference node pushes tip, tip-16, tip-128, tip-512) has its highest taken.
 #[test]
-fn w4_a_peers_tip_is_its_heaviest_pushed_header_not_its_highest() {
+fn w4_a_peers_tip_is_its_highest_pushed_header_that_follows_another_it_pushed() {
     let st = dir("w4");
     let now = now_ms();
     let cp = make(1000, BlockId(Digest32::from([5u8; 32])), now - 3_600_000, bits(1), &[0u8; 33], 0);
     let nf = net_file(&st, &cp, 120_000);
+    let root = |h: u32| -> Vec<u8> { filler(h).into_iter().chain([0u8; 33]).take(33).collect() };
     // ten linked headers at difficulty 4, the newest a minute old; and one header at difficulty 1, five blocks higher,
     // that links to nothing the peer has. Every one carries real work for its own difficulty and passes the floor (1).
-    let real = chain(10, 2000, now - 60_000, bits(4), true, |h| filler(h).into_iter().chain([0u8; 33]).take(33).collect());
+    let real = chain(10, 2000, now - 60_000, bits(4), true, root);
     let cheap = mined(2005, BlockId(Digest32::from([8u8; 32])), now - 30_000, bits(1), &[1u8; 33]);
     let tips = |name: &str, pushed: Vec<Header>| -> Ran {
         let seeds = format!("{}/{name}.seeds", &*st);
@@ -332,7 +335,7 @@ fn w4_a_peers_tip_is_its_heaviest_pushed_header_not_its_highest() {
     let r = tips("real", real.clone());
     let j = r.json();
     assert_eq!((r.code, &j["verdict"], &j["tip"]["height"]), (0, &json!("agreed"), &json!(2000)), "positive arm: {}", r.err);
-    // the lead: the same peer also pushes the cheap header
+    // the lead: the same peer also pushes the cheap header; it follows nothing the peer pushed, so it is not the tip
     let mut pushed = vec![cheap.clone()];
     pushed.extend(real.clone());
     let r = tips("with-cheap", pushed);
@@ -340,6 +343,21 @@ fn w4_a_peers_tip_is_its_heaviest_pushed_header_not_its_highest() {
     let said: Vec<&str> = r.err.lines().filter(|l| l.contains("tip") || l.contains("verdict")).collect();
     assert_eq!((r.code, &j["verdict"], &j["tip"]["height"]), (0, &json!("agreed"), &json!(2000)),
         "W4: a header of difficulty 1 at height 2005 pushed beside a chain of difficulty 4 up to 2000 was taken as the peer's tip; refusals {}; said: {said:#?}", j["refusals"]);
+    // an honest fall in difficulty: 1917..1920 at difficulty 8, then 1921 (the first block of an epoch: 1920 = 15 * 128)
+    // and on at difficulty 4. The peer's tip is the newest, 1926, not the heavier 1920 below it
+    let mut fall: Vec<Header> = vec![];
+    let mut parent = BlockId(Digest32::from([6u8; 32]));
+    for h in 1917..=1926u32 {
+        let x = mined(h, parent, now - (1926 - h) as u64 * 60_000 - 60_000, bits(if h <= 1920 { 8 } else { 4 }), &root(h));
+        parent = x.id; fall.insert(0, x);
+    }
+    let r = tips("fall", fall);
+    let j = r.json();
+    assert_eq!((r.code, &j["verdict"], &j["tip"]["height"]), (0, &json!("agreed"), &json!(1926)), "after an honest fall in difficulty the peer's tip is its newest header: {}", r.err);
+    // a peer whose headers follow none of each other, as the reference node pushes them: its highest is its tip
+    let sparse: Vec<Header> = real.iter().filter(|h| [2000, 1995, 1991].contains(&h.height)).cloned().collect();
+    let r = tips("sparse", sparse);
+    assert!(r.err.lines().any(|l| l.contains("3 headers (3 pass), tip 2000")), "sparse headers: the highest is the tip: {}", r.err);
 }
 
 // ---- W5 ----

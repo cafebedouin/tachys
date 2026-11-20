@@ -75,10 +75,17 @@ pub(crate) async fn tips(args: &[String]) -> crate::out::Ended {
                 conns += 1; bytes += tp.cost.bytes_received; held += tp.cost.held_ms; requests += tp.cost.requests_sent;
                 let hs: Vec<Header> = tp.headers.iter().filter_map(|b| Header::scorex_parse_bytes(b).ok()).collect();
                 let good: Vec<&Header> = hs.iter().filter(|h| header_ok_above(h, &anchor, now, &floor).is_ok()).collect();
+                // The peer's tip: the highest of its headers that follows another it pushed (its parent, at a difficulty
+                // the chain's rule allows after it). A header that follows none of them, higher than the rest, is not
+                // taken for its tip on its height alone. Not "the heaviest": after an honest fall in difficulty the
+                // newest header is lighter than its ancestors. A peer whose headers follow none of each other (the
+                // reference node pushes tip, tip-16, tip-128 and tip-512) has its highest taken, as before.
+                let follows = |h: &&&Header| good.iter().any(|p| tachys_verify::tip::continues(p, h, chain_params().epoch_length));
+                let tip = good.iter().filter(follows).max_by_key(|h| h.height).or_else(|| good.iter().max_by_key(|h| h.height));
                 say!("  {addr:22} {} {} {} after {} ms, {} B, {} headers ({} pass), tip {}{}", tp.agent, tp.version, if tp.provoked { "answered" } else { "pushed" },
-                    tp.first_sync_ms, tp.sync_frame_bytes, hs.len(), good.len(), good.iter().map(|h| h.height).max().unwrap_or(0),
+                    tp.first_sync_ms, tp.sync_frame_bytes, hs.len(), good.len(), tip.map_or(0, |h| h.height),
                     if tp.extension_ids > 0 { format!(", announced {} ids", tp.extension_ids) } else { String::new() });
-                if let Some(tip) = good.iter().max_by_key(|h| h.height) {
+                if let Some(tip) = tip {
                     // offer silent peers a verified header that is behind this tip: the one about 16 back if
                     // the peer sent it, never the tip itself
                     // always switch to the most recent such header: offering an old one (the release
