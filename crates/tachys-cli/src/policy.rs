@@ -129,6 +129,29 @@ mod tests {
     fn line(ago: u64, nano: u64) -> String { format!("{}\n", serde_json::json!({ "at": NOW - ago, "nanoerg": nano })) }
 
     #[test]
+    fn two_signers_at_once_cannot_both_pass_on_the_same_daily_total() {
+        // 60 of the day's 100 are spent; each of two payments of 30 fits alone, both do not. Started together, each reads
+        // the log and writes its entry under the log's lock, so exactly one passes, every time
+        for round in 0..20 {
+            let st = std::env::temp_dir().join(format!("tachys-policy-{}-{round}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&st);
+            std::fs::create_dir_all(&st).unwrap();
+            let st = st.to_string_lossy().to_string();
+            std::fs::write(path(&st), policy().to_string()).unwrap();
+            std::fs::write(log_path(&st), format!("{}\n", serde_json::json!({ "at": now_s(), "nanoerg": 60_000_000u64 }))).unwrap();
+            let go = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let signers: Vec<_> = (0..2).map(|_| { let (st, go) = (st.clone(), go.clone()); std::thread::spawn(move || { go.wait(); reserve(&st, &ask(30_000_000), false) }) }).collect();
+            let results: Vec<Result<bool, String>> = signers.into_iter().map(|t| t.join().unwrap()).collect();
+            let passed = results.iter().filter(|r| matches!(r, Ok(true))).count();
+            assert_eq!(passed, 1, "round {round}: exactly one of two signers passes: {results:?}");
+            assert!(results.iter().any(|r| r.as_ref().is_err_and(|e| e.contains("daily"))), "round {round}: the other is over the daily limit: {results:?}");
+            let entries = std::fs::read_to_string(log_path(&st)).unwrap().lines().count();
+            assert_eq!(entries, 2, "round {round}: one entry written, beside the one before");
+            let _ = std::fs::remove_dir_all(&st);
+        }
+    }
+
+    #[test]
     fn erg_limits_count_the_fee_and_the_day() {
         let p = policy();
         assert!(check(&p, "", &ask(50_000_000), NOW).is_ok());
