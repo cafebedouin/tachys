@@ -315,3 +315,22 @@ fn proofs_are_judged_by_work_not_by_height_or_head_count() {
     let why = by_work(&outnumbered, 3, now, 3 * HOUR, 128).unwrap_err();
     assert!(why.iter().any(|w| w.contains("NoQuorum")) && why.iter().any(|w| w.contains("HeavierHeard")), "{why:?}");
 }
+
+#[test]
+fn an_amount_of_erg_is_read_exactly_as_a_decimal() {
+    use crate::agent::erg_to_nano as nano;
+    assert_eq!(nano("0.02"), Ok(20_000_000));
+    assert_eq!(nano("12"), Ok(12_000_000_000));
+    assert_eq!(nano("1.5"), Ok(1_500_000_000));
+    assert_eq!(nano(".5"), Ok(500_000_000));
+    assert_eq!(nano("3."), Ok(3_000_000_000));
+    assert_eq!(nano("0.000000001"), Ok(1), "one nanoERG");
+    assert_eq!(nano("0.29"), Ok(290_000_000));
+    // read through a float these went wrong: "inf" became u64::MAX nanoERG, a tenth digit was rounded away without a word,
+    // and above 2^53 nanoERG (about 9 million ERG) amounts lost their last digits
+    assert_eq!(nano("9007199.254740993"), Ok(9_007_199_254_740_993));
+    assert_eq!(nano("18446744073.709551615"), Ok(u64::MAX), "the most that fits");
+    for bad in ["-1", "+1", "1e3", "inf", "NaN", "", ".", "1.2.3", "1 000", "0.0000000001", "18446744073.709551616", "99999999999999999999"] {
+        assert!(nano(bad).is_err(), "{bad:?} is refused");
+    }
+}

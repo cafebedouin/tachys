@@ -34,6 +34,19 @@ fn no(code: &str, why: impl Into<String>) -> No { (serde_json::json!({ "ok": fal
 fn refused(why: impl Into<String>) -> No { no("failed", why) }
 fn misuse(why: impl Into<String>) -> No { no("misuse", why) }
 fn opt<T: std::str::FromStr>(args: &[String], name: &str, default: T) -> Result<T, No> { arg(args, name, default).map_err(|f| misuse(f.msg.unwrap_or_default())) }
+/// An amount of ERG as typed (`0.02`, `12`, `1.5`) in nanoERG, read exactly as a decimal: never through a float, which
+/// would round some amounts to a nanoERG either side. At most nine digits after the point; no sign, exponent or
+/// spaces inside; not more than fits.
+pub(crate) fn erg_to_nano(s: &str) -> Result<u64, String> {
+    let s = s.trim();
+    let (whole, frac) = s.split_once('.').unwrap_or((s, ""));
+    if whole.is_empty() && frac.is_empty() { return Err(format!("is not an amount: {s:?}")) }
+    if !whole.bytes().chain(frac.bytes()).all(|b| b.is_ascii_digit()) { return Err(format!("is not an amount of ERG in digits (no sign or exponent): {s:?}")) }
+    if frac.len() > 9 { return Err(format!("has more than nine digits after the point (a nanoERG is the smallest unit): {s:?}")) }
+    let w: u64 = if whole.is_empty() { 0 } else { whole.parse().map_err(|_| format!("is more than can exist: {s:?}"))? };
+    let f: u64 = format!("{frac:0<9}").parse().unwrap_or(0);
+    w.checked_mul(1_000_000_000).and_then(|x| x.checked_add(f)).ok_or_else(|| format!("is more than can exist: {s:?}"))
+}
 
 /// The commands for programs and agents, by name.
 pub(crate) const COMMANDS: &[&str] = &["recipes", "setup", "address", "balance", "pay", "accept", "wait", "history"];
@@ -230,7 +243,7 @@ fn online(a: &Agent, cmd: &str, args: &[String]) -> Result<serde_json::Value, No
         }
         "pay" => {
             let to: String = opt(args, "--to", String::new())?;
-            let nano: u64 = { let n: u64 = opt(args, "--nanoerg", 0)?; if n > 0 { n } else { (opt::<f64>(args, "--erg", 0.0)? * 1e9).round() as u64 } };
+            let nano: u64 = { let n: u64 = opt(args, "--nanoerg", 0)?; if n > 0 { n } else { erg_to_nano(&opt(args, "--erg", "0".to_string())?).map_err(|e| misuse(format!("--erg {e}")))? } };
             let token: String = opt(args, "--token", String::new())?;
             let token_amount: u64 = opt(args, "--token-amount", 0)?;
             let purpose: String = opt(args, "--purpose", String::new())?;
