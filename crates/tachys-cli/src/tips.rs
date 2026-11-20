@@ -183,6 +183,57 @@ pub(crate) async fn tips(args: &[String]) -> crate::out::Ended {
     say!("neighbour cost: {} connections, {} messages sent, {:.1} connection-seconds held (failures included), {} B received, {:.1} s wall", conns, requests, held as f64 / 1000.0, bytes, t0.elapsed().as_secs_f64());
     crate::out::set("peers_heard", pushed.len()); crate::out::set("refusals", &refusals);
     let Some((chain, a)) = agreed else { say!("verdict: NOT TRUSTED ({})", refusals.join("; ")); return Err(crate::out::Fail::said(1)) };
+    // A first run has only the release's floor to hold headers to, and ten headers at that floor cost a forger little
+    // (finding 53). So a first run links the agreed chain back to the release's checkpoint, every header checked for
+    // work and floor and each a step the chain's own difficulty rule allows, and holds the tip to the height the time
+    // since the checkpoint implies, at half the chain's pace. A forger must then mine all of that, falling in difficulty
+    // by at most half an epoch, never below the floor. A wallet that keeps the linked chain (`--keep-chain`, for one
+    // that serves others) extends it every run.
+    let keep = args.iter().any(|a| a == "--keep-chain");
+    let first = remembered.is_none();
+    // the chain from just above the checkpoint to just below the agreed chain, oldest first, once it is linked
+    let mut linked: Vec<Header> = vec![];
+    if first || keep {
+        let low = chain.last().expect("non-empty").clone();
+        let cp = checkpoint_header();
+        // What was linked before is not fetched again: a kept chain (`--keep-chain`), or what a first run that stopped
+        // part way linked (`linking.bin`). Like the stored chain, these are this wallet's own files, checked when written.
+        let prior_file = if keep { "linked-chain.bin" } else { "linking.bin" };
+        let mut prior: Vec<Header> = if state.is_empty() { vec![] } else { crate::chain::load_chain_file(&format!("{state}/{prior_file}")) };
+        prior.reverse(); prior.retain(|h| h.height < low.height);
+        let srcs: Vec<String> = pushed.iter().filter(|p| on(&chain, &p.1)).map(|p| p.0.clone()).chain(pushed.iter().map(|p| p.0.clone())).collect();
+        let (t_link, bytes_before) = (Instant::now(), bytes);
+        let mut res = link_forward(&srcs, prior.last().unwrap_or(&cp), &low, &anchor, &mut (&mut conns, &mut bytes, &mut held, &mut requests)).await;
+        // what was linked before may be off the chain now (a reorganisation): once more, from the checkpoint. Only then:
+        // a link that ran short (a slow peer, the time budget) keeps what it had and goes on from it next time
+        if matches!(&res, Err((_, _, true))) && !prior.is_empty() { prior.clear(); res = link_forward(&srcs, &cp, &low, &anchor, &mut (&mut conns, &mut bytes, &mut held, &mut requests)).await; }
+        let from_height = prior.last().unwrap_or(&cp).height;
+        match res {
+            Ok(between) => {
+                say!("linked: {} header(s) from height {from_height} up to the agreed chain, each with work above the floor and a step the difficulty rule allows ({} B, {} ms)", between.len(), bytes - bytes_before, t_link.elapsed().as_millis());
+                crate::out::set("linked", serde_json::json!({ "from_height": from_height, "headers": between.len(), "bytes": bytes - bytes_before, "ms": t_link.elapsed().as_millis() as u64 }));
+                linked = prior.into_iter().chain(between).collect();
+                if !state.is_empty() { let _ = std::fs::remove_file(format!("{state}/linking.bin")); }
+            }
+            Err((why, partial, _)) if first => {
+                // what did link is kept, so that the next try goes on from it rather than from the checkpoint again
+                let got = prior.len() + partial.len();
+                if !state.is_empty() && got > 0 { private_dir(&state); let all: Vec<Header> = prior.into_iter().chain(partial).collect(); let _ = write_whole(&format!("{state}/linking.bin"), &chain_bytes(all.iter().rev())); }
+                say!("verdict: NOT TRUSTED (a first run must link the chain to the release checkpoint: {why}; {got} header(s) linked so far are kept for the next try)");
+                crate::out::set("code", "not_linked"); crate::out::set("refusals", vec![format!("not linked to the checkpoint: {why}")]);
+                return Err(crate::out::Fail::said(1))
+            }
+            Err((why, _, _)) => say!("note: the kept chain could not be extended ({why}); it is dropped and rebuilt on the next run"),
+        }
+        if first {
+            let least = cp.height as u64 + now.saturating_sub(cp.timestamp) / (2 * chain_params().block_interval_ms.max(1));
+            if (chain[a.ahead].height as u64) < least {
+                say!("verdict: NOT TRUSTED (tip at height {} is below {least}, half the height {} days since the checkpoint would bring)", chain[a.ahead].height, now.saturating_sub(cp.timestamp) / 86_400_000);
+                crate::out::set("code", "below_pace"); crate::out::set("refusals", vec![format!("tip below the height the time since the checkpoint implies ({least})")]);
+                return Err(crate::out::Fail::said(1))
+            }
+        }
+    }
     // The agreed tip is the newest header a quorum has reached. Headers above it were pushed by fewer groups: they are
     // kept on top of the stored chain so that a proof from a node already at one of them can be read, but only if each
     // follows at the chain's own difficulty, and nothing proven against them counts as confirmed.
@@ -200,6 +251,12 @@ pub(crate) async fn tips(args: &[String]) -> crate::out::Ended {
             .and_then(|_| write_whole(&format!("{state}/agreed-tip.bin"), &top.scorex_serialize_bytes().map_err(std::io::Error::other)?))
             .and_then(|_| write_whole(&format!("{state}/behind-header.bin"), &agreed_chain.last().expect("non-empty").scorex_serialize_bytes().map_err(std::io::Error::other)?));
         if let Err(e) = saved { say!("verdict: NOT TRUSTED (a tip was agreed on but could not be saved in {state}: {e})"); return Err(crate::out::Fail::said(1)) }
+        // the whole chain from the checkpoint, oldest last, for a wallet that serves others their first run
+        if keep {
+            let path = format!("{state}/linked-chain.bin");
+            if linked.is_empty() { let _ = std::fs::remove_file(&path); }
+            else { let _ = write_whole(&path, &chain_bytes(agreed_chain.iter().chain(linked.iter().rev()))); }
+        }
     }
     let root: Vec<u8> = top.state_root.into();
     crate::out::set("verdict", "agreed"); crate::out::set("groups", a.groups.len()); crate::out::set("ahead", ahead.len()); crate::out::set("saved", !state.is_empty());
@@ -207,4 +264,47 @@ pub(crate) async fn tips(args: &[String]) -> crate::out::Ended {
     say!("verdict: Agreed\ntip: height {} id {} ({} s old)\nstate root: {}", top.height, id_hex(&top), now.saturating_sub(top.timestamp) / 1000, hex(&root));
     if !ahead.is_empty() { say!("above it: {} header(s) up to height {} that fewer than {quorum} network groups have reached; kept for reading proofs, not agreed on", ahead.len(), ahead[0].height); }
     Ok(())
+}
+
+/// Headers forward from `from` (not included) to the parent of `to` (not included), from the first of `srcs` that
+/// gives them, each checked on its own (work, floor, clock) and as a step from the one before (the next height, its
+/// parent, a difficulty the rule allows), the last the parent of `to`. A source that stops short is followed by the next,
+/// from the last header that passed.
+/// On failure, what did link comes back with the reason. Each source has five minutes, the whole fifteen.
+/// The third part of a failure says the start itself is off the chain: nothing followed it, or what did does not lead
+/// to `to`.
+async fn link_forward(srcs: &[String], from: &Header, to: &Header, anchor: &tachys_verify::Anchor, cost: &mut (&mut usize, &mut usize, &mut u128, &mut usize)) -> Result<Vec<Header>, (String, Vec<Header>, bool)> {
+    let end = Instant::now() + Duration::from_secs(900);
+    use crate::chain::header_ok;
+    let epoch = chain_params().epoch_length;
+    let want = to.height.saturating_sub(from.height).saturating_sub(1) as usize;
+    let mut out: Vec<Header> = vec![];
+    let mut last = from.clone();
+    let mut tried = std::collections::BTreeSet::new();
+    // a header came that does not follow `from` itself: the start is off the chain those peers are on
+    let mut off_at_start = false;
+    for src in srcs {
+        if out.len() >= want || Instant::now() >= end { break }
+        if !tried.insert(src.clone()) { continue }
+        let Ok(bytes) = last.scorex_serialize_bytes() else { break };
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+        let budget = Duration::from_secs(300).min(end.saturating_duration_since(Instant::now()));
+        match tachys_net::sync_forward(src, bytes, want - out.len(), Duration::from_secs(10), budget, |b| Header::scorex_parse_bytes(b).ok().map(|h| id32(&h)), |b| Header::scorex_parse_bytes(b).ok().map(|h| parent32(&h))).await {
+            Err(e) => say!("  link from {src}: {e}"),
+            Ok((raw, c)) => {
+                *cost.0 += 1; *cost.1 += c.bytes_received; *cost.2 += c.held_ms; *cost.3 += c.requests_sent;
+                let before = out.len();
+                for b in raw {
+                    let Ok(h) = Header::scorex_parse_bytes(&b) else { break };
+                    if !tachys_verify::tip::continues(&last, &h, epoch) { if out.is_empty() { off_at_start = true; } say!("  link from {src}: header at height {} does not follow the one before at the chain's difficulty", h.height); break }
+                    if let Err(e) = header_ok(&h, anchor, now) { say!("  link from {src}: header at height {}: {e}", h.height); break }
+                    last = h.clone(); out.push(h);
+                }
+                say!("  link from {src}: {} header(s), {} B, {} ms", out.len() - before, c.bytes_received, c.held_ms);
+            }
+        }
+    }
+    if out.len() < want { let n = out.len(); return Err((format!("{n} of the {want} headers between came, linked and checked"), out, off_at_start)) }
+    if !tachys_verify::tip::continues(&last, to, epoch) { return Err(("the headers fetched do not lead to the agreed chain".into(), vec![], true)) }
+    Ok(out)
 }

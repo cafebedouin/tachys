@@ -103,14 +103,16 @@ fn a_proof_is_not_read_against_an_old_chain() {
 /// A state tree of our own with three boxes in it, as a node's is built: each value filed under its hash.
 /// Returns the root after `generate_proof`, the proof of looking up `asked`, and the three (key, value) pairs.
 type Held = Vec<([u8; 32], Vec<u8>)>;
-fn proven_lookup(asked: &[[u8; 32]]) -> (Vec<u8>, Vec<u8>, Held) {
+fn proven_lookup(asked: &[[u8; 32]]) -> (Vec<u8>, Vec<u8>, Held) { proven_lookup_in(3, asked) }
+/// The same, over `n` boxes of varied sizes.
+fn proven_lookup_in(n: usize, asked: &[[u8; 32]]) -> (Vec<u8>, Vec<u8>, Held) {
     use bytes::Bytes;
     use ergo_avltree_rust::authenticated_tree_ops::AuthenticatedTreeOps;
     use ergo_avltree_rust::batch_avl_prover::BatchAVLProver;
     use ergo_avltree_rust::batch_node::{AVLTree, Node, NodeHeader};
     use ergo_avltree_rust::operation::{KeyValue, Operation};
     let mut prover = BatchAVLProver::new(AVLTree::new(|d| Node::LabelOnly(NodeHeader::new(Some(*d), None)), 32, None), true);
-    let held: Held = (1u8..=3).map(|i| { let v = vec![i; 40 + i as usize]; (*sigma_util::hash::blake2b256_hash(&v), v) }).collect();
+    let held: Held = (1..=n).map(|i| { let v = if n == 3 { vec![i as u8; 40 + i] } else { (i as u64).to_be_bytes().repeat(5 + i % 7) }; (*sigma_util::hash::blake2b256_hash(&v), v) }).collect();
     for (k, v) in &held { prover.perform_one_operation(&Operation::Insert(KeyValue { key: Bytes::copy_from_slice(k), value: Bytes::from(v.clone()) })).unwrap(); }
     prover.generate_proof();
     let root = prover.digest().unwrap().to_vec();
@@ -315,3 +317,65 @@ fn proofs_are_judged_by_work_not_by_height_or_head_count() {
     let why = by_work(&outnumbered, 3, now, 3 * HOUR, 128).unwrap_err();
     assert!(why.iter().any(|w| w.contains("NoQuorum")) && why.iter().any(|w| w.contains("HeavierHeard")), "{why:?}");
 }
+
+
+/// A small generator for the tests below, the same numbers every run.
+fn xorshift(seed: u64) -> impl FnMut() -> u64 { let mut x = seed; move || { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x } }
+
+#[test]
+fn a_malformed_proof_is_refused_without_a_panic() {
+    // The verifier indexes a proof without checking its length and unwraps an empty stack: before the proof was walked
+    // first, about 290,000 of 350,000 such proofs made it panic, at nine places, and the phone build aborts on a panic.
+    // `lookup_unguarded` has no catch_unwind, so any panic left fails this test.
+    let (_, _, held) = proven_lookup(&[]);
+    let asked = [held[0].0, [9u8; 32], held[2].0];
+    let (root, proof, _) = proven_lookup(&asked);
+    let mut rnd = xorshift(0x9e3779b97f4a7c15);
+    for _ in 0..100_000 {
+        let mut p = proof.clone();
+        for _ in 0..(1 + rnd() % 4) {
+            let i = (rnd() as usize) % p.len().max(1);
+            match rnd() % 5 { 0 => p[i] ^= 1 << (rnd() % 8), 1 => p[i] = rnd() as u8, 2 => p.insert(i, rnd() as u8), 3 => { if p.len() > 1 { p.remove(i); } } _ => p.truncate(i) }
+            if p.is_empty() { break }
+        }
+        let got = crate::proofs::lookup_unguarded(&root, &p, &asked);
+        assert!(got.is_none() || got == crate::proofs::lookup_unguarded(&root, &proof, &asked));
+    }
+    for _ in 0..20_000 { let p: Vec<u8> = (0..rnd() % 400).map(|_| rnd() as u8).collect(); assert_eq!(crate::proofs::lookup_unguarded(&root, &p, &asked), None); }
+}
+
+#[test]
+fn an_honest_proof_from_a_large_tree_is_read_and_its_direction_bits_cannot_be_bent() {
+    // the depth allowed is the root's height and two; an honest proof's tree is never deeper than the height and one
+    let mut rnd = xorshift(0x1234567);
+    for n in [1usize, 2, 5, 64, 1000, 20_000] {
+        let (_, _, held) = proven_lookup_in(n, &[]);
+        let mut asked: Vec<[u8; 32]> = (0..20).map(|j| held[(j * 7919) % n].0).collect();
+        asked.dedup(); asked.push([0xab; 32]);
+        let (root, proof, _) = proven_lookup_in(n, &asked);
+        let (end, depth) = crate::proofs::packed_tree(&proof).expect("an honest proof packs one tree");
+        assert!(depth <= root[32] as usize + 1, "{n} boxes: depth {depth}, height {}", root[32]);
+        let honest = crate::proofs::lookup_unguarded(&root, &proof, &asked).expect("an honest proof is read");
+        assert_eq!(honest.iter().filter(|v| v.is_some()).count(), asked.len() - 1, "{n} boxes");
+        // the direction bits after the tree were read without a bound (one place the verifier panicked): flip them, and the tree's bytes
+        for _ in 0..1_500 {
+            let mut p = proof.clone();
+            for _ in 0..(1 + rnd() % 3) { let tail = p.len() - end; let i = if rnd().is_multiple_of(2) && tail > 0 { end + (rnd() as usize) % tail } else { (rnd() as usize) % p.len() }; p[i] ^= 1 << (rnd() % 8); }
+            let got = crate::proofs::lookup_unguarded(&root, &p, &asked);
+            assert!(got.is_none() || got.as_ref() == Some(&honest), "{n} boxes: a changed proof gave another answer");
+        }
+    }
+}
+
+#[test]
+fn a_proof_nested_deeper_than_its_root_says_is_refused_before_it_is_labelled() {
+    // A tree 100,000 levels deep, 3.4 MB: labelling it recursed until the stack overflowed, which aborts the process in
+    // every build, catch_unwind or not. Now its depth is read first and set against the height the root names.
+    let mut p = vec![3u8]; p.extend([7u8; 32]);
+    for _ in 0..100_000 { p.push(3); p.extend([8u8; 32]); p.push(0); }
+    p.push(4); p.extend([0u8; 64]);
+    assert_eq!(crate::proofs::packed_tree(&p).map(|t| t.1), Some(100_001));
+    let mut root = vec![1u8; 32]; root.push(40);
+    assert_eq!(crate::proofs::lookup_all(&root, &p, &[[5u8; 32]]), None);
+}
+

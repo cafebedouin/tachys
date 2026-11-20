@@ -1,0 +1,16 @@
+`wallet receive --pools` against a mainnet node's pool (finding 56), release build, 2026-11-20. A wallet made for the
+run (no funds, no address of the project's), its tip agreed first. The box asked about is the first output of a
+payment that was in the node's pool at that moment (taken from the node's own list); it pays another wallet. Ids cut
+short.
+
+$ curl -s NODE/transactions/unconfirmed?limit=1          -> tx 402539501d7d…
+$ curl -s NODE/transactions/unconfirmed/byTransactionId/… -> its first output, box 9e99d0728e8b…
+$ tachys tips --state W
+verdict: Agreed
+$ tachys wallet receive --state W --node NODE --ids 9e99d0728e8b… --pools
+  9e99d0728e8b…  a node holds the payment that makes it, but it is not held: that transaction pays nothing to this wallet
+  9e99d0728e8b…  ABSENT at height 1920726: not accepted
+
+The pool's answer was read as a transaction, and the box id was found among its outputs: the fetch and the match work
+on a real node's JSON. This build did not yet verify the payment's signatures (added in finding 59); the payment was
+not held for another reason. Not run: a payment in a public pool that pays the wallet asking.

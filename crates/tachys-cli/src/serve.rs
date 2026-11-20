@@ -7,7 +7,7 @@ use sigma_ser::ScorexSerializable;
 
 use crate::chain::{carries_on, header_ok, id32, load_chain, parent32};
 use crate::network::{net, release_anchor};
-use crate::util::{arg, unhex};
+use crate::util::{arg, hex, unhex};
 
 /// tachys serve --state DIR [--listen ADDR] [--secs N] [--accept-parcels] [--relay-proofs HOST:PORT] [--follow-state]
 pub(crate) async fn serve(args: &[String]) -> crate::out::Ended {
@@ -15,7 +15,7 @@ pub(crate) async fn serve(args: &[String]) -> crate::out::Ended {
     let state: String = arg(args, "--state", "state".to_string())?;
     let listen: String = arg(args, "--listen", "0.0.0.0:9030".to_string())?;
     let secs: u64 = arg(args, "--secs", 60)?;
-    let mut chain = load_chain(&state);
+    let mut chain = served(&state);
     if chain.is_empty() { return Err(crate::out::Fail::new(2, format!("nothing to serve: run `tachys tips --state {state}` first"))) }
     if args.iter().any(|a| a == "--tamper-for-control") {
         if !crate::network::private_net() { return Err(crate::out::Fail::new(2, "--tamper-for-control is for our own private network only".to_string())) }
@@ -36,9 +36,17 @@ pub(crate) async fn serve(args: &[String]) -> crate::out::Ended {
             let v: serde_json::Value = serde_json::from_slice(raw).ok()?;
             let bytes = unhex(v["tx_bytes"].as_str()?)?;
             let tx = ergo_lib::chain::transaction::Transaction::sigma_parse_bytes(&bytes).ok()?;
+            // bytes that read as a transaction but are not its own serialisation (something after its end) are not taken
+            // at the door: they would reach a node as other bytes than the transaction checked (finding 51)
+            if tx.sigma_serialize_bytes().ok().as_deref() != Some(&bytes[..]) { return None }
             let id = String::from(tx.id());
             if std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0) >= 8 { return None }
-            std::fs::write(format!("{dir}/{id}.json"), raw).ok()?;
+            // only what was checked is written (the id read from the bytes, the bytes), and never over a payment already
+            // held: a peer could otherwise replace a good copy with the same payment and broken signatures, or put words
+            // of its own (`coins_seen`, `tx_id`) into the file
+            let path = format!("{dir}/{id}.json");
+            if std::path::Path::new(&path).exists() { return <[u8; 32]>::try_from(unhex(&id)?).ok() }
+            std::fs::write(&path, serde_json::json!({ "tx_id": id, "tx_bytes": hex(&bytes) }).to_string()).ok()?;
             <[u8; 32]>::try_from(unhex(&id)?).ok()
         }))
     } else { None };
@@ -77,7 +85,7 @@ pub(crate) async fn serve(args: &[String]) -> crate::out::Ended {
     let reload: Option<tachys_net::Reload> = if args.iter().any(|a| a == "--follow-state") {
         let (st, last) = (state.clone(), std::sync::Arc::new(std::sync::Mutex::new(headers.first().map(|h| h.0))));
         Some(std::sync::Arc::new(move || {
-            let chain = load_chain(&st);
+            let chain = served(&st);
             let tip = chain.first().map(id32);
             let mut l = last.lock().unwrap();
             if tip.is_none() || tip == *l { return None }
@@ -90,4 +98,19 @@ pub(crate) async fn serve(args: &[String]) -> crate::out::Ended {
         Err(e) => { say!("serve: {e}"); return Err(crate::out::Fail::said(1)) }
     }
     Ok(())
+}
+
+/// What a wallet serves: the chain it last agreed on, newest first; and if it keeps the chain back to the checkpoint
+/// (`tips --keep-chain`), all of that below it and the checkpoint last, so that a wallet on its first run, which offers
+/// the checkpoint, can link to it through this one.
+fn served(state: &str) -> Vec<Header> {
+    let mut chain = load_chain(state);
+    let linked = crate::chain::load_chain_file(&format!("{state}/linked-chain.bin"));
+    if let Some(low) = chain.last().cloned() {
+        let below: Vec<Header> = linked.into_iter().filter(|h| h.height < low.height).collect();
+        // only a kept chain that joins the agreed one (its newest is the parent of the agreed chain's oldest): one with a
+        // gap (left by a run without --keep-chain, or a reorganisation) would lead a first run nowhere
+        if below.first().is_some_and(|k| k.id == low.parent_id) { chain.extend(below); chain.push(crate::network::checkpoint_header()); }
+    }
+    chain
 }

@@ -1,0 +1,121 @@
+The dishonest-payer recipe on the rig (finding 54), release build with findings 52 to 54, 2026-11-19 and -20.
+peeryard rig.sh, rig/out/ergo-6.0.8-boxproof.jar for both nodes, rig/dishonest-payer.{json,sh}. Box and transaction
+ids cut short, addresses left out, scratch paths replaced. Earlier runs, not kept, found the recipe's own faults (a
+payer box still "seen" when it paid, a wait that reported success on timeout) and two of the rig's: the wallet held
+the devnet's headers to mainnet's epoch of 128 (now `epoch_length` in the network file), and with two miners at
+different rates the devnet's difficulty moved by more than mainnet's limits, so the wallet refused an honest chain
+as UnsteadyDifficulty. These two runs keep one miner at a time.
+
+Run 5: part 1 as fixed; part 2 reorganised, but B had stopped following A at height 79 well before the split, so
+the branch that won forked 60 blocks back, below the payee's stored headers: the wallet's answer is the fallback,
+"spent". Run 6 (the recipe then waited for B to catch up before the split): part 1 as fixed; in part 2 A and B did
+not reconnect after both were relaunched to swap their mining, so there was no reorganisation (the recipe now calls
+that INCONCLUSIVE, not FAIL). A shallow reorganisation, where `undone` would show, was not reached on the rig; the
+CLI test shows it.
+
+=== rig-dp5-deep
+14:[dp] 0. setup: a payee and a payer; the fee output's script from the payment that funds the payer
+16:[dp] 1. part 1: the payer proves its box; a second copy of its wallet does too, through B
+17:  payer: {"checked":[{"state":"proven","confirmations":1,"height":31}]}
+18:  copy:  {"checked":[{"state":"proven","confirmations":0,"height":28}]}
+19:[dp] 2. the payer signs 0.1 ERG to the payee offline and hands over the signed payment; the payee keeps it
+20:  receipt 47bc36da8487…
+21:  payee: {"ok":true,"promised":["47bc36da8487…"],"nanoerg":100000000}
+22:[dp] 3. the copy spends the same box first: 0.2 ERG to A's address, through B
+23:  B said "ffd5edbf38f4…"
+24:  A: the payer's box is spent
+25:[dp] 4. the payee asks about its receipt (what accept and wait --receipt read)
+26:  payee: {"checked":[{"state":"expected","confirmations":null,"height":72}]}
+27:  [observe] receipt state: expected
+28:[dp] 5. the payee tries to submit the payment it holds, and syncs
+29:  outbox: outbox: 1 payment(s) to submit to 10.9.21.1:9021
+30:  outbox:   17013f1085c2… REFUSED before submission: input 773237048db3a372 is not an unspent box at height 73; dropped
+31:  outbox:   the box it promised this wallet (47bc36da8487…) will never come: marked void
+32:  outbox: outbox done: 0 submitted, 1 refused
+33:  payee dir: <scratch>/rig-dp5/tachys/payee/outbox:
+35:  status: no boxes tracked; balance 0 ERG
+36:  [observe] receipt state after the payee's own attempt: void
+37:[dp] 6. part 2: a fresh payer and a copy of it, funded
+38:  payer: {"checked":[{"state":"proven","confirmations":1,"height":82}]}
+39:  copy:  {"checked":[{"state":"proven","confirmations":0,"height":79}]}
+40:[dp] 7. A and B are cut apart; the payer pays the payee 0.1 ERG through A
+41:[rig] partition A<->B (100% loss) (split for the reorganisation)
+42:  receipt c4caca6d7b08…; A said "f766390049a6…"
+43:  A: the receipt box is on chain by height 88
+44:  (tips refused for <scratch>/rig-dp5/tachys/payee: verdict: NOT TRUSTED (height 133: UnsteadyDifficulty))
+45:  payee: {"checked":[{"state":"proven","confirmations":1,"height":139}]}
+46:  [observe] accept would answer accepted: proven with 1 confirmation(s)
+47:[dp] 8. A stops mining; the copy spends the same box through B, which mines a longer branch
+48:[mine] stop_mining(A)
+53:[mine] start_mining(B poll=2s)
+58:  B said "9b484b27519c…"
+59:  heights: A 139, B 202
+60:[dp] 9. A and B are joined again; A takes B's longer chain
+61:[rig] heal A<->B (rejoin)
+79:  SAME@245:ce1176524e0a…; A: the receipt box is gone; the payer's box is spent
+80:[dp] 10. the payee asks about the receipt it had accepted
+81:  payee: {"checked":[{"state":"spent","confirmations":null,"height":247}]}
+82:  [observe] receipt state after the reorganisation: spent
+83:  status: looking again for this wallet's boxes: something else has spent or moved its coins since the last sync
+84:  status: reconcile: p2p://10.9.21.1:9021 did not answer
+85:  status: reconcile: p2p://10.9.21.1:9021 lists 0 unspent boxes, 0 not yet tracked
+86:  status: no node answered what this wallet's addresses hold
+87:[dp] verdict: PASS
+91:[rig] COSTS relaunch A (mining=false poll=cfg): censored next_event; relaunch B (mining=true poll=2s): censored next_event; heal A-B (rejoin): censored never_agreed
+=== rig-dp6
+14:[dp] 0. setup: a payee and a payer; the fee output's script from the payment that funds the payer
+16:[dp] 1. part 1: the payer proves its box; a second copy of its wallet does too, through B
+17:  payer: {"checked":[{"state":"proven","confirmations":1,"height":28}]}
+18:  copy:  {"checked":[{"state":"proven","confirmations":0,"height":25}]}
+19:[dp] 2. the payer signs 0.1 ERG to the payee offline and hands over the signed payment; the payee keeps it
+20:  receipt be0f8431c630…
+21:  payee: {"ok":true,"promised":["be0f8431c630…"],"nanoerg":100000000}
+22:[dp] 3. the copy spends the same box first: 0.2 ERG to A's address, through B
+23:  B said "5ab64bc0db31…"
+24:  A: the payer's box is spent
+25:[dp] 4. the payee asks about its receipt (what accept and wait --receipt read)
+26:  payee: {"checked":[{"state":"expected","confirmations":null,"height":70}]}
+27:  [observe] receipt state: expected
+28:[dp] 5. the payee tries to submit the payment it holds, and syncs
+29:  outbox: outbox: 1 payment(s) to submit to 10.9.21.1:9021
+30:  outbox:   3a3d6899e33d… REFUSED before submission: input c784d467cd33bef0 is not an unspent box at height 71; dropped
+31:  outbox:   the box it promised this wallet (be0f8431c630…) will never come: marked void
+32:  outbox: outbox done: 0 submitted, 1 refused
+33:  payee dir: <scratch>/rig-dp6/tachys/payee/outbox:
+35:  status: no boxes tracked; balance 0 ERG
+36:  [observe] receipt state after the payee's own attempt: void
+37:[dp] 6. part 2: a fresh payer and a copy of it, funded
+38:  payer: {"checked":[{"state":"proven","confirmations":1,"height":79}]}
+39:  copy:  {"checked":[{"state":"proven","confirmations":0,"height":76}]}
+40:[dp] 7. A and B are cut apart; the payer pays the payee 0.1 ERG through A
+52:  before the split: A 229, B 224, SAME@224:73b8fd4a6bc
+53:[rig] partition A<->B (100% loss) (split for the reorganisation)
+54:  receipt b9a836b9be2e…; A said "2f6d7506c5e1…"
+55:  A: the receipt box is on chain by height 234
+56:  payee: {"checked":[{"state":"proven","confirmations":1,"height":284}]}
+57:  [observe] accept would answer accepted: proven with 1 confirmation(s)
+58:[dp] 8. A stops mining; the copy spends the same box through B, which mines a longer branch
+59:[mine] stop_mining(A)
+64:[mine] start_mining(B poll=2s)
+70:  B said "813020b9c638…"
+71:  heights: A 284, B 348
+72:[dp] 9. A and B are joined again; A takes B's longer chain
+73:[rig] heal A<->B (rejoin)
+91:  DIFF@284:A=abb62d3f0d5c…:B=34af47499b9b…; A: the receipt box is still unspent; the payer's box is spent
+92:[dp] FAIL: the reorganisation did not undo the payment; nothing to observe
+93:[dp] 10. the payee asks about the receipt it had accepted
+94:  payee: {"checked":[{"state":"proven","confirmations":1,"height":284}]}
+95:[dp] FAIL: a payment undone by a reorganisation is still proven
+96:  [observe] receipt state after the reorganisation: proven
+97:  status:   b9a836b9be2e…  100000000 nanoERG, proven unspent at 284, confirmations 1
+99:  status: balance 0.100000000 ERG in 1 boxes, proven at height 284
+100:  status: cost: 1 requests, 36 B sent, 434 B received
+101:[dp] verdict: FAIL
+106:[rig] COSTS relaunch A (mining=false poll=cfg): censored next_event; relaunch B (mining=true poll=2s): censored next_event; heal A-B (rejoin): censored never_agreed
+107:[rig] === hook done (verdict: FAIL) ===
+
+== Run 7, with findings 55 to 57 (before the review round of finding 59)
+Part 1: the payee's first question already answered `void` ("receipt state: void"), before its outbox ran: its own
+sync proved the payer's coin gone (finding 56). Part 2 spoilt by the rig: node A did not come back after it was
+relaunched to stop mining ("HARNESS-FAIL stop_mining A: no REST after relaunch"), so there was no payment on A's side
+to undo. Verdict INCONCLUSIVE, as the recipe now says when the harness fails.

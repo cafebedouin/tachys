@@ -18,7 +18,7 @@ end=$((SECONDS+240)); while [[ $SECONDS -lt $end ]]; do [[ "$(full_height A)" -g
 gen="$(header_at A 1)"; cpid="$(header_at A $(( $(full_height A) - 12 )))"
 rest A "/blocks/$cpid/header" > "$W/cp.json"
 jq -n --arg g "$gen" --argjson magic "$MAGIC" --slurpfile cp "$W/cp.json" \
-  '{name:"devnet", magic:$magic, genesis:$g, checkpoint:$cp[0], floor_divisor:1048576, v2_activation_height:0, block_interval_ms:3000, seeds:""}' > "$NETF"
+  '{name:"devnet", magic:$magic, genesis:$g, checkpoint:$cp[0], floor_divisor:1048576, v2_activation_height:0, block_interval_ms:3000, epoch_length:16, seeds:""}' > "$NETF"
 echo "$A_FOR_T1:${P2P[A]}" > "$W/seeds-a.txt"; echo "$T1_FOR_T2:9030" > "$W/seeds-t1.txt"
 echo "[overlay] A at height $(full_height A); A is $A_FOR_T1 to T1; T1 is $T1_FOR_T2 to T2"
 
@@ -27,7 +27,7 @@ c0="$(in2 tips --seeds "$W/seeds-a.txt" --peers 1 --tries 1 --quorum 1 --state "
 echo "$c0" | grep -q "^verdict: Agreed" && fail "T2 reached the full node directly; the topology does not isolate it"
 
 echo "[overlay] 1. T1 syncs from the full node"
-o1="$(in1 tips --seeds "$W/seeds-a.txt" --peers 1 --tries 1 --quorum 1 --state "$W/t1")"; echo "$o1" | tail -n 4 | sed 's/^/  /'
+o1="$(in1 tips --seeds "$W/seeds-a.txt" --peers 1 --tries 1 --quorum 1 --state "$W/t1" --keep-chain)"; echo "$o1" | tail -n 4 | sed 's/^/  /'
 echo "$o1" | grep -q "^verdict: Agreed" || fail "T1 tip sync"
 tip1="$(echo "$o1" | sed -n 's/^tip: height \([0-9]*\) id \([0-9a-f]*\).*/\1 \2/p')"
 
@@ -51,7 +51,7 @@ echo "[overlay] 4. a serving wallet that keeps syncing serves a tip that moves"
 ip netns exec "${NS[T1]}" "$T" serve --state "$W/t1" --listen "$T1_FOR_T2:9030" --secs 40 --follow-state --net-file "$NETF" > "$W/serve-follow.log" 2>&1 &
 SERVE=$!; sleep 2
 h_a="$(in2 tips --seeds "$W/seeds-t1.txt" --peers 1 --tries 1 --quorum 1 --state "$W/t2-follow" | sed -n 's/^tip: height \([0-9]*\).*/\1/p')"
-for i in 1 2 3; do sleep 5; in1 tips --seeds "$W/seeds-a.txt" --peers 1 --tries 1 --quorum 1 --state "$W/t1" > /dev/null; done
+for i in 1 2 3; do sleep 5; in1 tips --seeds "$W/seeds-a.txt" --peers 1 --tries 1 --quorum 1 --state "$W/t1" --keep-chain > /dev/null; done
 sleep 4
 h_b="$(in2 tips --seeds "$W/seeds-t1.txt" --peers 1 --tries 1 --quorum 1 --state "$W/t2-follow" | sed -n 's/^tip: height \([0-9]*\).*/\1/p')"
 echo "  T2 saw height $h_a from T1, then height $h_b after T1 had synced three more times (node is at $(full_height A))"

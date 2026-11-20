@@ -648,3 +648,271 @@ measured, not whose coins they were.
     `wait --tx --confirmations 2` returned at two. **Not run:** a forged chain against a live client; the app on
     a phone since these changes (it compiles).
 
+51. **A carrier sends a node only bytes that are the transaction it checked (2026-11-16).** `outbox --peer` read
+    a held payment's stored bytes into a transaction, announced that transaction's id, proved its inputs and
+    verified its spending proofs, and then sent the node the stored bytes, never asking whether those bytes are
+    what the transaction serialises to. They need not be: the same payment with one byte after its end reads as
+    the same transaction with the same id, passed every check, and would have gone to the node as written. The
+    stored bytes are now compared with the transaction's own serialisation before any other check; a payment
+    that differs is not sent and is counted under `refused`. No chain and no signature settles such a file, so
+    it is not deleted: it is moved out of the queue into `given-up/`, as a payment refused twenty times over
+    REST is. **Not changed:** `serve --accept-parcels` still takes such a parcel at the door (it is stopped at
+    submission); `outbox --rest` sends `tx_json`, which is not compared with `tx_bytes`, and leaves the judging
+    to the node. **Tests:** 913 in the workspace; the new one writes a payment offline, adds a byte to its
+    stored bytes, and finds it set aside unsent while the payment as written passes on to the checks that need
+    a chain. It fails without the change. **Run:** nothing beyond the tests. **Not run:** the store-and-forward
+    recipe on the rig since this change; and no node was ever sent such bytes, so what a node does with them
+    (refuse, penalise the peer, or take them) is not known here.
+
+52. **A malformed box proof is refused before it reaches the verifier (2026-11-19).** The roadmap said a malformed
+    proof "can still stop the core where the build aborts on a panic (the phone build)". Measured, it was worse
+    than that. The verifier (`ergo_avltree_rust` 0.1.1, a crates.io dependency, not ours to change) indexes the
+    proof without checking its length and unwraps an empty stack: of 350,000 proofs made by mutating an honest one
+    (bit flips, bytes changed, inserted, removed, cut short) and random bytes, about 290,000 made it panic, at eight
+    places in `reconstruct_tree` and one in the direction bits. `catch_unwind` caught those in the command-line
+    build and nothing caught them in the phone build. And a proof nested 100,000 levels deep (3.4 MB, 6.8 MB as the
+    node's hex answer, under what a REST answer may be) overflowed the stack when it was labelled, which no
+    `catch_unwind` stops: the command-line `tachys wallet receive`, given that answer by a node, aborted ("thread
+    'main' has overflowed its stack"). Any node a wallet asks could end it. **Changed.** `proofs::packed_tree` walks
+    the packed tree as the verifier does, with every bound checked, and returns where it ends and how deep it is; a
+    proof it cannot walk is no proof, and so is one deeper than the root's height byte and two (an honest proof's
+    tree is never deeper than the height and one: seen for trees of 1 to 20,000 boxes). The direction bits after
+    the tree are padded with zero bytes enough for every lookup, which gives a node nothing it could not have sent.
+    The `catch_unwind` stays for what the walk does not foresee. Both proof paths (REST and the peer protocol) go
+    through it. **Tests:** `a_malformed_proof_is_refused_without_a_panic` (120,000 mutated and random proofs
+    against the verifier with no `catch_unwind`), `an_honest_proof_from_a_large_tree_is_read_and_its_direction_bits_cannot_be_bent`,
+    `a_proof_nested_deeper_than_its_root_says_is_refused_before_it_is_labelled`, and in `tests/cli.rs`
+    `a_node_that_answers_with_a_proof_nested_too_deep_is_refused_and_the_wallet_carries_on`, which runs the built
+    binary against a node on this machine. The first two fail without the walk (a panic in the verifier); the last
+    aborts the binary without it. **Run:** a mainnet proof (1,734 B, height 1920676) read through the walk
+    (`runs/2026-11-19-proof-walk-mainnet.txt`); and, by hand, mutated headers (100,000), NiPoPoW proofs (3,000) and
+    random box and transaction bytes (100,000 each) through their decoders, with no panic. **Not run:** the phone
+    build, where any panic still ends the core (this is a fuzz of 120,000 proofs and one deep shape, not a proof that
+    none panics); a proof of a box that is there, from mainnet (one of absence was read); mutation of real boxes and
+    transactions (random bytes reach little of those decoders; see finding 57); a fuzzer guided by coverage. The
+    counts from the first measurement (350,000 proofs, about 290,000 panics, nine places) and the hand runs over
+    headers and NiPoPoW proofs have no log; the tests keep 120,000 proofs and six tree sizes (1 to 20,000 boxes).
+
+53. **A forged chain, run against a live client (2026-11-19).** The roadmap's second open item said a false tip
+    costs about ten headers at the floor when every connection is an attacker's, and that no forged chain had been
+    run against a live client. Now one is, in a test: headers are mined in the test with real Autolykos solutions at
+    a chosen difficulty above a checkpoint made for the test (its difficulty 64, the divisor 4, so a floor of 16 that
+    can be mined in seconds), stored in a state directory of their own, and served by the built `tachys serve` to the
+    built `tachys tips` over the peer protocol on this machine. What it shows, each with a control that agrees with
+    the same forger so that a refusal is not a forger that never answered: a chain below the floor is refused (its
+    tip is put aside unheard); the same chain at the floor is agreed on; a chain whose tip claims eight times the
+    work of the headers under it is refused (`UnsteadyDifficulty`); given an honest peer and a forger whose chain is
+    longer and higher but lighter, the client agrees on the honest tip; and a wallet that has agreed on a tip before
+    holds a later chain to half of it (32 here) and refuses the forger, while a wallet that never has takes it. Then
+    what a false tip is worth: the forger keeps a state tree of its own with one box in it paying the victim
+    (1,000 ERG), mines its root into every header, and answers the victim's proof request from it. A wallet that
+    has never agreed on a tip reports that box **proven, under an agreed tip, with a confirmation**. That test holds
+    the gap in place, so that closing it shows. Nothing changed in the wallet. **Tests:** `tests/forged_chain.rs`,
+    five, no network beyond this machine. **Run:** the tests. **Not run:** anything at mainnet's floor (what it costs
+    there is arithmetic on the checkpoint's difficulty, not measured); a forger that also lies over REST to a wallet
+    that has agreed on a tip before (the remembered floor should stop it at `tips`, as the test shows, but the
+    whole path was not run); the phone app.
+
+54. **A payee facing a dishonest payer: what the wallet says when a payment it was shown dies (2026-11-20).** The
+    roadmap listed "a double-spent receipt" as a rig test not yet run. `rig/dishonest-payer.sh` runs it: the cheat
+    is a second copy of the payer's wallet (the same phrase in another state directory) that spends the same coin
+    elsewhere, once before the payment reaches a block, and once after it has a confirmation, on a longer branch
+    mined while the payee's node is cut off, then joined. **What held:** neither receipt was ever accepted once
+    its payment was dead. **What was wrong.** (1) The payee held the signed payment (`wallet promise`); its own
+    `outbox` proved the coin gone ("input … is not an unspent box at height 73; dropped") and deleted it, but the
+    promised box stayed `expected`, so `accept` and `wait --receipt` would answer `not_yet` for ever: the wallet had
+    the answer and threw it away (seen on the rig). (2) A box confirmed and then taken away by a reorganisation was
+    reported "gone: spent (not by a payment of this wallet)", which tells a payee another wallet of its phrase moved
+    its money (shown by the test below against the binary from before the change). (3) Had that box come back,
+    it would have been reported `added`, so `first_seen` would have been true a second time and a payee doing as
+    `docs/agents.md` says would have counted one payment twice (read from the code). (4) For a private network the
+    wallet assumed mainnet's epoch of 128 blocks; the rig's devnet retargets every 16, and an honest retarget there
+    was refused as `UnsteadyDifficulty`. With 16 the refusal still came once in a later run (height 133, with one
+    miner at a time): the devnet's retargeting is not bounded as mainnet's is, and the payee's next sync, a block
+    on, agreed. **Changed.** When `outbox` drops a held payment for good, over REST or
+    the peer protocol, for any reason but "already on chain", the boxes it promised leave `expect` and are kept in
+    the wallet file's `void`; asked about, one is `void`, and `accept` answers `code: "failed"` (so `wait` stops). A
+    box records the header it was confirmed under (`confirmed_in`); if it is gone and the agreed chain has another
+    header at that height, it is `undone`, kept in `undone`, and `accept` answers `not_yet` with the reason; proven
+    again, it is not `added`. That judgement needs the header at that height in the stored chain (ten to sixteen
+    headers), so a deeper reorganisation still reads as `spent`. A network file may give `epoch_length`. Every rig
+    recipe's network file now says 16. `docs/json.md` and `docs/agents.md` describe the two states. **Not
+    changed:** a payee that has only a box id still cannot tell a double-spent receipt from a late one; `wait`
+    answers `not_yet` until it times out. **Tests:**
+    `a_promised_box_whose_payment_can_never_confirm_is_void_not_expected_for_ever` and
+    `a_box_whose_confirming_block_left_the_chain_is_undone_not_spent_and_is_the_same_payment_if_it_comes_back`
+    (`tests/cli.rs`, a node on this machine that proves from a state tree it holds); both fail against the binary
+    from before the change. 932 in the workspace. **Run:** the recipe on the rig, twice with the change
+    (`runs/2026-11-20-rig-dishonest-payer.txt`): part 1 went `expected`, then `void` once the payee's outbox
+    proved the coin gone; part 2 reorganised in one run, 60 blocks deep because the second node had stopped
+    following the first well before the split, and the payee's answer was the fallback, `spent`; in the other the
+    nodes did not reconnect and nothing was reorganised. **Not run:** a shallow reorganisation on the rig, where
+    `undone` would show (the rig switches a JVM node's mining only by relaunching it, and its solver mines only at
+    difficulty 1); `accept` and `wait` themselves on the rig (they need a quorum of network groups the rig does not
+    have; the recipe reads `wallet receive`, which `accept` reads); the phone app; the other four recipes since
+    their network files changed.
+
+55. **A first run links to the checkpoint; the forged-chain gap of finding 53 is closed by cost (2026-11-20).** A
+    wallet that had never agreed on a tip took ten headers at the release floor (about two and a half mainnet blocks
+    of work), and finding 53 showed that buys a box of 1,000 ERG that never existed reported `proven`. **Changed.**
+    A first run (no tip remembered) now links the agreed chain back to the release's checkpoint: every header
+    between is fetched and checked for work, floor and clock, and as a step the difficulty rule allows from the one
+    before (the next height, its parent, the same difficulty or, at an epoch's first block, half to one and a half
+    times it); and the tip must be at least as high as half the chain's pace since the checkpoint implies. A forger
+    must now mine every header from the checkpoint to such a height, falling at most by half an epoch and never below
+    the floor: with a checkpoint nine days old that is over 3,200 headers, all but the first 128 at no less than a
+    quarter of the checkpoint's difficulty, roughly 800 mainnet blocks of work, or more than a day of the whole
+    network's; with a checkpoint a day old, about 360 headers and four hours. The price grows with the checkpoint's
+    age, as the honest download does (arithmetic on the release's floor, not measured). Headers are fetched forward over the peer
+    protocol (`tachys_net::sync_forward`: offer a header, take the up to 400 ids announced after it, request them
+    in one message), not one per round trip. `tachys serve` answers such a request for what it holds, and a wallet
+    run with `tips --keep-chain` keeps and serves the chain back to the checkpoint, extended each run, so wallets
+    still bring each other up on a first run. A wallet that agreed on a tip before this change keeps its remembered
+    floor and is not made to link. Found on testnet and fixed in passing: a node announces each new block by its id,
+    and forward sync took one such announcement for the continuation; it now keeps only headers that are the child of
+    the one before. **Not changed:** what a first run costs: 1.7 MB and 15 s of linking (25 s in all) on mainnet
+    with a nine-day checkpoint, 3.7 MB and 3 min 45 s on testnet from one slow peer; more as a release's checkpoint
+    ages (about 0.2 MB and 1.8 s a day of age on mainnet). The review round (finding 59) changed how this runs. **Tests:**
+    `tests/forged_chain.rs`, six: the floor chain of finding 53 is now refused on a first run ("must link the
+    chain to the release checkpoint"), and so its fake payment is not proven; a forger that steps down within the
+    rule but has too few headers for the time since the checkpoint is refused ("half the height"); one that mines
+    them all is agreed on (the price is paid, and the test says so); the earlier refusals still hold. **Run:**
+    first runs on mainnet and testnet, a second run on mainnet, and the rig (`runs/2026-11-20-first-run-linkage.txt`);
+    the phone's first sync on the Note 2 linked to the testnet checkpoint (finding 58). **Not run:** a forger with real
+    work on any public network; a phone first run on mainnet.
+
+56. **A receipt known only by its box id is told late from double-spent (2026-11-20).** Finding 54 left this open:
+    from a box id alone, "not on chain yet" and "never will be" look the same, and `wait` answered `not_yet` until it
+    timed out. A box's id is a hash over its payment's id, which is a hash over the payment without its signatures,
+    so a node's pool can be asked for the payment and its body checked against the box id; its signatures must be
+    checked as well (as built here they were not: finding 59). **Changed.** `wallet receive --pools`
+    asks the nodes for a payment not yet in a block that makes a box asked about
+    (`/transactions/unconfirmed/outputs/byBoxId`, then the payment by its id), takes it only if, as read, it makes
+    that box id, and holds it as `wallet promise` does. A wallet's sync now also proves the coins of every payment it
+    holds for itself: one whose coin is gone, with none of its boxes there, at or below the agreed tip, is dead; what
+    it promised is `void` and it is put aside, with no `outbox` run needed. `accept` passes `--pools`, and its answer
+    carries `receipt.pending`: `true`, the payment is held and its coins unspent; `false`, no node asked holds one.
+    **Not changed:** a payment dropped from every pool before it is first asked about cannot be told from one never
+    sent. The review round (finding 59) found three faults in this and changed it. **Tests:** `a_receipt_known_only_by_its_box_id_is_told_late_or_double_spent_by_the_payment_a_node_holds_for_it`
+    (no pool: `absent`; a pool and the coin unspent: `expected`, held; the coin spent: `void`, put aside, by the sync
+    alone); the outbox test of finding 54 now shows the coin unspent first. **Run:** on mainnet, an output of a
+    payment in a node's pool asked about with `--pools`: fetched, read, its box id matched, and not held because it
+    pays another wallet. **Not run:** a double spend in a public pool; `accept` itself against one.
+
+57. **Bytes from nodes and peers fuzzed from seeds made in the tests; two leftovers of finding 51; a restored wallet
+    looks again (2026-11-20).** (1) Open item 12 said only box proofs had been fuzzed with any depth. Mutated from ones the wallet makes in the tests (bit
+    flips, bytes set, inserted, removed, repeated, set to 0, 0x7f, 0x80, 0xff): 100,000 signed transactions, 100,000
+    of their boxes and 100,000 signing requests through the signing library's decoders, none panicked; the vendored
+    peer codec's inventory, modifiers and sync messages (synthetic seeds), 300,000 mutated and 100,000 random, and the
+    handshake by random bytes, none panicked; 600
+    mutated signing requests through the built `tachys wallet request`, none crashed (221 still read as requests and
+    were shown). Nothing changed in the code for these; tests keep a share of each. (2) `serve --accept-parcels`
+    now refuses at the door a parcel whose bytes are not its transaction's own serialisation, and `outbox --rest`
+    sends the node JSON written from the checked bytes, never the stored `tx_json`; bytes that are not their own
+    serialisation are set aside unsent. (3) A restored wallet that found all twenty addresses empty kept the first
+    only, and a payment made later to another went unseen (open item 7). A restored wallet now looks over all twenty
+    again whenever it reconciles (`status --reconcile`, or a sync after a sign that another wallet of the phrase is at
+    work) and keeps any up to the last that holds a box, never fewer than before. (4) The store-and-forward recipe
+    failed once: the node was a block past the carrier's agreed tip, so the carrier, as built, kept the bad-input
+    parcel ("could not be checked") where the recipe wanted a refusal at once; the recipe now syncs and asks again.
+    The JSON of REST answers was not fuzzed. **Tests:** `a_mutated_transaction_box_or_signing_request_is_refused_without_a_panic`,
+    `a_mutated_signing_request_never_crashes_the_wallet`, `a_mutated_peer_message_is_refused_without_a_panic`,
+    `a_carried_payment_goes_to_a_node_as_its_bytes_say_and_padded_bytes_are_turned_away_at_the_door`,
+    `a_restored_wallet_looks_over_all_twenty_addresses_again_when_it_reconciles`. **Run:** the rig recipes
+    (`runs/2026-11-20-first-run-linkage.txt`, which records store-forward passing after the fix). **Not run:** a coverage-guided fuzzer; the phone build's decoders
+    on the phone.
+
+58. **The screens on the Note 2, and three things found there (2026-11-20).** Open item 6 asked for Send, Sign,
+    Restore and consolidation to be run on a phone after the last changes. All four were, on the Galaxy Note 2 over
+    adb on testnet, with Receive, Copy and the receipt check (`runs/2026-11-20-note2-screens.txt`); the payee's side
+    of each payment was proven from the command line. **Found and changed.** (1) A signing request that arrives while
+    the app is syncing, which it does as it opens, was dropped and the screen said "Reading…" for ever; it is now
+    read once the app is free. (2) With every box seen only in a block one node had shown (the one testnet node
+    mines and is a block past its peers: open item 9, met in practice), the card said "0 ERG · no boxes yet"; it now
+    shows the unconfirmed amount apart. (3) At the operator's request, the New, Restore and Read-only forms have a
+    way back to the three choices (a line at the top, and the phone's back button), not from the words to write down.
+    **Seen, not changed:** the testnet node listed none of the twenty addresses as holding a box when the first held
+    1000.41 ERG, so the restored wallet's first sync proved nothing (a node can hide a box; it cannot invent one);
+    the phone restarted once during the first restore, cause not known. **Tests:** none for the app's screens; the
+    runs are the evidence. **Not run:** the release build; mainnet on the phone; the camera; the Pixel 6.
+
+59. **Six seats over findings 51 to 58 before publication, and what they found (2026-11-20).** The working tree, cleaned
+    of wallet state and private files, was read by three seats with the project's context and one question each
+    (Derivation: does the changed code work, read before the findings and run; Fidelity: do the documents say more
+    than the code and logs; Maintainer: would a maintainer take it, and what will it cost to keep), one Claude with no
+    context, and two other vendors' models (Grok, Gemini) given only the tree. None is a person. The outside seats saw
+    the fixes for two weaknesses of the released v0.0.1 before any release carries them, by the operator's ruling
+    that material about to be made public may be checked by outside models first. No seat found a way to make a false
+    payment accepted or a false chain agreed. **Found, confirmed against the code, and changed.** (1) **A node could
+    make a real payment read `failed`.** A payment's id does not cover its signatures, so `--pools` could be handed
+    the true body with broken proofs; the outbox then failed the proofs and voided the receipt (no-context seat;
+    Fidelity confirmed the id with a probe). A payment from a pool is now held only if every coin it spends is proven
+    unspent and its spending proofs verify against them (`proofs::verifies`, shared with the carrier's check). (2)
+    **An honest chained payment was called void**: a coin made by a payment not yet in a block is in no box, like a
+    spent one (no-context). A coin is now taken for gone only if this wallet saw it unspent before (`coins_seen`, kept
+    with the held payment); the outbox keeps such a payment for the sync to judge. (3) **`--keep-chain` fetched the
+    whole chain from the checkpoint again** whenever fewer blocks than the agreed chain is long had come since the last
+    run (Derivation, by running it; Maintainer; no-context; Gemini). It starts from the kept chain now. (4) **A peer
+    could hold a first run for hours** by answering each round just in time (Derivation, no-context): a peer has five
+    minutes, the whole link fifteen; duplicate ids no longer stall a round. (5) **A failed first link was thrown away**
+    and began again from the checkpoint (Maintainer): what linked is kept in `linking.bin` and the next try goes on
+    from it. (6) **`outbox --rest` judged "in a block" by the first output only**, and could void a payee's box from a
+    payment that confirmed (Derivation, Gemini): all outputs are asked about. (7) **An undone box read `absent` when
+    asked again** (Gemini): it stays `undone`. (8) **A void payment whose coins came back** (what spent one was itself
+    undone) stayed void and unsent (Grok): it is held again and its boxes expected. Before a payment is called void it
+    is also asked to be proven in the chain (Gemini: a payment that confirmed and whose box was then spent looks the
+    same). (9) `--pools` held the wallet's own pending payments (Derivation): skipped. `receipt.pending: false` was
+    given when no node answered (Maintainer, Fidelity): `null` then, from a new `pools` field. `void` had two shapes
+    and was overwritten per payment (Maintainer, Fidelity): one shape, pushed. (10) A served chain could have a gap
+    (Maintainer): the kept part is served only if it joins the agreed chain. Refusals of a first run carry `code`
+    (`not_linked`, `below_pace`), the link reports `linked {from_height, headers, bytes, ms}`, and `outbox` counts
+    `unchecked` (Maintainer). A serving wallet answers up to 4,096 messages on one connection (Derivation: 256 capped
+    it at about 51,000 headers). (11) In the app: a request scanned after a refused one was never read (Gemini); the
+    back button left the words to write down although the new comment said it could not (Derivation, Maintainer,
+    Grok); the two notes on unconfirmed coins said different things (Maintainer, Fidelity). (12) Documents: the
+    README still said a false first tip costs ten headers and that a malformed proof can take the core down;
+    `good-neighbour.md` still said one sync message per connection, which a first run now breaks (Maintainer: its
+    new rule and the node source it rests on are now written there, with the node behaviour the code assumes);
+    `maintaining.md` now gives the cost of a first run per day of the checkpoint's age and says thirty days is
+    better than sixty; findings 52, 55, 56 and 57 said more than was shown (a fuzz called "any build", "real seeds",
+    "without trusting the node", a cost true only for a nine-day checkpoint) and are put right; `json.md` and
+    `agents.md` now describe linking, `--keep-chain`, `epoch_length`, `pools`, the void rule and the deep-reorganisation
+    case. **Not changed, and said:** `undone` keys on the height a box was first proven at and is not refreshed
+    (Derivation, no-context, Grok: a short reorganisation at that height, then a spend by another wallet of the
+    phrase, reads `undone`); `void` and `undone` keep the last 64; wallet files written by this build lose `void`,
+    `undone`, `confirmed_in` and `coins_seen` if an older build rewrites them; a first-run wallet that can reach only
+    serving wallets of the previous release cannot link (they do not answer a sync message); a wallet that agreed on a
+    tip before finding 55 is never made to link; the pace check rests on the device's clock; `wallet.json` is written
+    by `outbox` and a sync without a lock (Maintainer). The Miller prototype (`tachys-verify/src/miller.rs`) is not
+    part of this work, has no finding, and its header cites a file outside the tree (Maintainer, Fidelity): left to
+    the operator. **Tests:** `a_wallet_that_keeps_the_chain_does_not_fetch_it_again_from_the_checkpoint`;
+    `a_held_payment_whose_coin_was_never_seen_is_not_called_void` (with a coin that comes back); the pool test now
+    hands over a payment with one spending-proof byte changed and finds it not held; the undone test asks twice; the
+    forged-chain fixtures are written as `tips --keep-chain` leaves them. 941 in the workspace; one, in the vendored
+    codec (`concurrent_readers_over_budget_deadlock_without_slot_pool`), fails on a loaded machine and passes alone.
+    **Run:** after the changes, a first run on mainnet (6,141 headers, 1.78 MB, 18 s) and a second with
+    `--keep-chain` that fetched nothing (`runs/2026-11-20-first-run-linkage.txt`); on the rig, light-overlay,
+    offline-payee and store-forward PASS (the last two after they learned to ask again while a funding box is only
+    "seen", which is item 6 of the roadmap meeting the rig's timing). **Not run:** the phone after these changes (it
+    was not reachable; it ran before them: finding 58), and so not the app's three changes of this round; the
+    dishonest-payer recipe after them; light-wallet after them.
+
+    **Second round** (one no-context Claude over the fixed tree, as the outside seats read a text once). It found the
+    fixes for pool payments, the agreed-chain bounds, `undone` and serving sound, and four faults in the rest, each
+    confirmed against the code and changed. (a) A coin was written down as seen without the height it was seen at, so
+    a node a block behind, where the coin is not made yet, could make it look gone; and the outbox, judging that, deleted
+    what may be the payee's only copy. The height is kept with each coin, a proof from below it settles nothing, and the
+    outbox no longer judges a payment held for the wallet dead at all: it keeps it (or, if its signatures fail, puts it
+    aside, never deletes it) and leaves its fate to the sync. (b) `serve --accept-parcels` wrote the sender's JSON as
+    sent, over any payment already held: a peer could replace a good copy with the same payment and broken signatures,
+    or write its own `coins_seen` and `tx_id`. It writes only the id read from the bytes and the bytes, and never over a
+    file already there; the sync reads a payment's id from its bytes. (c) A first link that resumed and ran short went
+    back to the checkpoint and saved less than it had: it goes back only when what it had is off the chain. (d) A
+    payment held for the wallet was put aside after twenty refusals, as a chained one can be, and never sent again: it is
+    not, now. Also: `status` asks again about undone boxes; a serving wallet gives one peer five minutes at most.
+    **Tests:** the chained-payment test asks a node a block behind and finds the payment not void; the door test finds
+    only `tx_id` and `tx_bytes` in what was written; the outbox test finds the payment kept by the outbox and voided by
+    the sync, set aside, not deleted. 941 in the workspace; two of the vendored codec's concurrency tests
+    (`concurrent_readers_over_budget_*`) fail on a loaded machine and pass alone. **Run:** a first run on mainnet after
+    these changes (6,165 headers, 1.80 MB, 19 s). **Not run:** the rig after the second round's changes; the phone after
+    either round.

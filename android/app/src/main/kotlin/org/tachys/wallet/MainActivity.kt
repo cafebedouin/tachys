@@ -781,7 +781,12 @@ fun WalletCard(w: WalletView, onOpen: () -> Unit, onReceive: () -> Unit, onSend:
             Box(Modifier.size(44.dp).clickable { onConfig() }, contentAlignment = Alignment.Center) { Text("⚙", color = Color.White, fontSize = 24.sp) }
         }
         Erg(w.erg, 30)
-        Text(if (w.provenAt > 0) "proven at height ${w.provenAt} · " + (if (w.boxes == 1) "1 box" else "${w.boxes} boxes") else "no boxes yet", color = Dim, fontSize = 13.sp)
+        Text(when {
+            w.provenAt > 0 -> "proven at height ${w.provenAt} · " + (if (w.boxes == 1) "1 box" else "${w.boxes} boxes")
+            w.seen > 0 -> "nothing confirmed yet"
+            else -> "no boxes yet" }, color = Dim, fontSize = 13.sp)
+        // coins seen only in a block one node has shown are not in the balance, but they are there: say so, never "no boxes"
+        if (w.seen > 0) Text("+ " + BigDecimal(w.seen).movePointLeft(9).stripTrailingZeros().toPlainString() + " ERG seen in a block only one node has shown yet: not counted and not spent until the peers reach it", color = Dim, fontSize = 13.sp)
         if (w.tokens.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
             Text(tokenCount(w.tokens.size), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
@@ -806,16 +811,19 @@ fun readable(line: String): String = Regex("([+-]?)(\\d+) nanoERG").replace(line
 @Composable
 fun Request(core: Core, code: String, busy: Boolean, onCode: (String) -> Unit, ask: (String, Boolean, (String) -> Unit) -> Unit) {
     var scanning by remember { mutableStateOf(code.isEmpty()) }
-    var summary by remember { mutableStateOf(listOf<String>()) }
-    var problem by remember { mutableStateOf("") }
-    var done by remember { mutableStateOf("") }
+    // keyed to the request: a new one scanned after a refusal is read afresh, not left behind the old answer
+    var summary by remember(code) { mutableStateOf(listOf<String>()) }
+    var problem by remember(code) { mutableStateOf("") }
+    var done by remember(code) { mutableStateOf("") }
     fun read(c: String) = ask(c, false) { r ->
         val j = try { JSONObject(r) } catch (e: Exception) { null }
         val lines = j?.optJSONArray("lines")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: listOf()
         if (lines.isNotEmpty()) { summary = lines; problem = "" }
         else { summary = listOf(); problem = j?.optString("error")?.takeIf { it.isNotEmpty() } ?: r.lines().lastOrNull { it.isNotBlank() } ?: "could not read the request" }
     }
-    LaunchedEffect(code) { if (code.isNotEmpty() && summary.isEmpty() && problem.isEmpty()) read(code) }
+    // read once the app is free: a request that arrives while a sync runs (the app syncs as it opens) was dropped, and the
+    // screen said "Reading…" for ever (found on the Note 2)
+    LaunchedEffect(code, busy) { if (code.isNotEmpty() && summary.isEmpty() && problem.isEmpty() && !busy) read(code) }
     if (scanning) { Scanner("Scan a request to sign", { scanning = false; onCode(it.trim()) }, { scanning = false }); return }
     CardBox {
         Text("Request to sign", color = Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
@@ -1173,6 +1181,13 @@ fun AddWallet(core: Core, guard: Guard, onDone: () -> Unit) {
     var scanning by remember { mutableStateOf(false) }
     if (scanning) { Scanner("Scan an address to watch", { address = addressFromCode(it); scanning = false }, { scanning = false }); return }
     @Composable fun NameField() { Field(name, "wallet name (optional)", words = true) { name = it.take(40) }; Spacer(Modifier.height(8.dp)) }
+    // back from a form to the three choices, by the line at its top or the phone's back button. A phrase half typed is
+    // dropped on the way out. Not from the words to write down: those are seen through to the end.
+    val leave = { mode = ""; msg = ""; phrase = ""; address = "" }
+    BackHandler(enabled = mode == "new" || mode == "restore" || mode == "watch") { leave() }
+    // the words to write down: the back button does nothing here; the only way on is "I have written them down"
+    BackHandler(enabled = mode == "words") { }
+    @Composable fun BackLine() { Text("‹  Back", color = Accent, fontSize = 16.sp, modifier = Modifier.fillMaxWidth().clickable { leave() }.padding(bottom = 10.dp)) }
     when (mode) {
         "" -> {
             CardBox({ mode = "new"; msg = "" }) {
@@ -1189,6 +1204,7 @@ fun AddWallet(core: Core, guard: Guard, onDone: () -> Unit) {
             }
         }
         "new" -> CardBox {
+            BackLine()
             Text("New wallet", color = Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             NameField()
@@ -1214,6 +1230,7 @@ fun AddWallet(core: Core, guard: Guard, onDone: () -> Unit) {
         }
         "restore" -> CardBox {
             Secure() // a phrase being typed is as secret as one being shown
+            BackLine()
             Text("Restore wallet", color = Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             NameField()
@@ -1231,6 +1248,7 @@ fun AddWallet(core: Core, guard: Guard, onDone: () -> Unit) {
             }
         }
         "watch" -> CardBox {
+            BackLine()
             Text("Read-only wallet", color = Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             NameField()

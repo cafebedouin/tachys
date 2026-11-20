@@ -1,0 +1,36 @@
+The app's screens on a Galaxy Note 2 (SGH-T889, LineageOS, Android 7.1.2) over adb on the local network, testnet,
+2026-11-20 (finding 58). Debug build (`assembleDebug`, armeabi-v7a) of this tree, installed fresh. Driven with
+`adb shell input` and `uiautomator dump`; every step that opens the seed phrase raised Android's screen-lock prompt,
+and the phone's owner entered the password by hand. The wallet restored is a test wallet of the operator's; it turned
+out to be the same phrase as the repo's `state-testnet-payer`. The payee is the repo's `state-testnet-payee`. Ids cut
+short; the phrase is not recorded.
+
+Restore: name and 24 words typed in pieces (the phone takes no more at once), Restore, screen lock. The wallet
+appeared and its first sync linked to the testnet checkpoint (about 11,000 headers) and agreed on a tip; its boxes were
+not proven, because the testnet node listed none of the twenty addresses as holding a box though the first held
+1000.41 ERG (`wallet status --reconcile` run in the app's sandbox with `run-as`: "lists 0 unspent boxes" at each).
+The phone restarted once during the first try; the restore was redone and went through.
+
+Funded from the CLI copy of the same wallet: two boxes of 1 ERG in one payment (tx a16e56f2…).
+Receive: the address shown; Copy address -> "Copied to the clipboard"; Have a receipt? -> box 98bc6033… ->
+  "Accepted: proven unspent at block 654342 under the tip the peers agree on, and it pays this wallet."
+Sync: 1000.4089 ERG, 3 boxes, 1 token (TACH, marked as a node's word).
+Send: 0.5 ERG to the payee, memo "phone test"; screen lock; "Sent 0.5 ERG. Fee 0.0011 ERG." The payee's CLI later
+  proved box b7ee2067… of 0.5 ERG.
+Details -> Boxes -> "Consolidate 2 boxes into one"; screen lock; "Sent." The merged box 3a040eb5… (999.4078 ERG)
+  was then proven from the CLI.
+Found: after that sync the card read "0 ERG · no boxes yet". The core (run in the sandbox) had both boxes, seen only
+  in a block the one testnet node had shown (it mines, and is a block past the peers). Fixed: the card shows the
+  unconfirmed amount apart ("nothing confirmed yet · + 999.9067 ERG seen in a block one node has shown, not yet
+  confirmed"); seen on the phone after the fix.
+Sign: a request built by the CLI (`wallet send --request-out`, 0.1 ERG to the payee) opened as an ergopay: link.
+Found: the screen said "Reading…" for ever. The app reads a request through the same queue as a sync, which drops a
+  job while another runs, and the app syncs as it opens. Fixed: the request is read once the app is free. After the
+  fix: "You give: 0.4989 ERG / You get back: 0.3978 ERG / Others receive: 0.1 ERG / Network fee: 0.0011 ERG / Net for
+  you: -0.1011 ERG"; Sign and send; screen lock; "Signed and sent." The payee proved box ec664dd8… of 0.1 ERG.
+Added at the operator's request: a "‹ Back" line on the New, Restore and Read-only forms, and the phone's back button
+  there, to the three choices. Tried on the phone: Restore -> Back, New -> back button, Read-only -> Back; each
+  returned to the choices.
+
+Not run: the release build; a first run on mainnet on the phone; the Scan screen with the camera; Settings; History;
+the Pixel 6.

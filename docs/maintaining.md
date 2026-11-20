@@ -7,11 +7,15 @@ call this one. Written for one person.
 
 1. **The checkpoint** (`anchors/mainnet.json`, `anchors/testnet.json`). A tip is accepted above a difficulty floor
    that starts at a quarter of the checkpoint's difficulty (a 1024th on testnet) and halves every thirty days,
-   with no lower bound. A fresh install has nothing else to go by, so the ten headers a false first tip needs cost
-   about five minutes of the whole network's hashrate at first, half that after thirty days, and a few seconds
-   after six months. Nothing breaks when a checkpoint is old: `tachys version` and every `tips` answer say its age
-   (`checkpoint_age_days`), and `tips` warns past sixty days. **A build is good for sixty days from its
-   checkpoint.** To refresh: take a header at least a day behind the tip from a node you run or trust
+   with no lower bound. A fresh install also links its first chain back to the checkpoint (finding 55): every header
+   since it, a step the difficulty rule allows, up to at least half the height the time since implies. So a false
+   first tip costs every one of those headers at no less than the floor (about four hours of the whole network's
+   work with a checkpoint a day old, about a day's at nine days), and an honest first run fetches them all: about
+   0.2 MB and 1.8 s a day of the checkpoint's age on mainnet (1.7 MB at nine days; about 12 MB and two minutes at
+   sixty), more on testnet (3.7 MB at seven days). The floor's halving makes an old checkpoint weaker, and the
+   download makes it dearer to start from: a release should carry one a few days old. Nothing breaks when a
+   checkpoint is old: `tachys version` and every `tips` answer say its age (`checkpoint_age_days`), and `tips` warns
+   past sixty days. **A build is good for sixty days from its checkpoint; thirty is better.** To refresh: take a header at least a day behind the tip from a node you run or trust
    (`GET /blocks/at/HEIGHT`, then `GET /blocks/ID/header`), check its id on a second source, and replace the file
    with that JSON. `cargo test --workspace` must still pass (the test vectors are above the old checkpoint; if the
    new one is above them, the vectors need refreshing too: `crates/tachys-verify/tests/`).

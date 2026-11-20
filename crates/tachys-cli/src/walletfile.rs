@@ -63,6 +63,14 @@ pub(crate) struct WalletFile {
     /// Boxes this wallet expects to appear: change from its own payments, and boxes promised to it.
     #[serde(default, deserialize_with = "or_default", skip_serializing_if = "Vec::is_empty")]
     pub(crate) expect: Vec<String>,
+    /// Boxes promised to this wallet (it held the payment) whose payment can never confirm: a coin it spends is gone,
+    /// or it was refused for good. Newest last; the last 64.
+    #[serde(default, deserialize_with = "or_default", skip_serializing_if = "Vec::is_empty")]
+    pub(crate) void: Vec<String>,
+    /// Boxes this wallet had confirmed that left the chain with the block that confirmed them (a reorganisation). If
+    /// one is proven again it is not new: it is the same payment back. Newest last; the last 64.
+    #[serde(default, deserialize_with = "or_default", skip_serializing_if = "Vec::is_empty")]
+    pub(crate) undone: Vec<String>,
     /// Payments sent and not yet settled.
     #[serde(default, deserialize_with = "or_default", skip_serializing_if = "Vec::is_empty")]
     pub(crate) pending: Vec<Pending>,
@@ -94,6 +102,10 @@ pub(crate) struct TrackedBox {
     /// the first height at or below an agreed tip at which it was proven; `None` while only seen above one
     #[serde(default)]
     pub(crate) confirmed_at: Option<u64>,
+    /// the id of the header at `confirmed_at` the proof was read against: if the chain the peers agree on later has
+    /// another header there, the block that confirmed it is gone
+    #[serde(default, deserialize_with = "or_default", skip_serializing_if = "String::is_empty")]
+    pub(crate) confirmed_in: String,
     /// the box itself, in hex; it must hash to the id it is filed under to be used
     #[serde(default, deserialize_with = "or_default")]
     pub(crate) bytes: String,

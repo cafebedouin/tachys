@@ -24,7 +24,7 @@ gen="$(header_at A 1)"; cph=$(( $(full_height A) - 12 )); cpid="$(header_at A "$
 rest A "/blocks/$cpid/header" > "$W/cp.json"
 printf '%s:%s\n%s:%s\n' "${IP[A]}" "${P2P[A]}" "${IP[B]}" "${P2P[B]}" > "$W/seeds.txt"
 jq -n --arg g "$gen" --arg seeds "$W/seeds.txt" --argjson magic "$MAGIC" --slurpfile cp "$W/cp.json" \
-  '{name:"devnet", magic:$magic, genesis:$g, checkpoint:$cp[0], floor_divisor:1048576, v2_activation_height:0, block_interval_ms:3000, seeds:$seeds}' > "$NETF"
+  '{name:"devnet", magic:$magic, genesis:$g, checkpoint:$cp[0], floor_divisor:1048576, v2_activation_height:0, block_interval_ms:3000, epoch_length:16, seeds:$seeds}' > "$NETF"
 echo "[tachys] checkpoint height $cph, header version $(jq -r .version "$W/cp.json"), peers $(tr '\n' ' ' < "$W/seeds.txt")"
 
 echo "[tachys] 1. tip sync"

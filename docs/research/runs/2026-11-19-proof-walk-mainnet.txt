@@ -1,0 +1,16 @@
+A box proof from mainnet read through the new walk and depth bound (finding 52), release build, 2026-11-19.
+A wallet made for the run (no funds, no address of the project's), nodes found with --node auto. The box id asked
+about was 32 random bytes, so the proof is one of absence: it walks the state tree from its root to a leaf, as a
+proof of a box does.
+
+$ tachys tips --state W
+verdict: Agreed
+tip: height 1920676 id 76369e12… (353 s old)
+
+$ tachys wallet receive --state W --node auto --ids c0af4715…
+  c0af4715…  ABSENT at height 1920676: not accepted
+balance 0.000000000 ERG in 0 boxes, proven at height 1920676
+cost: 1 requests, 68 B sent, 1734 B received
+
+The proof (1734 B) was walked, found no deeper than the height its root names allows, padded, and read: an honest
+mainnet proof is not refused by the bound. A proof of a box that is there was not asked for in this run.

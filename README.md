@@ -57,7 +57,9 @@ tachys history --state DIR
 
 `docs/agents.md` has the rest; `docs/json.md` has the other commands' fields (all of them take `--json`); a Rust
 program can call the wallet in its own process with `tachys::call(args, input)` (in a build that aborts on a
-panic, as the phone's does, a malformed proof can still take the caller down with it: `docs/roadmap.md`).
+panic, as the phone's does, a panic anywhere takes the caller down with it; the malformed proofs that caused one are
+refused before they reach the verifier, and the other decoders were fuzzed without one, but that is a fuzz, not a
+proof: `docs/roadmap.md`).
 
 ## For a phone
 
@@ -85,12 +87,16 @@ reproducible ones: building your own is as good, and for money, better.
 ## What it trusts
 
 - **A checkpoint shipped with each release.** A tip is accepted if it links back ten headers of real work above
-  a difficulty floor that decays from that checkpoint, and peers in several network groups have reached it. This
-  is checkpointed SPV, not full NiPoPoW security (see below).
-- **Work, as far as ten headers go.** Tips are ranked by the difficulty they claim; a lighter chain is refused
-  while a heavier tip is heard; the floor remembers the last tip this wallet agreed on. With every connection
-  in an attacker's hands a false tip still costs about ten headers at that floor, so a large incoming payment
-  should wait for more confirmations.
+  a difficulty floor that decays from that checkpoint, and peers in several network groups have reached it. On a
+  wallet's first run the chain must also link all the way back to that checkpoint, every header a step the
+  difficulty rule allows, and reach at least half the height the time since the checkpoint implies. This is
+  checkpointed SPV, not full NiPoPoW security (see below).
+- **Work.** Tips are ranked by the difficulty they claim; a lighter chain is refused while a heavier tip is heard;
+  the floor remembers the last tip this wallet agreed on. With every connection in an attacker's hands, a false tip
+  for a wallet's first run costs every header from the checkpoint to that height: on mainnet, about four hours of
+  the whole network's work with a checkpoint a day old, about a day's with one nine days old (arithmetic, not
+  measured). Later runs hold new tips to what was agreed before. A large incoming payment should still wait for
+  more confirmations.
 - **One block's work, for a block only one source has shown.** Such a block is read, but a box proven only there
   is "seen": it is not confirmed, not counted in the balance and not spent until the peers reach that block.
 - **On testnet, much less.** Testnet's own difficulty is so low that the floor there is nothing: testnet shows that
@@ -100,9 +106,10 @@ reproducible ones: building your own is as good, and for money, better.
   It does learn what any node asked learns: the addresses looked up and the payments sent, and so does anyone on
   the path, since most nodes are asked over plain HTTP. A token's name and decimal places are a node's word, and
   are marked as such.
-- **Its own age.** The difficulty floor halves every thirty days from the release's checkpoint, so an old build
-  is easier to fool on its first run than a new one. `tachys version` says how old the checkpoint is; past sixty
-  days, take a newer build (`docs/maintaining.md`).
+- **Its own age.** The difficulty floor halves every thirty days from the release's checkpoint, and a first run
+  fetches every header since it (about 0.2 MB a day of the checkpoint's age on mainnet), so an old build costs more
+  to start and its floor protects less. `tachys version` says how old the checkpoint is; past sixty days, take a
+  newer build (`docs/maintaining.md`).
 
 ## Where it sits
 
