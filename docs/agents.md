@@ -82,7 +82,8 @@ block), `timeout`, `node_refused`, `outcome_unknown`, `misuse`, `failed`.
 - Token payments: `--token ID --token-amount RAW` in place of `--erg` (raw units, no decimals). The
   policy must allow the token and set its limits.
 - `pay --dry-run` answers what would leave the wallet (`would_leave_wallet_nanoerg`, fee included)
-  or why it would be refused, and signs nothing.
+  or why it would be refused, and signs nothing. On a sealed wallet given no password it still answers: it previews
+  the policy's verdict without unlocking the seed phrase (a wrong password, by contrast, is refused).
 
 ## The policy file: limits on every signature
 With `DIR/policy.json` in place, every command that signs is held to it, not only `pay`: `wallet send`,
