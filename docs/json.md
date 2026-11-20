@@ -48,6 +48,7 @@ agreed tip), `expecting`, `cost`. `checked` lists each box asked about: `id`, `h
 | `other_address` | it exists and pays someone else |
 | `undecodable` | present, but not a box this build can read |
 | `absent_above_agreed_tip` | a tracked box absent in a block the peers have not reached: kept |
+| `absent_below_confirmed` | a tracked box absent in a block below the one it was confirmed at (the node is behind; the box did not exist yet there): kept |
 
 `payments` lists what became of payments sent: `tx` and `result` (`waiting`, `confirmed`, `coins spent`,
 `not included`). A payment proven to be in a block though its boxes are gone is `confirmed` with `height` and

@@ -977,7 +977,7 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
     // at or below the agreed tip; a proof above it can add what it shows (marked as seen) and settles nothing.
     let settled = height <= agreed;
     // each box asked about, for a program: its id, what the proof showed ("proven": unspent and ours, at or below the agreed
-    // tip; "seen": the same above it; "absent"; "spent"; "expected"; "other_address"; "undecodable"; "absent_above_agreed_tip")
+    // tip; "seen": the same above it; "absent"; "spent"; "expected"; "other_address"; "undecodable"; "absent_above_agreed_tip"; "absent_below_confirmed")
     let checked = |id: &str, state: &str| crate::out::push("checked", serde_json::json!({ "id": id, "state": state, "height": height }));
     let mut expect: Vec<String> = w.expect.clone();
     // What became of the payments this wallet sent, read off the same proof as the balance (`payment_outcome`).
@@ -1083,6 +1083,12 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
             None if quiet.contains(id) && !boxes.contains_key(id) && !expect.contains(id) => { if sub == "receive" { checked(id, "spent"); say!("  {id}  not unspent at height {height}: a payment of this wallet spent it"); } }
             Some(Ok(b)) if !my_trees.contains(&b.ergo_tree) && quiet.contains(id) => {}
             None if !settled && boxes.contains_key(id) => { checked(id, "absent_above_agreed_tip"); say!("  {id}  absent at height {height}, above the tip the peers agree on ({agreed}): kept until they reach it") }
+            // A proof can be against a stored header below the one this box was confirmed at (a node a block or two behind):
+            // there the box did not exist yet, and its absence says nothing of its being spent.
+            None if boxes.get(id).and_then(|b| b.confirmed_at).is_some_and(|c| c > height as u64) => {
+                let c = boxes.get(id).and_then(|b| b.confirmed_at).unwrap_or(0);
+                checked(id, "absent_below_confirmed"); say!("  {id}  absent at height {height}, below where it was confirmed ({c}): kept")
+            }
             None => { if boxes.remove(id).is_some() { checked(id, "spent"); if !spent_by_us.contains(id) { refresh = true; } say!("  {id}  gone at height {height}: spent{}; removed", if spent_by_us.contains(id) { "" } else { " (not by a payment of this wallet)" }); } else if expect.contains(id) { checked(id, "expected"); say!("  {id}  expected from our own payment, not on chain yet at {height}"); } else { checked(id, "absent"); say!("  {id}  ABSENT at height {height}: not accepted"); } }
             Some(Err(_)) => { checked(id, "undecodable"); say!("  {id}  present but undecodable: not accepted") }
             Some(Ok(b)) if !my_trees.contains(&b.ergo_tree) => { checked(id, "other_address"); say!("  {id}  exists but pays another address: not accepted") }
