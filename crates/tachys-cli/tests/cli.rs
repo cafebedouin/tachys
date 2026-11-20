@@ -173,6 +173,34 @@ fn a_dry_run_reports_what_the_payment_would_do_and_signs_nothing() {
 }
 
 #[test]
+fn a_carried_payment_whose_stored_bytes_are_not_its_own_serialisation_is_set_aside_and_never_sent() {
+    let payer = funded("canon-payer");
+    let parcel = format!("{payer}/parcel.json");
+    assert_eq!(tachys(&["wallet", "send", "--state", &payer, "--to", &text(&address(1)), "--nanoerg", "2000000000", "--parcel-out", &parcel, "--json"]).code, 0);
+    let good: Value = serde_json::from_slice(&std::fs::read(&parcel).unwrap()).unwrap();
+    let id = good["tx_id"].as_str().unwrap().to_string();
+    // the same transaction with one byte after its end: it still reads as that transaction, with that id
+    let mut bad = good.clone();
+    bad["tx_bytes"] = format!("{}00", good["tx_bytes"].as_str().unwrap()).into();
+    // a carrier with no chain of its own and a peer that is not there: nothing here can reach a network
+    let peer = dead_node().replace("http://", "");
+    let carrier = dir("canon-carrier");
+    std::fs::create_dir_all(format!("{carrier}/outbox")).unwrap();
+    std::fs::write(format!("{carrier}/outbox/{id}.json"), bad.to_string()).unwrap();
+    let r = tachys(&["outbox", "--state", &carrier, "--peer", &peer, "--json"]);
+    let j = r.json();
+    assert_eq!((r.code, &j["submitted"], &j["refused"]), (0, &0.into(), &1.into()), "{}", r.err);
+    assert!(r.err.contains("not the transaction's own serialisation"), "{}", r.err);
+    assert!(!std::path::Path::new(&format!("{carrier}/outbox/{id}.json")).exists(), "out of the queue");
+    assert_eq!(std::fs::read_to_string(format!("{carrier}/given-up/{id}.json")).unwrap(), bad.to_string(), "and kept as it was, not deleted");
+    // the payment as it was written passes this check and waits for the ones that need a chain
+    std::fs::write(format!("{carrier}/outbox/{id}.json"), good.to_string()).unwrap();
+    let r = tachys(&["outbox", "--state", &carrier, "--peer", &peer, "--json"]);
+    assert_eq!((r.code, &r.json()["refused"]), (0, &0.into()), "{}", r.err);
+    assert!(r.err.contains("could not be checked") && std::path::Path::new(&format!("{carrier}/outbox/{id}.json")).exists(), "{}", r.err);
+}
+
+#[test]
 fn sent_means_a_node_took_it_whatever_words_a_node_uses() {
     let payee = text(&address(1));
     let send = |st: &str, nodes: &str| tachys(&["wallet", "send", "--state", st, "--to", &payee, "--nanoerg", "1000000000", "--node", nodes, "--broadcast", "--json"]);
@@ -333,4 +361,400 @@ fn an_agent_command_answers_in_one_shape_whatever_happens() {
     let r = tachys(&["wallet", "mnemonic", "--state", &st, "--json"]);
     let phrase = r.json()["mnemonic"].as_str().unwrap().to_string();
     assert!(phrase.split(' ').count() == 12 && !r.err.contains(&phrase));
+}
+
+#[test]
+fn a_node_that_answers_with_a_proof_nested_too_deep_is_refused_and_the_wallet_carries_on() {
+    // A proof 100,000 levels deep (3.4 MB, under what a node's answer may be): before the proof was walked first,
+    // labelling it overflowed the stack and the process aborted, in every build.
+    let st = funded("deep-proof");
+    // the stored chain must be recent for a proof to be asked for at all; nothing checks its work once it is stored
+    let mut h: ergo_chain_types::Header = serde_json::from_str(include_str!("../../../anchors/mainnet.json")).unwrap();
+    h.timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    let b = h.scorex_serialize_bytes().unwrap();
+    let mut chain = vec![];
+    for _ in 0..10 { chain.extend_from_slice(&(b.len() as u16).to_be_bytes()); chain.extend_from_slice(&b); }
+    std::fs::write(format!("{st}/agreed-chain.bin"), chain).unwrap();
+    let mut p = vec![3u8]; p.extend([7u8; 32]);
+    for _ in 0..100_000 { p.push(3); p.extend([8u8; 32]); p.push(0); }
+    p.push(4); p.extend([0u8; 64]);
+    let body: &'static str = Box::leak(format!("\"{}\"", p.iter().map(|x| format!("{x:02x}")).collect::<String>()).into_boxed_str());
+    let (url, _) = node(200, body);
+    let r = tachys(&["wallet", "receive", "--state", &st, "--node", &url, "--ids", &"ab".repeat(32), "--json"]);
+    assert_eq!(r.code, 1, "{}", r.err);
+    assert_eq!(r.json()["ok"], false, "{}", r.out);
+}
+
+/// Ten headers stored as the agreed chain: the release's checkpoint, made recent, with `root` as its state root, and
+/// agreed at its height, so that a proof against `root` is settled. Returns the header.
+fn chain_over(st: &str, root: &[u8]) -> ergo_chain_types::Header { chain_over_at(st, root, 0) }
+/// The same, the header `lower` heights below the checkpoint's: a chain as a node that is behind would show it.
+fn chain_over_at(st: &str, root: &[u8], lower: u32) -> ergo_chain_types::Header {
+    let mut h: ergo_chain_types::Header = serde_json::from_str(include_str!("../../../anchors/mainnet.json")).unwrap();
+    h.height -= lower;
+    h.timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    h.state_root = ergo_chain_types::ADDigest::try_from(root.to_vec()).unwrap();
+    let b = h.scorex_serialize_bytes().unwrap();
+    let h = ergo_chain_types::Header::scorex_parse_bytes(&b).unwrap();
+    let mut chain = vec![];
+    for _ in 0..10 { chain.extend_from_slice(&(b.len() as u16).to_be_bytes()); chain.extend_from_slice(&b); }
+    std::fs::write(format!("{st}/agreed-chain.bin"), chain).unwrap();
+    std::fs::write(format!("{st}/agreed-tip.bin"), &b).unwrap();
+    h
+}
+/// A state tree holding `held` (box bytes, each filed under its hash) and one box of filler.
+fn tree(held: &[Vec<u8>]) -> ergo_avltree_rust::batch_avl_prover::BatchAVLProver {
+    use ergo_avltree_rust::batch_node::{AVLTree, Node, NodeHeader};
+    use ergo_avltree_rust::operation::{KeyValue, Operation};
+    let mut p = ergo_avltree_rust::batch_avl_prover::BatchAVLProver::new(AVLTree::new(|d| Node::LabelOnly(NodeHeader::new(Some(*d), None)), 32, None), true);
+    for v in held.iter().cloned().chain(std::iter::once(vec![7u8; 60])) {
+        let k = sigma_util::hash::blake2b256_hash(&v);
+        p.perform_one_operation(&Operation::Insert(KeyValue { key: bytes::Bytes::copy_from_slice(k.as_ref()), value: bytes::Bytes::from(v) })).unwrap();
+    }
+    p.generate_proof();
+    p
+}
+/// A node on this machine with the state tree of `held`: it proves what it is asked from that tree, refuses every
+/// payment as a double spend, and has nothing else. Returns its address and the tree's root.
+fn tree_node(held: Vec<Vec<u8>>) -> (String, Vec<u8>) { tree_node_with(held, None) }
+/// The same, with a payment in its pool of payments not yet in a block (the transaction's id and its JSON), served as a
+/// node serves `/transactions/unconfirmed/...`.
+fn tree_node_with(held: Vec<Vec<u8>>, pool: Option<(String, String)>) -> (String, Vec<u8>) { tree_node_full(held, pool, None) }
+/// The same, also listing one address's unspent boxes (the address, a box id), as `/blockchain/box/unspent/byAddress`
+/// does; every other address holds nothing.
+fn tree_node_full(held: Vec<Vec<u8>>, pool: Option<(String, String)>, listed: Option<(String, String)>) -> (String, Vec<u8>) {
+    use ergo_avltree_rust::authenticated_tree_ops::AuthenticatedTreeOps;
+    use ergo_avltree_rust::operation::Operation;
+    let root = tree(&held).digest().unwrap().to_vec();
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", l.local_addr().unwrap());
+    std::thread::spawn(move || for c in l.incoming() {
+        let Ok(mut c) = c else { continue };
+        let (mut buf, mut chunk) = (vec![], [0u8; 4096]);
+        let (head, body) = loop {
+            match c.read(&mut chunk) { Ok(0) | Err(_) => break (String::new(), String::new()), Ok(n) => buf.extend_from_slice(&chunk[..n]) }
+            let t = String::from_utf8_lossy(&buf).to_string();
+            if let Some((h, b)) = t.split_once("\r\n\r\n") {
+                let want: usize = h.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse().unwrap_or(0))).unwrap_or(0);
+                if b.len() >= want { break (h.to_string(), b.to_string()) }
+            }
+        };
+        let (status, answer) = if head.contains("/blockchain/box/unspent/byAddress") {
+            match &listed { Some((a, b)) if body.trim() == a => (200, format!(r#"[{{"boxId":"{b}"}}]"#)), _ => (200, "[]".to_string()) }
+        } else if head.contains("/utxo/getBoxesBinaryProof") {
+            let ids: Vec<String> = serde_json::from_str(&body).unwrap_or_default();
+            let mut p = tree(&held);
+            for id in &ids { let k: Vec<u8> = (0..id.len() / 2).map(|i| u8::from_str_radix(&id[2 * i..2 * i + 2], 16).unwrap()).collect(); p.perform_one_operation(&Operation::Lookup(bytes::Bytes::from(k))).unwrap(); }
+            (200, format!("\"{}\"", p.generate_proof().iter().map(|b| format!("{b:02x}")).collect::<String>()))
+        } else if let (true, Some((txid, json))) = (head.contains("/transactions/unconfirmed/"), &pool) {
+            // the pool: the payment's outputs by box id, and the payment by its id
+            let tx: Value = serde_json::from_str(json).unwrap();
+            let line = head.lines().next().unwrap_or("");
+            match tx["outputs"].as_array().unwrap().iter().find(|o| line.contains(&format!("/outputs/byBoxId/{}", o["boxId"].as_str().unwrap()))) {
+                Some(o) => { let mut o = o.clone(); o["transactionId"] = txid.clone().into(); (200, o.to_string()) }
+                None if line.contains(&format!("/byTransactionId/{txid}")) => (200, json.clone()),
+                None => (404, r#"{"error":404}"#.to_string()),
+            }
+        } else if head.contains("/transactions/unconfirmed/") { (404, r#"{"error":404}"#.to_string())
+        } else if head.contains("/transactions") { (400, r#"{"error":400,"reason":"bad.request","detail":"double spend"}"#.to_string()) } else { (404, "{}".to_string()) };
+        let _ = c.write_all(format!("HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}", answer.len()).as_bytes());
+    });
+    (url, root)
+}
+fn state_of(r: &Ran, id: &str) -> Option<String> { r.json()["checked"].as_array()?.iter().find(|c| c["id"] == id).and_then(|c| c["state"].as_str()).map(String::from) }
+
+#[test]
+fn a_promised_box_whose_payment_can_never_confirm_is_void_not_expected_for_ever_and_never_deleted() {
+    // Seen on the rig (`rig/dishonest-payer.sh`): a payee held a signed payment; the payer spent the same coin first.
+    // The payee's own outbox proved the coin gone and dropped the payment, but the box it promised stayed "expected",
+    // so `accept` and `wait --receipt` answered "not yet" for ever.
+    let payer = funded("void-payer");
+    let payee = dir("void-payee");
+    let to = tachys(&["wallet", "new", "--state", &payee, "--json"]).json()["address"].as_str().unwrap().to_string();
+    // the payer's coin, read before it pays
+    let w: Value = serde_json::from_str(&std::fs::read_to_string(format!("{payer}/wallet.json")).unwrap()).unwrap();
+    let coin = w["boxes"].as_object().unwrap().values().next().unwrap()["bytes"].as_str().unwrap().to_string();
+    let coin: Vec<u8> = (0..coin.len() / 2).map(|i| u8::from_str_radix(&coin[2 * i..2 * i + 2], 16).unwrap()).collect();
+    let parcel = format!("{payer}/parcel.json");
+    let sent = tachys(&["wallet", "send", "--state", &payer, "--to", &to, "--nanoerg", "2000000000", "--parcel-out", &parcel, "--json"]).json();
+    let receipt = sent["receipt"][0].as_str().unwrap().to_string();
+    let p: Value = serde_json::from_slice(&std::fs::read(&parcel).unwrap()).unwrap();
+    assert_eq!(tachys(&["wallet", "promise", "--state", &payee, "--tx", p["tx_bytes"].as_str().unwrap(), "--json"]).code, 0);
+    // first the payer's coin is unspent: the payment is on its way
+    let (before, root) = tree_node(vec![coin]);
+    chain_over(&payee, &root);
+    let r = tachys(&["wallet", "receive", "--state", &payee, "--node", &before, "--ids", &receipt, "--json"]);
+    assert_eq!(state_of(&r, &receipt).as_deref(), Some("expected"), "before: {}", r.err);
+    // then the coin is in no box (spent by another payment), and the promised box neither. The outbox, refused, keeps
+    // the payment (it may be the payee's only copy, and the outbox does not know which coins the wallet saw, or at what
+    // height); the payee's own sync, which does, calls it void
+    let (node, root) = tree_node(vec![]);
+    chain_over(&payee, &root);
+    let r = tachys(&["outbox", "--state", &payee, "--rest", &node, "--json"]);
+    assert_eq!((r.code, &r.json()["dropped"]), (0, &0.into()), "{}", r.err);
+    let r = tachys(&["wallet", "receive", "--state", &payee, "--node", &node, "--ids", &receipt, "--json"]);
+    assert_eq!(state_of(&r, &receipt).as_deref(), Some("void"), "after: {}", r.err);
+    assert!(std::fs::read_dir(format!("{payee}/given-up")).map(|d| d.count()).unwrap_or(0) == 1, "put aside, not deleted");
+    let w: Value = serde_json::from_str(&std::fs::read_to_string(format!("{payee}/wallet.json")).unwrap()).unwrap();
+    assert!(w["expect"].as_array().is_none_or(|e| !e.contains(&receipt.clone().into())), "no longer expected: {w}");
+}
+
+#[test]
+fn a_box_whose_confirming_block_left_the_chain_is_undone_not_spent_and_is_the_same_payment_if_it_comes_back() {
+    // Seen on the rig: a payment proven with a confirmation was undone by a longer chain that spent its coin elsewhere,
+    // and the payee's wallet said its box was "spent (not by a payment of this wallet)".
+    let undone_id = |st: &str| -> (String, Vec<u8>) {
+        let w: Value = serde_json::from_str(&std::fs::read_to_string(format!("{st}/wallet.json")).unwrap()).unwrap();
+        let (id, b) = w["boxes"].as_object().unwrap().iter().next().unwrap();
+        let hex = b["bytes"].as_str().unwrap();
+        (id.clone(), (0..hex.len() / 2).map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap()).collect())
+    };
+    let set_confirmed = |st: &str, at: u64, under: &str| {
+        let mut w: Value = serde_json::from_str(&std::fs::read_to_string(format!("{st}/wallet.json")).unwrap()).unwrap();
+        for b in w["boxes"].as_object_mut().unwrap().values_mut() { b["confirmed_at"] = at.into(); b["confirmed_in"] = under.into(); }
+        std::fs::write(format!("{st}/wallet.json"), w.to_string()).unwrap();
+    };
+    let (gone, root) = tree_node(vec![]);
+    // confirmed under a header the chain no longer has at that height: undone
+    let st = funded("undone");
+    let (id, bytes) = undone_id(&st);
+    let h = chain_over(&st, &root);
+    set_confirmed(&st, h.height as u64, &"ff".repeat(32));
+    let r = tachys(&["wallet", "receive", "--state", &st, "--node", &gone, "--ids", &id, "--json"]);
+    assert_eq!(state_of(&r, &id).as_deref(), Some("undone"), "{}", r.err);
+    assert!(r.err.contains("UNDONE by a reorganisation"), "{}", r.err);
+    // asked about again while it is still gone: still undone, not "absent" (an outside seat found it said so once only)
+    let r = tachys(&["wallet", "receive", "--state", &st, "--node", &gone, "--ids", &id, "--json"]);
+    assert_eq!(state_of(&r, &id).as_deref(), Some("undone"), "{}", r.err);
+    // it comes back: proven, and not new
+    let (back, root2) = tree_node(vec![bytes]);
+    chain_over(&st, &root2);
+    let r = tachys(&["wallet", "receive", "--state", &st, "--node", &back, "--ids", &id, "--json"]);
+    let c = r.json()["checked"].as_array().unwrap().iter().find(|c| c["id"] == id.as_str()).cloned().unwrap();
+    assert_eq!((c["state"].as_str(), &c["added"]), (Some("proven"), &Value::Bool(false)), "the same payment back: {}", r.err);
+    // control: confirmed under the header the chain still has there, so its block is still in the chain: spent
+    let st = funded("spent-not-undone");
+    let (id, _) = undone_id(&st);
+    let h = chain_over(&st, &root);
+    let hid: Vec<u8> = h.id.0.into();
+    set_confirmed(&st, h.height as u64, &hid.iter().map(|b| format!("{b:02x}")).collect::<String>());
+    let r = tachys(&["wallet", "receive", "--state", &st, "--node", &gone, "--ids", &id, "--json"]);
+    assert_eq!(state_of(&r, &id).as_deref(), Some("spent"), "{}", r.err);
+}
+
+#[test]
+fn a_receipt_known_only_by_its_box_id_is_told_late_or_double_spent_by_the_payment_a_node_holds_for_it() {
+    // A payee given only a box id could not tell a payment on its way from one whose coin was spent elsewhere: both are
+    // "no such box". With `--pools` the wallet takes from a node's pool the payment that makes the box, and from then
+    // on proves its coins with the box.
+    let payer = funded("pool-payer");
+    let payee = dir("pool-payee");
+    let to = tachys(&["wallet", "new", "--state", &payee, "--json"]).json()["address"].as_str().unwrap().to_string();
+    // the payer's coin, read before it pays (its wallet then holds it back)
+    let w: Value = serde_json::from_str(&std::fs::read_to_string(format!("{payer}/wallet.json")).unwrap()).unwrap();
+    let coin = w["boxes"].as_object().unwrap().values().next().unwrap()["bytes"].as_str().unwrap().to_string();
+    let coin: Vec<u8> = (0..coin.len() / 2).map(|i| u8::from_str_radix(&coin[2 * i..2 * i + 2], 16).unwrap()).collect();
+    let parcel = format!("{payer}/parcel.json");
+    let receipt = tachys(&["wallet", "send", "--state", &payer, "--to", &to, "--nanoerg", "2000000000", "--parcel-out", &parcel, "--json"]).json()["receipt"][0].as_str().unwrap().to_string();
+    let p: Value = serde_json::from_slice(&std::fs::read(&parcel).unwrap()).unwrap();
+    let pool = Some((p["tx_id"].as_str().unwrap().to_string(), p["tx_json"].as_str().unwrap().to_string()));
+    // no pool to look in: nothing but "absent"
+    let (bare, root) = tree_node(vec![coin.clone()]);
+    chain_over(&payee, &root);
+    let r = tachys(&["wallet", "receive", "--state", &payee, "--node", &bare, "--ids", &receipt, "--pools", "--json"]);
+    assert_eq!(state_of(&r, &receipt).as_deref(), Some("absent"), "{}", r.err);
+    // a node holds the payment's body with a spending proof changed: its id and the box's are the same (a payment's id
+    // does not cover its signatures), and it is not held
+    let mut forged: Value = serde_json::from_str(&pool.as_ref().unwrap().1).unwrap();
+    let pb = forged["inputs"][0]["spendingProof"]["proofBytes"].as_str().unwrap().to_string();
+    forged["inputs"][0]["spendingProof"]["proofBytes"] = format!("{}{}", if pb.starts_with('0') { "1" } else { "0" }, &pb[1..]).into();
+    let (bad, root) = tree_node_with(vec![coin.clone()], Some((pool.as_ref().unwrap().0.clone(), forged.to_string())));
+    chain_over(&payee, &root);
+    let r = tachys(&["wallet", "receive", "--state", &payee, "--node", &bad, "--ids", &receipt, "--pools", "--json"]);
+    assert_eq!(state_of(&r, &receipt).as_deref(), Some("absent"), "{}", r.err);
+    assert!(r.err.contains("not held: spending proof"), "{}", r.err);
+    // a node holds the payment and the payer's coin is unspent: on its way
+    let (late, root) = tree_node_with(vec![coin], pool.clone());
+    chain_over(&payee, &root);
+    let r = tachys(&["wallet", "receive", "--state", &payee, "--node", &late, "--ids", &receipt, "--pools", "--json"]);
+    assert_eq!(state_of(&r, &receipt).as_deref(), Some("expected"), "{}", r.err);
+    assert!(r.err.contains("taken and held"), "{}", r.err);
+    // the payer's coin is then spent by another payment: the payment held is dead, and so is the receipt, told by the
+    // payee's own sync (no outbox run)
+    let (spent, root) = tree_node_with(vec![], pool);
+    chain_over(&payee, &root);
+    let r = tachys(&["wallet", "receive", "--state", &payee, "--node", &spent, "--ids", &receipt, "--json"]);
+    assert_eq!(state_of(&r, &receipt).as_deref(), Some("void"), "{}", r.err);
+    assert!(std::fs::read_dir(format!("{payee}/given-up")).map(|d| d.count()).unwrap_or(0) == 1, "the dead payment is put aside");
+}
+
+#[test]
+fn a_mutated_transaction_box_or_signing_request_is_refused_without_a_panic() {
+    // Bytes from nodes, peers and pages reach the transaction, box and reduced-transaction decoders of the signing
+    // library (not ours to change). Mutated from real ones (bits, bytes, inserts, cuts, repeats, extremes), none of
+    // 300,000 made one panic when measured (finding 57); this keeps a share of that in the suite.
+    use ergo_lib::chain::transaction::reduced::ReducedTransaction;
+    use ergo_lib::chain::transaction::Transaction;
+    use base64::Engine;
+    let payer = funded("fuzz-seeds");
+    let parcel = format!("{payer}/parcel.json");
+    let to = text(&address(1));
+    assert_eq!(tachys(&["wallet", "send", "--state", &payer, "--to", &to, "--nanoerg", "2000000000", "--parcel-out", &parcel, "--json"]).code, 0);
+    let p: Value = serde_json::from_slice(&std::fs::read(&parcel).unwrap()).unwrap();
+    let h = p["tx_bytes"].as_str().unwrap();
+    let tx: Vec<u8> = (0..h.len() / 2).map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).unwrap()).collect();
+    let payer2 = funded("fuzz-seeds2");
+    let req = tachys(&["wallet", "send", "--state", &payer2, "--to", &to, "--nanoerg", "2000000000", "--request-out", "--json"]).json()["request"].as_str().unwrap().to_string();
+    let red = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(req.strip_prefix("ergopay:").unwrap()).unwrap();
+    let parsed = Transaction::sigma_parse_bytes(&tx).unwrap();
+    let boxes: Vec<Vec<u8>> = parsed.outputs.iter().map(|o| o.sigma_serialize_bytes().unwrap()).collect();
+    let mut x: u64 = 0x5eed;
+    let mut rnd = move || { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x };
+    let mutate = |b: &[u8], r: &mut dyn FnMut() -> u64| -> Vec<u8> { let mut v = b.to_vec(); for _ in 0..(1 + r() % 4) { if v.is_empty() { break } let i = (r() as usize) % v.len(); match r() % 6 { 0 => v[i] ^= 1 << (r() % 8), 1 => v[i] = r() as u8, 2 => v.insert(i, r() as u8), 3 => { v.remove(i); } 4 => { let j = (r() as usize) % v.len(); let (a, b) = (i.min(j), i.max(j)); let seg: Vec<u8> = v[a..b.min(a + 40)].to_vec(); v.splice(i..i, seg); } _ => v[i] = [0, 0xff, 0x7f, 0x80][(r() % 4) as usize] } } v };
+    let n = 10_000usize;
+    let mut counts = [0usize; 3];
+    for _ in 0..n { let v = mutate(&tx, &mut rnd); if std::panic::catch_unwind(|| Transaction::sigma_parse_bytes(&v)).is_err() { counts[0] += 1 } }
+    for _ in 0..n { let b = &boxes[(rnd() as usize) % boxes.len()]; let v = mutate(b, &mut rnd); if std::panic::catch_unwind(|| ergotree_ir::chain::ergo_box::ErgoBox::sigma_parse_bytes(&v)).is_err() { counts[1] += 1 } }
+    for _ in 0..n { let v = mutate(&red, &mut rnd); if std::panic::catch_unwind(|| ReducedTransaction::sigma_parse_bytes(&v)).is_err() { counts[2] += 1 } }
+    assert_eq!(counts, [0, 0, 0], "panics: transactions, boxes, signing requests");
+}
+
+#[test]
+fn a_mutated_signing_request_never_crashes_the_wallet() {
+    // the built binary, given a page's request with bytes changed: it shows or refuses, it does not crash
+    use base64::Engine;
+    let payer = funded("fuzz-req");
+    let to = text(&address(1));
+    let req = tachys(&["wallet", "send", "--state", &payer, "--to", &to, "--nanoerg", "2000000000", "--request-out", "--json"]).json()["request"].as_str().unwrap().to_string();
+    let red = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(req.strip_prefix("ergopay:").unwrap()).unwrap();
+    let signer = funded("fuzz-req-signer");
+    let mut x: u64 = 0x77;
+    let mut rnd = move || { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x };
+    let (mut crash, mut parsed) = (vec![], 0);
+    for _ in 0..150 {
+        let mut v = red.clone();
+        for _ in 0..(1 + rnd() % 3) { let i = (rnd() as usize) % v.len(); match rnd() % 3 { 0 => v[i] ^= 1 << (rnd() % 8), 1 => v[i] = rnd() as u8, _ => v[i] = [0, 0xff, 0x7f, 0x80][(rnd() % 4) as usize] } }
+        let code = format!("ergopay:{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&v));
+        let r = tachys(&["wallet", "request", "--state", &signer, "--code", &code, "--json"]);
+        if r.code != 0 && r.code != 1 && r.code != 2 { crash.push((r.code, r.err.lines().last().unwrap_or("").to_string())); }
+        if !r.err.contains("does not hold a transaction") { parsed += 1; }
+    }
+    assert!(crash.is_empty(), "{crash:?}");
+    assert!(parsed > 0, "some mutated requests still read as requests and were shown");
+}
+
+#[test]
+fn a_carried_payment_goes_to_a_node_as_its_bytes_say_and_padded_bytes_are_turned_away_at_the_door() {
+    // left open by finding 51: `outbox --rest` sent the stored `tx_json`, which nothing compared with the bytes, and
+    // `serve --accept-parcels` took bytes that are not the transaction's own serialisation
+    let payer = funded("rest-canon-payer");
+    let parcel = format!("{payer}/parcel.json");
+    assert_eq!(tachys(&["wallet", "send", "--state", &payer, "--to", &text(&address(1)), "--nanoerg", "2000000000", "--parcel-out", &parcel, "--json"]).code, 0);
+    let good: Value = serde_json::from_slice(&std::fs::read(&parcel).unwrap()).unwrap();
+    let id = good["tx_id"].as_str().unwrap().to_string();
+    // the stored JSON says something else: the node is sent the transaction the bytes hold
+    let mut lying = good.clone();
+    lying["tx_json"] = r#"{"id":"0000000000000000000000000000000000000000000000000000000000000000","inputs":[],"dataInputs":[],"outputs":[]}"#.into();
+    let carrier = dir("rest-canon-carrier");
+    std::fs::create_dir_all(format!("{carrier}/outbox")).unwrap();
+    std::fs::write(format!("{carrier}/outbox/{id}.json"), lying.to_string()).unwrap();
+    let (taker, seen) = node(200, &*Box::leak(format!("\"{id}\"").into_boxed_str()));
+    let r = tachys(&["outbox", "--state", &carrier, "--rest", &taker, "--json"]);
+    assert_eq!((r.code, &r.json()["sent"]), (0, &1.into()), "{}", r.err);
+    let sent: Value = serde_json::from_str(&seen.lock().unwrap()[0]).unwrap();
+    assert_eq!(sent["id"].as_str(), Some(id.as_str()), "the transaction the bytes hold, not the stored JSON");
+    // the same payment with a byte after its end: not sent, set aside
+    let mut padded = good.clone();
+    padded["tx_bytes"] = format!("{}00", good["tx_bytes"].as_str().unwrap()).into();
+    std::fs::write(format!("{carrier}/outbox/{id}.json"), padded.to_string()).unwrap();
+    let (node2, seen2) = node(200, "\"00\"");
+    let r = tachys(&["outbox", "--state", &carrier, "--rest", &node2, "--json"]);
+    assert_eq!((r.code, &r.json()["dropped"]), (0, &1.into()), "{}", r.err);
+    assert!(seen2.lock().unwrap().is_empty(), "nothing reached the node");
+    assert!(std::path::Path::new(&format!("{carrier}/given-up/{id}.json")).exists());
+    // at a serving wallet's door
+    let server = dir("door-server");
+    chain_over(&server, &[1u8; 33]);
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_tachys")).args(["serve", "--state", &server, "--listen", &addr, "--secs", "20", "--accept-parcels"]).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
+    for _ in 0..100 { if std::net::TcpStream::connect(&addr).is_ok() { break } std::thread::sleep(std::time::Duration::from_millis(50)); }
+    let pf = format!("{payer}/padded.json");
+    std::fs::write(&pf, serde_json::json!({ "tx_id": id, "tx_bytes": padded["tx_bytes"] }).to_string()).unwrap();
+    let bad = tachys(&["handoff", "--peer", &addr, "--parcel", &pf, "--json"]);
+    let gf = format!("{payer}/good.json");
+    std::fs::write(&gf, serde_json::json!({ "tx_id": id, "tx_bytes": good["tx_bytes"] }).to_string()).unwrap();
+    let ok = tachys(&["handoff", "--peer", &addr, "--parcel", &gf, "--json"]);
+    let _ = child.kill(); let _ = child.wait();
+    assert_ne!(bad.code, 0, "padded bytes are not acknowledged: {}", bad.err);
+    assert_eq!(ok.code, 0, "the payment as written is: {}", ok.err);
+    assert_eq!(std::fs::read_dir(format!("{server}/outbox")).unwrap().count(), 1, "only the payment as written was taken");
+    // what was written is what was checked, nothing of the sender's (a review seat: a parcel's `coins_seen` and `tx_id`
+    // went into the file as sent)
+    let kept: Value = serde_json::from_str(&std::fs::read_to_string(format!("{server}/outbox/{id}.json")).unwrap()).unwrap();
+    assert_eq!(kept.as_object().unwrap().keys().cloned().collect::<Vec<_>>(), vec!["tx_bytes".to_string(), "tx_id".to_string()]);
+}
+
+#[test]
+fn a_restored_wallet_looks_over_all_twenty_addresses_again_when_it_reconciles() {
+    // A restored wallet whose twenty addresses were all empty kept only the first; a payment made later to another of
+    // them (by another wallet of the same phrase) was never seen (roadmap). Reconciling now looks over all twenty again.
+    let st = dir("rescan");
+    let me3 = address(3);
+    let b = ErgoBox::from_box_candidate(&ErgoBoxCandidateBuilder::new(BoxValue::try_from(3 * ERG).unwrap(), me3.script().unwrap(), 1_900_000).build().unwrap(), TxId::zero(), 0).unwrap();
+    let id = String::from(b.box_id());
+    std::fs::write(format!("{st}/wallet.json"), serde_json::json!({ "name": "r", "address": text(&address(0)), "address_list": [text(&address(0))], "addresses": 1, "birthday": 0, "mnemonic": PHRASE, "restored": true, "boxes": {} }).to_string()).unwrap();
+    let (node, root) = tree_node_full(vec![b.sigma_serialize_bytes().unwrap()], None, Some((text(&me3), id.clone())));
+    chain_over(&st, &root);
+    // a plain sync looks at the address it keeps, and finds nothing
+    let r = tachys(&["wallet", "status", "--state", &st, "--node", &node, "--json"]);
+    assert_eq!(r.json()["nanoerg"], 0, "{}", r.err);
+    let r = tachys(&["wallet", "status", "--state", &st, "--node", &node, "--reconcile", "--json"]);
+    assert_eq!((r.code, &r.json()["nanoerg"]), (0, &(3 * ERG).into()), "{}", r.err);
+    let w: Value = serde_json::from_str(&std::fs::read_to_string(format!("{st}/wallet.json")).unwrap()).unwrap();
+    assert_eq!(w["addresses"], 4, "the four up to the one that holds a box are kept: {w}");
+}
+
+#[test]
+fn a_held_payment_whose_coin_was_never_seen_is_not_called_void() {
+    // A payer that chains payments spends a coin made by a payment not yet in a block: until that one is, the coin is in
+    // no box, as a coin spent elsewhere is. One review seat found such a payment called void ("can never confirm"). A
+    // coin is now taken for gone only if this wallet saw it unspent before.
+    let payer = funded("chain-payer");
+    let payee = dir("chain-payee");
+    let to = tachys(&["wallet", "new", "--state", &payee, "--json"]).json()["address"].as_str().unwrap().to_string();
+    let w: Value = serde_json::from_str(&std::fs::read_to_string(format!("{payer}/wallet.json")).unwrap()).unwrap();
+    let coin = w["boxes"].as_object().unwrap().values().next().unwrap()["bytes"].as_str().unwrap().to_string();
+    let coin: Vec<u8> = (0..coin.len() / 2).map(|i| u8::from_str_radix(&coin[2 * i..2 * i + 2], 16).unwrap()).collect();
+    let parcel = format!("{payer}/parcel.json");
+    let receipt = tachys(&["wallet", "send", "--state", &payer, "--to", &to, "--nanoerg", "2000000000", "--parcel-out", &parcel, "--json"]).json()["receipt"][0].as_str().unwrap().to_string();
+    let p: Value = serde_json::from_slice(&std::fs::read(&parcel).unwrap()).unwrap();
+    assert_eq!(tachys(&["wallet", "promise", "--state", &payee, "--tx", p["tx_bytes"].as_str().unwrap(), "--json"]).code, 0);
+    // the coin in no box, never seen: still expected
+    let (none, root) = tree_node(vec![]);
+    chain_over(&payee, &root);
+    let r = tachys(&["wallet", "receive", "--state", &payee, "--node", &none, "--ids", &receipt, "--json"]);
+    assert_eq!(state_of(&r, &receipt).as_deref(), Some("expected"), "{}", r.err);
+    let r = tachys(&["outbox", "--state", &payee, "--rest", &none, "--json"]);
+    assert_eq!(r.json()["dropped"], 0, "the outbox keeps it too: {}", r.err);
+    // the coin appears (its payment is in a block), then is spent by another payment: now it is void
+    let coin_back = coin.clone();
+    let (some, root) = tree_node(vec![coin]);
+    chain_over(&payee, &root);
+    let r = tachys(&["wallet", "receive", "--state", &payee, "--node", &some, "--ids", &receipt, "--json"]);
+    assert_eq!(state_of(&r, &receipt).as_deref(), Some("expected"), "{}", r.err);
+    // a node a block behind, where the coin is not made yet: that says nothing (a review seat: it voided the payment)
+    let (gone, root) = tree_node(vec![]);
+    chain_over_at(&payee, &root, 1);
+    let r = tachys(&["wallet", "receive", "--state", &payee, "--node", &gone, "--ids", &receipt, "--json"]);
+    assert_eq!(state_of(&r, &receipt).as_deref(), Some("expected"), "a proof from below the height it was seen at: {}", r.err);
+    chain_over(&payee, &root);
+    let r = tachys(&["wallet", "receive", "--state", &payee, "--node", &gone, "--ids", &receipt, "--json"]);
+    assert_eq!(state_of(&r, &receipt).as_deref(), Some("void"), "{}", r.err);
+    // the payment that spent the coin is itself undone and the coin is back: the payment is held again (an outside seat)
+    let (back, root) = tree_node(vec![coin_back]);
+    chain_over(&payee, &root);
+    let r = tachys(&["wallet", "receive", "--state", &payee, "--node", &back, "--ids", &receipt, "--json"]);
+    assert_eq!(state_of(&r, &receipt).as_deref(), Some("expected"), "{}", r.err);
+    assert!(std::fs::read_dir(format!("{payee}/outbox")).map(|d| d.count()).unwrap_or(0) == 1, "back in the outbox, to be sent");
 }

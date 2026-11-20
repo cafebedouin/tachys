@@ -39,6 +39,63 @@ pub(crate) fn names(p: &ergotree_ir::sigma_protocol::sigma_boolean::SigmaBoolean
 /// The script every network fee is paid to, in hex.
 pub(crate) fn fee_tree_hex() -> String { if net().fee_tree.is_empty() { ergo_lib::wallet::miner_fee::MINERS_FEE_BASE16_BYTES.to_string() } else { net().fee_tree.to_string() } }
 
+/// The payments this wallet holds that pay it boxes it expects and are not its own, in `DIR/outbox` or set aside in
+/// `DIR/given-up` (still judged: one set aside may yet confirm, or be dead): (the file, its JSON, every coin it spends,
+/// the boxes it promises this wallet). A payment of this wallet's own (it is waiting) is left to its own bookkeeping.
+type Held = (std::path::PathBuf, serde_json::Value, Vec<String>, Vec<String>);
+fn held_promises(state: &str, w: &WalletFile) -> Vec<Held> {
+    let own: Vec<&String> = w.pending.iter().map(|p| &p.tx).collect();
+    let files: Vec<std::path::PathBuf> = ["outbox", "given-up"].iter().flat_map(|d| std::fs::read_dir(format!("{state}/{d}")).map(|d| d.filter_map(|e| e.ok().map(|e| e.path())).collect::<Vec<_>>()).unwrap_or_default()).collect();
+    files.into_iter().filter_map(|f| {
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&f).ok()?).ok()?;
+        let tx = ergo_lib::chain::transaction::Transaction::sigma_parse_bytes(&unhex(v["tx_bytes"].as_str()?)?).ok()?;
+        if own.contains(&&String::from(tx.id())) { return None }
+        // what it promises: boxes expected, or held as void (which come back if its coins do)
+        let outs: Vec<String> = tx.outputs.iter().map(|o| String::from(o.box_id())).filter(|o| w.expect.contains(o) || w.void.contains(o)).collect();
+        if outs.is_empty() { return None }
+        Some((f, v, tx.inputs.iter().map(|i| String::from(i.box_id)).collect(), outs))
+    }).collect()
+}
+
+/// The payment that makes box `id`, from a node's pool of payments not yet in a block, and whether any node given
+/// answered at all. A node's word that it holds the payment is all this rests on, and only the payment's body is
+/// checked here: a box's id is a hash over its payment's id and the box, and the payment's id a hash over the payment
+/// without its signatures, so a payment taken here is that payment's body only if, as read, it makes the box `id`. Its
+/// signatures are the caller's to verify. Nodes over the peer protocol are not asked.
+pub(crate) fn pending_payment(nodes: &[String], id: &str) -> (Option<ergo_lib::chain::transaction::Transaction>, bool) {
+    let mut answered = false;
+    for n in nodes.iter().filter(|n| !n.starts_with("p2p://")) {
+        let r = match http().get(&format!("{n}/transactions/unconfirmed/outputs/byBoxId/{id}")).call() { Ok(r) => r, Err(ureq::Error::Status(404, _)) => { answered = true; continue } Err(_) => continue };
+        answered = true;
+        let Some(out) = r.into_string().ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) else { continue };
+        let Some(txid) = out["transactionId"].as_str().filter(|t| t.len() == 64 && t.chars().all(|c| c.is_ascii_hexdigit())) else { continue };
+        let Some(tx) = http().get(&format!("{n}/transactions/unconfirmed/byTransactionId/{txid}")).call().ok().and_then(|r| r.into_string().ok())
+            .and_then(|t| serde_json::from_str::<ergo_lib::chain::transaction::Transaction>(&t).ok()) else { continue };
+        if tx.outputs.iter().any(|o| String::from(o.box_id()) == id) { return (Some(tx), true) }
+    }
+    (None, answered)
+}
+
+/// Hold a payment someone else made to this wallet (its signed bytes, in hex): keep it in `DIR/outbox`, to be submitted
+/// by this wallet itself, and expect the boxes it pays this wallet. Nothing is accepted by this; the wallet file is
+/// changed in `w` and saved by the caller. Returns the boxes promised, their nanoERG and how many tokens they hold.
+/// `seen`: coins the payment spends that the caller has just proven unspent (kept with it as `coins_seen`: one of them
+/// gone later means the payment is dead; a coin never seen may only not have been made yet).
+fn hold(state: &str, w: &mut WalletFile, my_trees: &[ErgoTree], hexs: &str, seen: &[String], seen_at: u64) -> Result<(Vec<String>, u64, usize), String> {
+    let Some(tx) = unhex(hexs).and_then(|b| ergo_lib::chain::transaction::Transaction::sigma_parse_bytes(&b).ok()) else { return Err("not a transaction".into()) };
+    let mine: Vec<&ErgoBox> = tx.outputs.iter().filter(|o| my_trees.contains(&o.ergo_tree)).collect();
+    if mine.is_empty() { return Err("that transaction pays nothing to this wallet".into()) }
+    let json = serde_json::to_string(&tx).unwrap_or_default();
+    let id = String::from(tx.id());
+    // this file may be the only copy of the payment: nothing is promised unless it is on disk
+    let kept = std::fs::create_dir_all(format!("{state}/outbox")).and_then(|_| write_whole(&format!("{state}/outbox/{id}.json"), serde_json::json!({ "tx_id": id, "tx_bytes": hexs, "tx_json": json, "coins_seen": seen.iter().map(|c| (c.clone(), serde_json::json!(seen_at))).collect::<serde_json::Map<_, _>>() }).to_string().as_bytes()));
+    if let Err(e) = kept { return Err(format!("could not keep the transaction in {state}/outbox ({e}); nothing promised")) }
+    for b in &mine { let bid = String::from(b.box_id()); if !w.expect.contains(&bid) { w.expect.push(bid); } }
+    let value: u64 = mine.iter().map(|b| *b.value.as_u64()).sum();
+    let tokens: usize = mine.iter().map(|b| b.tokens.as_ref().map_or(0, |t| t.len())).sum();
+    Ok((mine.iter().map(|b| String::from(b.box_id())).collect(), value, tokens))
+}
+
 #[cfg(test)]
 pub(crate) fn tracked_count(w: &WalletFile) -> usize { w.boxes.len() }
 
@@ -310,7 +367,11 @@ fn open(c: &Ctx) -> Result<Open, Fail> {
     // Further addresses of the same phrase (indices 1..). Everything at any of them is this wallet's; change goes to the first.
     let listed: Vec<Address> = w.address_list.iter().flatten().filter_map(|a| enc.parse_address_from_str(a).ok()).take(20).collect();
     // A restored wallet not yet looked over has all twenty listed, with or without the phrase to hand.
-    let scanning = w.scan_addresses;
+    // A restored wallet that found all twenty empty kept the first only, so a payment made later to another of them went
+    // unseen. Asked to look again (`status --reconcile`, or a sync after a sign that another wallet of the phrase is at
+    // work), it looks over all twenty again and keeps any up to the last that holds a box; never fewer than before.
+    let rescan = c.sub == "status" && w.restored && !w.scan_addresses && phrase.is_some() && (c.args.iter().any(|a| a == "--reconcile") || w.refresh);
+    let scanning = w.scan_addresses || rescan;
     let n_addr = if scanning && phrase.is_some() { 20 } else if phrase.is_some() { w.addresses.unwrap_or(1).clamp(1, 20) } else if locked { (listed.len() as u64).max(1) } else { 1 };
     let my_addrs: Vec<Address> = match phrase.as_deref() {
         Some(p) => (0..n_addr).filter_map(|i| key_at(p, i).map(|k| Address::P2Pk(k.public_image()))).collect(),
@@ -403,23 +464,15 @@ fn cmd_promise(c: &Ctx, o: Open) -> Ended {
     // submit it itself once it has network, and expect the boxes that pay it. Nothing is accepted yet:
     // the payer can still spend the same coins elsewhere until this is in a block.
     let hexs: String = arg(args, "--tx", String::new())?;
-    let Some(tx) = unhex(&hexs).and_then(|b| ergo_lib::chain::transaction::Transaction::sigma_parse_bytes(&b).ok()) else { say!("not a transaction"); return Err(crate::out::Fail::said(1)) };
-    let mine: Vec<&ErgoBox> = tx.outputs.iter().filter(|o| my_trees.contains(&o.ergo_tree)).collect();
-    if mine.is_empty() { say!("that transaction pays nothing to this wallet"); return Err(crate::out::Fail::said(1)) }
-    let json = serde_json::to_string(&tx).unwrap_or_default();
-    let id = String::from(tx.id());
-    // this file may be the only copy of the payment: nothing is promised unless it is on disk
-    let kept = std::fs::create_dir_all(format!("{state}/outbox")).and_then(|_| write_whole(&format!("{state}/outbox/{id}.json"), serde_json::json!({ "tx_id": id, "tx_bytes": hexs, "tx_json": json }).to_string().as_bytes()));
-    if let Err(e) = kept { say!("could not keep the transaction in {state}/outbox ({e}); nothing promised"); return Err(crate::out::Fail::said(1)) }
-    let mut expect: Vec<String> = w.expect.clone();
-    for b in &mine { let bid = String::from(b.box_id()); if !expect.contains(&bid) { expect.push(bid); } }
-    w.expect = expect;
-    c.save(&w)?;
-    let value: u64 = mine.iter().map(|b| *b.value.as_u64()).sum();
-    let tokens: usize = mine.iter().map(|b| b.tokens.as_ref().map_or(0, |t| t.len())).sum();
-    crate::out::set("promised", mine.iter().map(|b| String::from(b.box_id())).collect::<Vec<_>>()); crate::out::set("nanoerg", value); crate::out::set("tokens", tokens);
-    say!("promised {} {} nanoERG {} tokens", String::from(mine[0].box_id()), value, tokens);
-    Ok(())
+    match hold(state, &mut w, &my_trees, &hexs, &[], 0) {
+        Ok((ids, value, tokens)) => {
+            c.save(&w)?;
+            crate::out::set("promised", &ids); crate::out::set("nanoerg", value); crate::out::set("tokens", tokens);
+            say!("promised {} {} nanoERG {} tokens", ids[0], value, tokens);
+            Ok(())
+        }
+        Err(why) => { say!("{why}"); Err(crate::out::Fail::said(1)) }
+    }
 }
 
 /// wallet request: say what a signing request does, and sign it if told to. A refusal is handed back, not printed:
@@ -908,6 +961,8 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
             // boxes we created ourselves (change from our own payments) are looked for without asking anyone
             let mut v = tracked.clone();
             v.extend(w.expect.iter().cloned());
+            // boxes undone by a reorganisation are asked about until they are back (or seen no more for long: the last 64)
+            v.extend(w.undone.iter().filter(|u| !v.contains(u)).cloned().collect::<Vec<_>>());
             // payments still waiting, and ones given up on (they may yet be included): the boxes they spend and one they create
             let watched = w.pending.iter().map(|p| (&p.inputs, &p.watch)).chain(w.done.iter().filter(|d| d.result == "not included").map(|d| (&d.inputs, &d.watch)));
             for id in watched.flat_map(|(inputs, watch)| inputs.iter().chain(std::iter::once(watch))) { if !id.is_empty() && !v.contains(id) { v.push(id.clone()); } }
@@ -917,6 +972,43 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
     };
     // every box a waiting payment creates is asked about too: any one of them existing shows it is in the chain
     for p in &w.pending { for (id, _) in outputs_of(p, &my_trees) { if !ids.contains(&id) { ids.push(id); } } }
+    // `--pools`: a box asked about that this wallet neither has nor expects may be paid by a payment not yet in a block.
+    // If a node holds that payment in its pool it is fetched (`pending_payment`: it is the payment that makes that box,
+    // as far as its body goes; a payment's id does not cover its signatures). It is held as if the payer had handed it
+    // over (`hold`) only if every coin it spends is proven unspent against the agreed chain and its spending proofs
+    // verify against them: then it is a payment that can be made, and from then on its coins are proven with the box.
+    if sub == "receive" && args.iter().any(|a| a == "--pools") {
+        // a payment of this wallet's own, still waiting, is not someone else's to hold
+        let own: Vec<String> = w.pending.iter().flat_map(|p| outputs_of(p, &my_trees)).map(|x| x.0).collect();
+        let own_tx: Vec<String> = w.pending.iter().map(|p| p.tx.clone()).collect();
+        for id in ids.clone() {
+            if w.boxes.contains_key(&id) || w.expect.contains(&id) || w.void.contains(&id) || own.contains(&id) { continue }
+            let (found, answered) = pending_payment(&nodes, &id);
+            let mut held = false;
+            if let Some(tx) = found.filter(|t| !own_tx.contains(&String::from(t.id()))) {
+                let coins: Vec<String> = tx.inputs.iter().map(|i| String::from(i.box_id)).collect();
+                let reads: Vec<String> = tx.data_inputs.as_ref().map(|d| d.iter().map(|i| String::from(i.box_id)).collect()).unwrap_or_default();
+                let all: Vec<String> = coins.iter().chain(reads.iter()).cloned().collect();
+                let mut seen_at = 0u64;
+                let checked = prove_any(node, chain, &all, &mut cost).map_err(|e| format!("its coins could not be proven ({e})")).and_then(|(h, f)| {
+                    seen_at = h as u64;
+                    let parse = |v: &[Option<Vec<u8>>]| v.iter().map(|b| b.as_ref().ok_or("a coin it spends is not an unspent box (spent, or made by a payment not yet in a block)".to_string()).and_then(|b| ErgoBox::sigma_parse_bytes(b).map_err(|e| format!("box decode: {e:?}")))).collect::<Result<Vec<_>, String>>();
+                    let (fi, fd) = f.split_at(coins.len());
+                    crate::proofs::verifies(&tx, parse(fi)?, parse(fd)?, chain)
+                });
+                match checked.and_then(|_| tx.sigma_serialize_bytes().map(|b| hex(&b)).map_err(|e| format!("{e:?}"))).and_then(|hexs| hold(state, &mut w, &my_trees, &hexs, &coins, seen_at)) {
+                    Ok(_) => { held = true; say!("  {id}  a node holds the payment that makes it, not yet in a block; its coins are unspent and its signatures verify: taken and held") }
+                    Err(why) => say!("  {id}  a node holds a payment that makes it, but it is not held: {why}"),
+                }
+            }
+            crate::out::push("pools", serde_json::json!({ "id": id, "answered": answered, "held": held }));
+        }
+    }
+    // payments this wallet holds that someone else made to it (`wallet promise`, or fetched from a node's pool with
+    // `--pools`): the boxes each promises and the coins it spends are asked about too, so that one whose coin is gone
+    // is known to be dead (void) and not waited for
+    let promises = held_promises(state, &w);
+    for (_, _, inputs, outs) in &promises { for id in inputs.iter().chain(outs.iter()) { if !ids.contains(id) { ids.push(id.clone()); } } }
     // `refresh`: an earlier sync saw the sign of another wallet of this phrase at work (a box gone that no payment of
     // ours spent, or a payment whose outcome the proof could not tell), so the nodes are asked again what the addresses hold
     let reconcile = sub == "restore" || (sub == "status" && (args.iter().any(|a| a == "--reconcile") || w.refresh));
@@ -954,7 +1046,8 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
         // a restored wallet that every node says is empty at all twenty addresses keeps the first
         if scanning && all_listed {
             w.scan_addresses = false;
-            w.addresses = Some(1); w.address_list = Some(vec![addr_strs[0].clone()]);
+            let keep = (w.addresses.unwrap_or(1) as usize).clamp(1, addr_strs.len());
+            w.addresses = Some(keep as u64); w.address_list = Some(addr_strs.iter().take(keep).cloned().collect());
             c.save(&w)?;
         }
         crate::out::set("address", enc.address_to_str(&addr)); crate::out::set("addresses", &addr_strs); crate::out::set("nanoerg", 0); crate::out::set("boxes", 0); crate::out::set("tokens", serde_json::json!([])); say!("address {}\nno boxes tracked; balance 0 ERG", enc.address_to_str(&addr)); return Ok(())
@@ -991,7 +1084,8 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
     // at or below the agreed tip; a proof above it can add what it shows (marked as seen) and settles nothing.
     let settled = height <= agreed;
     // each box asked about, for a program: its id, what the proof showed ("proven": unspent and ours, at or below the agreed
-    // tip; "seen": the same above it; "absent"; "spent"; "expected"; "other_address"; "undecodable"; "absent_above_agreed_tip"; "absent_below_confirmed")
+    // tip; "seen": the same above it; "absent"; "spent"; "undone"; "void"; "expected"; "other_address"; "undecodable"; "absent_above_agreed_tip";
+    // "absent_below_confirmed")
     let checked = |id: &str, state: &str| crate::out::push("checked", serde_json::json!({ "id": id, "state": state, "height": height }));
     let mut expect: Vec<String> = w.expect.clone();
     // What became of the payments this wallet sent, read off the same proof as the balance (`payment_outcome`).
@@ -1089,6 +1183,45 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
     let quiet: Vec<String> = still.iter().flat_map(|p| p.inputs.iter().chain(std::iter::once(&p.watch))).chain(done.iter().flat_map(|d| d.inputs.iter().chain(std::iter::once(&d.watch)))).cloned().chain(made).collect();
     w.pending = still;
     w.done = done;
+    // a box confirmed under a header the agreed chain no longer has there left with its block: undone, not spent.
+    // Only the stored chain can say, so a reorganisation further back than it reaches still reads as a spend.
+    let header_at = |h: u64| chain.iter().find(|x| x.height as u64 == h).map(|x| hex(&crate::chain::id32(x)));
+    let (mut void, mut undone) = (std::mem::take(&mut w.void), std::mem::take(&mut w.undone));
+    // A held payment none of whose boxes exist, one of whose coins this wallet had seen unspent and is now gone, at or
+    // below the agreed tip, can never confirm: what it promised is void, and the payment is put aside (`given-up/`;
+    // nothing sends it again). A coin never seen is not taken for gone: it may be made by a payment not yet in a block
+    // (a payer who chains payments). Coins seen unspent now are written down with the payment.
+    for (file, v, inputs, outs) in &promises {
+        if !settled || outs.iter().any(|o| present(o)) { continue }
+        // each coin with the height it was seen unspent at: a proof from below that height (a node behind) says nothing
+        // about whether it is gone since
+        let mut seen: serde_json::Map<String, serde_json::Value> = v["coins_seen"].as_object().cloned().unwrap_or_default();
+        let fresh: Vec<String> = inputs.iter().filter(|i| present(i) && !seen.contains_key(*i)).cloned().collect();
+        if !fresh.is_empty() { for f in fresh { seen.insert(f, (height as u64).into()); } let mut v = v.clone(); v["coins_seen"] = serde_json::Value::Object(seen.clone()); let _ = write_whole(&file.to_string_lossy(), v.to_string().as_bytes()); }
+        let seen_below = |c: &String| seen.get(c).and_then(|h| h.as_u64()).is_some_and(|h| h <= height as u64);
+        let aside = format!("{state}/given-up");
+        // put aside as void, and its coins are all back (the payment that spent one was itself undone): held again
+        if file.starts_with(&aside) && outs.iter().all(|o| void.contains(o)) && inputs.iter().all(|i| present(i)) {
+            void.retain(|o| !outs.contains(o)); for o in outs { if !expect.contains(o) { expect.push(o.clone()); } }
+            if let Some(name) = file.file_name() { let _ = std::fs::create_dir_all(format!("{state}/outbox")); let _ = std::fs::rename(file, std::path::Path::new(&format!("{state}/outbox")).join(name)); }
+            say!("  a payment held for this wallet that was void has its coins back (what spent one was undone): it is held again");
+            continue
+        }
+        let Some(gone) = inputs.iter().find(|i| !present(i) && seen_below(i)) else { continue };
+        if void.iter().any(|o| outs.contains(o)) { continue }
+        // a coin gone and no box of it there is also what a payment that confirmed, and whose boxes were spent since,
+        // looks like: if it can be proven to be in the chain, it is not void
+        // the id read from the payment's own bytes, never from the file's word
+        if let Some(tx) = v["tx_bytes"].as_str().and_then(unhex).and_then(|b| ergo_lib::chain::transaction::Transaction::sigma_parse_bytes(&b).ok()).map(|t| String::from(t.id())) {
+            if let Ok(h) = prove_included(node, &chain, &tx, &mut cost) { if h <= agreed { say!("  a payment held for this wallet is in the chain (proven, block {h}); what it made has been spent since"); continue } }
+        }
+        expect.retain(|e| !outs.contains(e));
+        for o in outs { if !void.contains(o) { void.push(o.clone()); } }
+        let _ = std::fs::create_dir_all(&aside);
+        if let Some(name) = file.file_name() { if !file.starts_with(&aside) { let _ = std::fs::rename(file, std::path::Path::new(&aside).join(name)); } }
+        crate::out::push("void", serde_json::json!({ "boxes": outs, "coin_gone": gone, "reason": "a coin it spends, seen unspent before, is gone" }));
+        say!("  a payment held for this wallet can never confirm: its coin {}, seen unspent before, is not an unspent box at height {height}; what it promised ({}) is void", clip(gone, 16), outs.iter().map(|o| clip(o, 16)).collect::<Vec<_>>().join(", "));
+    }
     let boxes = &mut w.boxes;
     for (id, f) in ids.iter().zip(found.iter()) {
         if held.contains(id) { continue }
@@ -1098,22 +1231,40 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
             Some(Ok(b)) if !my_trees.contains(&b.ergo_tree) && quiet.contains(id) => {}
             None if !settled && boxes.contains_key(id) => { checked(id, "absent_above_agreed_tip"); say!("  {id}  absent at height {height}, above the tip the peers agree on ({agreed}): kept until they reach it") }
             // A proof can be against a stored header below the one this box was confirmed at (a node a block or two behind):
-            // there the box did not exist yet, and its absence says nothing of its being spent.
+            // there the box did not exist yet, and its absence says nothing of its being spent, nor of its block having left
+            // the chain (`undone`, below): that is read from a proof at or above the height it was confirmed at.
             None if boxes.get(id).and_then(|b| b.confirmed_at).is_some_and(|c| c > height as u64) => {
                 let c = boxes.get(id).and_then(|b| b.confirmed_at).unwrap_or(0);
                 checked(id, "absent_below_confirmed"); say!("  {id}  absent at height {height}, below where it was confirmed ({c}): kept")
             }
-            None => { if boxes.remove(id).is_some() { checked(id, "spent"); if !spent_by_us.contains(id) { refresh = true; } say!("  {id}  gone at height {height}: spent{}; removed", if spent_by_us.contains(id) { "" } else { " (not by a payment of this wallet)" }); } else if expect.contains(id) { checked(id, "expected"); say!("  {id}  expected from our own payment, not on chain yet at {height}"); } else { checked(id, "absent"); say!("  {id}  ABSENT at height {height}: not accepted"); } }
+            None => match boxes.remove(id) {
+                Some(old) if settled && !spent_by_us.contains(id) && !old.confirmed_in.is_empty() && old.confirmed_at.and_then(header_at).is_some_and(|now| now != old.confirmed_in) => {
+                    checked(id, "undone"); refresh = true;
+                    if !undone.contains(id) { undone.push(id.clone()); }
+                    say!("  {id}  gone at height {height}, and the block it was confirmed under (height {}) is no longer in the chain the peers agree on: UNDONE by a reorganisation. It may be included again, or its coins may have been spent elsewhere; until it is proven again it is not a payment", old.confirmed_at.unwrap_or(0));
+                }
+                Some(_) => { checked(id, "spent"); if !spent_by_us.contains(id) { refresh = true; } say!("  {id}  gone at height {height}: spent{}; removed", if spent_by_us.contains(id) { "" } else { " (not by a payment of this wallet)" }); }
+                None if expect.contains(id) => { checked(id, "expected"); say!("  {id}  expected from our own payment, not on chain yet at {height}"); }
+                // an undone box stays undone, asked about again, until it is back or its coins are spent
+                None if undone.contains(id) => { checked(id, "undone"); say!("  {id}  undone by a reorganisation and not back in the chain at height {height}: not a payment now"); }
+                None if void.contains(id) => { checked(id, "void"); say!("  {id}  VOID: the payment that was to make it can never confirm (a coin it spends is gone, or it was refused for good): not accepted"); }
+                None => { checked(id, "absent"); say!("  {id}  ABSENT at height {height}: not accepted"); }
+            },
             Some(Err(_)) => { checked(id, "undecodable"); say!("  {id}  present but undecodable: not accepted") }
             Some(Ok(b)) if !my_trees.contains(&b.ergo_tree) => { checked(id, "other_address"); say!("  {id}  exists but pays another address: not accepted") }
             Some(Ok(b)) => {
-                let new = !boxes.contains_key(id);
+                // a box that was undone and is back is the same payment, not a new one
+                let back = undone.contains(id);
+                let new = !boxes.contains_key(id) && !back;
+                undone.retain(|u| u != id); void.retain(|v| v != id);
                 // the first height at or below an agreed tip at which this box was proven; confirmations are counted from it (a lower bound)
                 let confirmed_at: Option<u64> = boxes.get(id).and_then(|x| x.confirmed_at).or((height <= agreed).then_some(height as u64));
+                let confirmed_in: String = boxes.get(id).filter(|x| x.confirmed_at.is_some()).map(|x| x.confirmed_in.clone()).filter(|c| !c.is_empty()).or_else(|| confirmed_at.and_then(header_at)).unwrap_or_default();
                 let confirmations = confirmed_at.map_or(0, |c| (agreed as u64 + 1).saturating_sub(c));
                 let first_proven = boxes.get(id).map(|x| x.first_proven).filter(|h| *h > 0).unwrap_or(height as u64);
                 boxes.insert(id.clone(), TrackedBox { value: *b.value.as_u64(), tokens: b.tokens.as_ref().map_or(0, |t| t.len()), assets: b.tokens.iter().flat_map(|t| t.iter()).map(|x| Asset { id: String::from(x.token_id), amount: *x.amount.as_u64() }).collect(),
-                    proven_at: height as u64, first_proven, confirmed_at, bytes: hex(f.as_ref().expect("present")), ..Default::default() });
+                    proven_at: height as u64, first_proven, confirmed_at, confirmed_in, bytes: hex(f.as_ref().expect("present")), ..Default::default() });
+                if back { say!("  {id}  back in the chain after it was undone: the same payment, not a new one"); }
                 expect.retain(|e| e != id);
                 crate::out::push("checked", serde_json::json!({ "id": id, "state": if confirmed_at.is_some() { "proven" } else { "seen" }, "height": height, "nanoerg": b.value.as_u64(), "confirmations": confirmations, "added": new }));
                 // a box confirmed on an earlier sync stays confirmed when this proof happens to be against a block above
@@ -1131,12 +1282,15 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
         my_trees.iter().rposition(|t| trees.contains(t)).map_or(1, |i| i + 1)
     });
     w.expect = expect;
+    let keep_last = |v: &mut Vec<String>| { let n = v.len(); if n > 64 { v.drain(..n - 64); } };
+    keep_last(&mut undone); keep_last(&mut void);
+    (w.undone, w.void) = (undone, void);
     // asked every node and got an answer from each: the wallet's boxes are up to date, whoever moved them
     if reconcile && all_listed { w.refresh = false; }
     // (a sync that has just asked every node already holds what they list: nothing more to look for)
     if refresh && !(reconcile && all_listed) { w.refresh = true; say!("another wallet of this phrase may be in use, or a payment's outcome is unclear: the next sync asks the nodes again what this wallet's addresses hold"); }
     crate::out::set("refresh_due", w.refresh);
-    if let Some(n) = in_use {
+    if let Some(n) = in_use.map(|n| n.max(w.addresses.unwrap_or(1) as usize).min(addr_strs.len())) {
         w.scan_addresses = false;
         w.addresses = Some(n as u64);
         w.address_list = Some(addr_strs.iter().take(n).cloned().collect());
@@ -1391,3 +1545,4 @@ mod tests {
         let _ = std::fs::remove_dir_all(&st);
     }
 }
+

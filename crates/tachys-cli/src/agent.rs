@@ -67,12 +67,12 @@ pub(crate) fn agent(args: &[String]) -> crate::out::Ended {
 }
 
 /// What a receipt turned out to be.
-struct Receipt { accepted: bool, code: &'static str, why: &'static str, confirmations: u64, first_seen: bool, nanoerg: Option<u64>, tokens: Vec<serde_json::Value> }
+struct Receipt { accepted: bool, code: &'static str, why: &'static str, confirmations: u64, first_seen: bool, nanoerg: Option<u64>, tokens: Vec<serde_json::Value>, pending: Option<bool> }
 impl Receipt {
     /// Into an answer: `accepted`, `reason`, `confirmations`, and what the receipt's own box holds.
     fn write_into(&self, v: &mut serde_json::Value, receipt: &str) {
         v["accepted"] = self.accepted.into(); v["reason"] = self.why.into(); v["confirmations"] = self.confirmations.into();
-        v["receipt"] = serde_json::json!({ "box": receipt, "nanoerg": self.nanoerg, "tokens": self.tokens, "first_seen": self.first_seen });
+        v["receipt"] = serde_json::json!({ "box": receipt, "nanoerg": self.nanoerg, "tokens": self.tokens, "first_seen": self.first_seen, "pending": self.pending });
         if !self.accepted { v["code"] = self.code.into(); v["refused"] = self.why.into(); }
     }
 }
@@ -122,19 +122,34 @@ impl Agent {
     /// says what the box holds and whether this is the first time this wallet has seen it: a receipt shown twice, or
     /// a small box shown for a large invoice, is told apart by those and not by the wording of a reason.
     fn receipt(&self, receipt: &str) -> Receipt {
-        let r = self_run(&["wallet", "receive", "--state", &self.state, "--node", &self.node, "--ids", receipt]);
+        // `--pools`: if a node holds, in its pool, the payment that makes this box, the wallet takes and holds it
+        // (`wallet::pending_payment`, taken only if it is that payment). From then on its coins are proven with the box
+        // each time: unspent, it is on its way (`pending: true`); one gone, it is void. Without it a box id alone could
+        // not tell a late payment from a double-spent one.
+        let r = self_run(&["wallet", "receive", "--state", &self.state, "--node", &self.node, "--ids", receipt, "--pools"]);
         let found = if r.ok { r.json["checked"].as_array().and_then(|a| a.iter().find(|c| c["id"] == receipt)).cloned().unwrap_or(serde_json::Value::Null) } else { serde_json::Value::Null };
+        // pending: held, its coins unspent and its signatures checked (true); no node holding one, among nodes that answered
+        // (false); nobody answered, or nothing to say (null)
+        let answered = r.json["pools"].as_array().is_some_and(|a| a.iter().any(|p| p["id"] == receipt && p["answered"] == true));
+        let pending = match found["state"].as_str() { Some("expected") => Some(true), Some("absent") if answered => Some(false), _ => None };
         let confirmations: u64 = found["confirmations"].as_u64().unwrap_or(0);
         let (accepted, code, why) = match found["state"].as_str() {
             Some("proven") if confirmations >= 1 => (true, "", if found["added"] == true { "proven unspent and pays this wallet" } else { "already in this wallet, proven unspent" }),
             Some("proven") | Some("seen") => (false, "not_yet", "seen in a block that only the node has shown; not yet under a tip the peers agree on: ask again after a block"),
             Some("other_address") => (false, "failed", "that box pays someone else"),
             Some("spent") => (false, "failed", "this wallet was paid that box and has since spent it"),
-            Some("absent") | Some("expected") => (false, "not_yet", "no such unspent box: not on chain yet, or not a real receipt"),
+            // a payment this wallet held and could never submit: a coin it spends is gone. Nothing will make it now
+            Some("void") => (false, "failed", "the payment that was to make this box can never confirm: a coin it spends is gone (spent first by another payment), or it was refused for good"),
+            // the block that confirmed it left the chain: not a payment now, and perhaps one again later
+            Some("undone") => (false, "not_yet", "the block that confirmed this box is no longer in the chain the peers agree on (a reorganisation): it is not a payment now. It may be included again (then it is accepted with first_seen false: the same payment); or its coins were spent elsewhere, and it never will be"),
+            // the payment is held and none of its coins is gone: it is on its way
+            Some("expected") => (false, "not_yet", "the payment that makes this box is held by this wallet and its coins are unspent: it is not in a block yet"),
+            // nothing to go on but the box id: no node asked holds a payment that makes it
+            Some("absent") => (false, "not_yet", "no such unspent box, and no node asked holds a payment that makes it: not sent, not yet seen, already dropped, or not a real receipt"),
             _ => (false, "not_proven", "could not be checked"),
         };
         let held = self.wallet().ok().and_then(|w| w.boxes.get(receipt).cloned());
-        Receipt { accepted, code, why, confirmations, first_seen: found["added"] == true,
+        Receipt { accepted, code, why, confirmations, first_seen: found["added"] == true, pending,
             nanoerg: held.as_ref().map(|b| b.value), tokens: held.map(|b| b.assets.iter().map(|a| serde_json::json!({ "id": a.id, "amount": a.amount })).collect()).unwrap_or_default() }
     }
     /// What became of a payment this wallet sent: "waiting", "confirmed", "coins spent", "not included", or `None` if it sent no such payment.

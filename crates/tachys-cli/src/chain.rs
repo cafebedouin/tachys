@@ -16,8 +16,11 @@ pub(crate) fn agreed_height(state: &str) -> u32 {
     std::fs::read(format!("{state}/agreed-tip.bin")).ok().and_then(|b| Header::scorex_parse_bytes(&b).ok()).map_or(0, |h| h.height)
 }
 
-pub(crate) fn load_chain(state: &str) -> Vec<Header> {
-    let raw = std::fs::read(format!("{state}/agreed-chain.bin")).unwrap_or_default();
+pub(crate) fn load_chain(state: &str) -> Vec<Header> { load_chain_file(&format!("{state}/agreed-chain.bin")) }
+
+/// A chain file as `chain_bytes` writes it, newest first; nothing in it is checked here.
+pub(crate) fn load_chain_file(path: &str) -> Vec<Header> {
+    let raw = std::fs::read(path).unwrap_or_default();
     let (mut chain, mut i) = (vec![], 0usize);
     while i + 2 <= raw.len() {
         let n = u16::from_be_bytes([raw[i], raw[i + 1]]) as usize; i += 2;

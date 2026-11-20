@@ -16,7 +16,7 @@ A1="${LIP["A,${LINK_OF["A,T1"]}"]}:${P2P[A]}"; A2="${LIP["A,${LINK_OF["A,T2"]}"]
 end=$((SECONDS+240)); while [[ $SECONDS -lt $end ]]; do [[ "$(full_height A)" -ge 20 ]] && break; sleep 4; done
 gen="$(header_at A 1)"; cpid="$(header_at A $(( $(full_height A) - 12 )))"; rest A "/blocks/$cpid/header" > "$W/cp.json"
 jq -n --arg g "$gen" --argjson magic "$MAGIC" --slurpfile cp "$W/cp.json" \
-  '{name:"devnet", magic:$magic, genesis:$g, checkpoint:$cp[0], floor_divisor:1048576, v2_activation_height:0, block_interval_ms:3000, seeds:""}' > "$NETF"
+  '{name:"devnet", magic:$magic, genesis:$g, checkpoint:$cp[0], floor_divisor:1048576, v2_activation_height:0, block_interval_ms:3000, epoch_length:16, seeds:""}' > "$NETF"
 echo "$A1" > "$W/seeds-a1.txt"; echo "$A2" > "$W/seeds-a2.txt"; echo "$T1ADDR" > "$W/seeds-t1.txt"
 
 echo "[op] 1. the payer wallet is funded and proves its box (online, from the node)"
@@ -29,10 +29,13 @@ box=""; end=$((SECONDS+120)); while [[ $SECONDS -lt $end && -z "$box" ]]; do sle
 feetree="$(wallet A "/wallet/transactionById?id=$txid" | jq -r '.outputs[] | select(.value==1000000) | .ergoTree' | head -1)"
 jq --arg f "$feetree" '. + {fee_tree:$f}' "$NETF" > "$NETF.tmp" && mv "$NETF.tmp" "$NETF"
 in2 tips --seeds "$W/seeds-a2.txt" --peers 1 --tries 1 --quorum 1 --state "$W/payer" > /dev/null
-in2 wallet receive --state "$W/payer" --node "p2p://$A2" --ids "$box" | tail -n 2 | head -n 1 | sed 's/^/  payer: /'
+# a proof from a node a block past the agreed tip leaves the box "seen", which is not spent: sync and ask again until it is proven
+for try in 1 2 3 4 5 6; do o="$(in2 wallet receive --state "$W/payer" --node "p2p://$A2" --ids "$box")"; echo "$o" | grep -q "proven unspent" && break; sleep 5
+  in2 tips --seeds "$W/seeds-a2.txt" --peers 1 --tries 1 --quorum 1 --state "$W/payer" > /dev/null; done
+echo "$o" | tail -n 2 | head -n 1 | sed 's/^/  payer: /'
 
 echo "[op] 2. the relaying wallet syncs and serves, with proof relay on"
-in1 tips --seeds "$W/seeds-a1.txt" --peers 1 --tries 1 --quorum 1 --state "$W/relay" > /dev/null
+in1 tips --seeds "$W/seeds-a1.txt" --peers 1 --tries 1 --quorum 1 --state "$W/relay" --keep-chain > /dev/null
 ip netns exec "${NS[T1]}" "$T" serve --state "$W/relay" --listen "$T1ADDR" --secs 150 --relay-proofs "$A1" --net-file "$NETF" > "$W/serve.log" 2>&1 &
 SERVE=$!; sleep 2
 

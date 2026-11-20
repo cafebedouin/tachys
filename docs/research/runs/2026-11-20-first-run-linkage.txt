@@ -1,0 +1,55 @@
+A first run linked to the release checkpoint (finding 55), release build, 2026-11-20. Fresh state directories in a
+scratch folder, the release's own seed lists, no wallet. Ids cut short.
+
+== mainnet, first run (checkpoint at height 1914880, nine days old)
+least difficulty a header may claim: 14679132864512 (release floor; no earlier tip remembered)
+chain: 10 linked headers 1920714..1920723 taken from pushed headers; no extra connection
+neighbour cost: 8 connections, 7 messages sent, 14.7 connection-seconds held (failures included), 20877 B received, 8.2 s wall
+  link from 167.233.240.191:9030: 5833 header(s), 1691322 B, 14812 ms
+linked: 5833 header(s) from height 1914880 up to the agreed chain, each with work above the floor and a step the difficulty rule allows
+verdict: Agreed
+tip: height 1920723 id 6d77fc21… (105 s old)
+25.4 s wall in all.
+
+== mainnet, the next run (a tip remembered: no linking)
+least difficulty a header may claim: 35201887502336 (from the tip agreed on last run, or the release floor if higher)
+chain: 10 linked headers 1920714..1920723 taken from pushed headers; no extra connection
+verdict: Agreed
+
+== testnet, first run, before the fix to forward sync (checkpoint at height 642400, seven days old)
+  link from 213.239.193.208:9023: 0 header(s), 13688 B, 10660 ms        (it announced 400 ids and sent none)
+  link from 176.9.15.237:9021: header at height 653534 does not follow the one before at the chain's difficulty
+  link from 176.9.15.237:9021: 6384 header(s), 1842289 B, 27610 ms
+verdict: NOT TRUSTED (a first run must link the chain to the release checkpoint: 6384 of the 11123 headers between came, linked and checked)
+The header at 653534 was the node's announcement of a block just mined, taken for the continuation. Forward sync now
+keeps only headers that are the child of the one before, and passes over such an announcement.
+
+== testnet, first run, after the fix
+chain from 213.239.193.208:9023: 10 linked headers 653526..653535 (1 already in hand) in 9 requests, 2421 B, 1725 ms
+  link from 213.239.193.208:9023: 11125 header(s), 3657883 B, 208994 ms
+linked: 11125 header(s) from height 642400 up to the agreed chain, each with work above the floor and a step the difficulty rule allows
+verdict: Agreed
+3 min 45 s wall in all; the peer was slow, not the client (the same build linked mainnet's 5833 in 15 s).
+
+== the rig (peeryard, devnet), the four older recipes with this build
+light-wallet PASS (linked 2 headers from the devnet checkpoint through the node)
+light-overlay PASS (a wallet on its first run linked 3 headers through a serving wallet that keeps the chain,
+                    `tips --keep-chain`: "link from 10.9.21.1:9030: 3 header(s)")
+offline-payee PASS
+store-forward FAIL once (the node a block past the carrier's tip; the carrier, as built, kept the bad-input parcel
+              where the recipe wanted a refusal at once: finding 57), then PASS after the recipe syncs and asks again
+dishonest-payer INCONCLUSIVE: part 1 void as built; part 2 spoilt by the rig (node A did not come back after its
+              relaunch), see 2026-11-20-rig-dishonest-payer.txt
+
+== after the review round (finding 59), mainnet, a fresh state directory, `tips --keep-chain --json` twice
+{"verdict":"agreed","code":null,"linked":{"bytes":1779455,"from_height":1914880,"headers":6141,"ms":18112},"tip":1921031}
+{"verdict":"agreed","code":null,"linked":{"bytes":0,"from_height":1921021,"headers":0,"ms":0},"tip":1921031}
+The second run went on from the kept chain and fetched nothing (before the fix it would have fetched all 6,141 again).
+
+== the rig after the review round
+light-overlay PASS; offline-payee and store-forward FAIL at first: the payer's funding box was proven one block above
+the agreed tip ("seen"), which a wallet does not spend ("none of this wallet's boxes is confirmed"); the recipes now
+sync and ask again until it is proven, and both PASS.
+
+== after the second review round, mainnet, a fresh state directory
+{"verdict":"agreed","code":null,"linked":{"bytes":1800337,"from_height":1914880,"headers":6165,"ms":19036},"tip":1921055}

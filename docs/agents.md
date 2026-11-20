@@ -47,18 +47,34 @@ block), `timeout`, `node_refused`, `outcome_unknown`, `misuse`, `failed`.
 - `pay`: `{"ok":true,"tx":…,"receipt":…,"to":…,"nanoerg":…,"fee_nanoerg":1100000,"purpose":…}`. The
   payment is broadcast, not yet in a block. Give `receipt` to the payee.
   A refusal looks like `{"ok":false,"refused":"over the per-payment limit: …"}`.
-- `accept`: `{"ok":true,"accepted":true,"reason":…,"confirmations":N,"receipt":{"box":…,"nanoerg":…,"tokens":[…],"first_seen":true}}`
+- `accept`: `{"ok":true,"accepted":true,"reason":…,"confirmations":N,"receipt":{"box":…,"nanoerg":…,"tokens":[…],"first_seen":true,"pending":null}}`
   plus the balance fields. A receipt is accepted only if the box is proven unspent, under a tip the peers agree
   on, and pays this wallet. **That is all `accepted` says.** Whether it is the payment you were owed is for you to
   check: `receipt.nanoerg` and `receipt.tokens` are what that one box holds, and `receipt.first_seen` is false for
   a box this wallet already knew (the same receipt shown twice, or the wallet's own change). Until the payment
   is in a block the answer is `ok:false`, `accepted:false`, exit 1, `code:"not_yet"`; so it is while only the node
   has shown the block it is in. Ask again after a block (about two minutes on mainnet), or use `wait`.
-  `confirmations` is a lower bound; for a large payment wait for more.
+  `confirmations` is a lower bound; for a large payment wait for more. One confirmation can be undone: if a longer
+  chain without that block takes over, the answer turns to `not_yet` with a `refused` that says the box was undone
+  (its state in `wallet receive` is `undone`). Treat a payment you counted as not paid until it is accepted again;
+  when it is, `first_seen` is false, because it is the same payment back. If you held the signed payment yourself
+  (`wallet promise`) and its coins were spent elsewhere first, the wallet's sync finds so and the answer becomes
+  `code:"failed"`: it will never be paid by that payment. Given only the box id, `accept` asks the nodes whether one
+  holds, in its pool, the payment that makes that box. The wallet holds it only if, as read, it makes that box, every
+  coin it spends is proven unspent, and its signatures verify against them. `receipt.pending` then says what is
+  known: `true`, such a payment is held, so it is on its way; `false`, the nodes that answered hold no such payment
+  (not sent, not yet seen, or dropped); `null`, no node answered, or there is nothing to say. Once held, a coin of it
+  spent elsewhere makes the answer `failed`, unless the payment is proven to be in the chain; and if what spent the
+  coin is itself undone, it is held again. A payment dropped from every pool before it was first asked about cannot
+  be told from one never sent. A coin of a held payment that this wallet never saw (one made by a payment not yet
+  in a block) is not taken for gone: the answer stays `not_yet`. A reorganisation deeper than the headers the wallet
+  keeps (ten to sixteen) reads as `spent`, and `accept` then says `failed` with "has since spent it", though you did
+  not.
 - `wait`: `--receipt BOXID` answers as `accept` does, once the receipt has `--confirmations` (1 unless said). `--tx
   TXID` answers `{"tx":…,"result":"confirmed","confirmations":N}` once a payment this wallet made has them. It exits
   1 otherwise: with `code:"timeout"` if the time ran out (15 minutes unless `--timeout` says otherwise), at once if
-  the receipt pays someone else or the payment ended as `coins spent` or `not included`.
+  the receipt pays someone else, its payment can never confirm (`failed`), or the payment ended as `coins spent` or
+  `not included`.
 - `setup`: `{"created":…,"address":…,"network":…,"sealed":…,"can_pay":…,"note":…}`. `history`:
   `{"address":…,"sent":[{"tx":…,"result":…}],"expecting":[…],"payments_log":[…]}`, as the last sync left them.
 - Token payments: `--token ID --token-amount RAW` in place of `--erg` (raw units, no decimals). The

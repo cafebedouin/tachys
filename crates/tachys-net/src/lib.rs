@@ -338,6 +338,74 @@ pub async fn fetch_sections(addr: &str, type_id: u8, ids: &[[u8; 32]], wait: Dur
     Ok((out, Cost { connect_ms, held_ms: t0.elapsed().as_millis(), requests_sent: 1, bytes_received: bytes }))
 }
 
+/// Fetch headers forward from `from` (a genuine header's bytes, behind the peer's tip), as a syncing node does: offer
+/// it in one sync message, take the header ids the peer announces as its continuation (a node announces up to 400),
+/// request them in one message, then offer the newest received and go on, until `want` headers have come or the peer
+/// announces nothing new. One sync message a second at most (a node takes one per 100 ms). Returns the headers
+/// oldest first, each the child of the one before (by the ids `id_of` and `parent_of` read); nothing else about them
+/// is checked here: the caller judges every header.
+///
+/// `budget` bounds the whole exchange: a peer that answers each round just before its deadline with a header or two
+/// could otherwise hold a first run for hours. When it is spent, what came so far is returned and the caller goes on to
+/// the next peer from there.
+pub async fn sync_forward(addr: &str, from: Vec<u8>, want: usize, wait: Duration, budget: Duration, id_of: impl Fn(&[u8]) -> Option<[u8; 32]>, parent_of: impl Fn(&[u8]) -> Option<[u8; 32]>) -> Result<(Vec<Vec<u8>>, Cost), String> {
+    let end = Instant::now() + budget;
+    let (_hs, mut conn, t0, connect_ms) = open(addr).await?;
+    let mut cost = Cost { connect_ms, ..Default::default() };
+    let (mut out, mut last) = (Vec::<Vec<u8>>::new(), from);
+    let mut last_sync: Option<Instant> = None;
+    // a node also announces each new block as it comes, one id at a time: such an announcement is not the continuation
+    // and its header does not link. Rounds that add nothing are allowed a few times before giving up
+    let mut idle = 0;
+    while out.len() < want && idle < 3 && Instant::now() < end {
+        if let Some(t) = last_sync { if let Some(rest) = Duration::from_secs(1).checked_sub(t.elapsed()) { tokio::time::sleep(rest).await; } }
+        let payload = serialize_sync_info(&SyncInfo::V2 { headers: vec![last.clone()] }).map_err(|e| format!("sync encode: {e}"))?;
+        conn.send(CODE_SYNC_INFO, payload).await.map_err(|e| format!("sync send: {e}"))?;
+        cost.requests_sent += 1; last_sync = Some(Instant::now());
+        // the continuation: an Inv of header ids (a peer may send its own sync message first; that is passed over)
+        let deadline = (Instant::now() + wait).min(end);
+        let ids: Vec<[u8; 32]> = loop {
+            let Some(left) = deadline.checked_duration_since(Instant::now()) else { break vec![] };
+            let Ok(got) = tokio::time::timeout(left, conn.read_message()).await else { break vec![] };
+            let frame = got.map_err(|e| format!("read: {e}"))?;
+            cost.bytes_received += frame.payload.len() + 13;
+            if frame.code == CODE_INV { if let Ok(inv) = deserialize_inv(&frame.payload) { if inv.type_id == HEADER_TYPE && !inv.ids.is_empty() { break inv.ids } } }
+        };
+        // only ids not had already, and no more than are wanted
+        let had = id_of(&last);
+        // each id once (a peer repeating one would otherwise keep the wait below from ever being met), and no more than are wanted
+        let mut seen = std::collections::HashSet::new();
+        let ids: Vec<[u8; 32]> = ids.into_iter().filter(|i| Some(*i) != had && seen.insert(*i)).take(want - out.len()).collect();
+        if ids.is_empty() { break }
+        let payload = serialize_inv(&InvData { type_id: HEADER_TYPE, ids: ids.clone() }).map_err(|e| format!("request encode: {e}"))?;
+        conn.send(CODE_REQUEST_MODIFIER, payload).await.map_err(|e| format!("request send: {e}"))?;
+        cost.requests_sent += 1;
+        let mut got: std::collections::HashMap<[u8; 32], Vec<u8>> = std::collections::HashMap::new();
+        let deadline = (Instant::now() + wait).min(end);
+        while got.len() < ids.len() {
+            let Some(left) = deadline.checked_duration_since(Instant::now()) else { break };
+            let Ok(r) = tokio::time::timeout(left, conn.read_message()).await else { break };
+            let frame = r.map_err(|e| format!("read: {e}"))?;
+            cost.bytes_received += frame.payload.len() + 13;
+            if frame.code != CODE_MODIFIER { continue }
+            let Ok(data) = deserialize_modifiers(&frame.payload) else { continue };
+            if data.type_id != HEADER_TYPE { continue }
+            for (id, b) in data.modifiers { if ids.contains(&id) { got.insert(id, b); } }
+        }
+        // in the order announced, each the child of the one before, up to the first that is missing or is not: the rest
+        // cannot be linked without it
+        let before = out.len();
+        for id in &ids {
+            let Some(b) = got.remove(id) else { break };
+            if parent_of(&b).is_none() || parent_of(&b) != id_of(&last) { if out.len() == before { continue } else { break } }
+            last = b.clone(); out.push(b);
+        }
+        if out.len() == before { idle += 1 } else { idle = 0 }
+    }
+    cost.held_ms = t0.elapsed().as_millis();
+    Ok((out, cost))
+}
+
 // ---- box proofs over the peer protocol (prototype message; needs a node carrying our patch) ----
 
 pub const CODE_GET_BOX_PROOF: u8 = 92;
@@ -404,8 +472,8 @@ pub async fn observe(addr: &str, secs: u64, retry: Duration) -> Result<std::coll
 pub struct ServeStats { pub reloads: usize, pub proofs_relayed: usize, pub parcels_taken: usize, pub connections: usize, pub sync_pushes: usize, pub header_requests: usize, pub headers_served: usize, pub bytes_sent: usize }
 
 /// Listen on `listen` for `secs` seconds. To each peer that connects: push one sync message carrying
-/// `headers` (id, bytes; newest first, at most 50), then answer header requests for those ids.
-/// Nothing else is answered. At most `max_conns` peers at a time; each is dropped after 10 s idle.
+/// `headers` (id, bytes; newest first; the newest 50), then answer header requests for those ids, and a sync message
+/// offering one of them with the ids that follow it. Nothing else is answered. At most `max_conns` peers at a time; each is dropped after 10 s idle.
 pub type ParcelSink = std::sync::Arc<dyn Fn(&[u8]) -> Option<[u8; 32]> + Send + Sync>;
 
 /// What a relaying wallet hands back for a box-proof request: the node's answer, plus any headers
@@ -450,8 +518,25 @@ pub async fn serve(listen: &str, headers: Vec<([u8; 32], Vec<u8>)>, secs: u64, m
             let n = payload.len();
             if conn.send(CODE_SYNC_INFO, payload).await.is_err() { return }
             { let mut s = stats.lock().unwrap(); s.sync_pushes += 1; s.bytes_sent += n + 13; }
-            for _ in 0..32 {
+            // enough frames to pass on a long chain to a wallet syncing forward (two a round, 400 headers a round), and no
+            // more than five minutes for one peer: slow peers must not hold every slot for the whole time served
+            let until = Instant::now() + Duration::from_secs(300);
+            for _ in 0..4096 {
+                if Instant::now() >= until { return }
                 let Ok(Ok(frame)) = tokio::time::timeout(Duration::from_secs(10), conn.read_message()).await else { return };
+                if frame.code == CODE_SYNC_INFO {
+                    // a wallet syncing forward (`sync_forward`) offers a header it has: announce what follows it here,
+                    // oldest first, up to 400, as a node does. A header we do not hold gets no answer.
+                    let Ok(SyncInfo::V2 { headers: offered }) = deserialize_sync_info(&frame.payload) else { continue };
+                    let Some(theirs) = offered.last() else { continue };
+                    let next: Vec<[u8; 32]> = { let hs = headers.lock().unwrap(); match hs.iter().position(|h| &h.1 == theirs) { Some(i) => hs[..i].iter().rev().take(400).map(|h| h.0).collect(), None => vec![] } };
+                    if next.is_empty() { continue }
+                    let Ok(payload) = serialize_inv(&InvData { type_id: HEADER_TYPE, ids: next }) else { return };
+                    let n = payload.len();
+                    if conn.send(CODE_INV, payload).await.is_err() { return }
+                    stats.lock().unwrap().bytes_sent += n + 13;
+                    continue;
+                }
                 if frame.code == CODE_GET_BOX_PROOF {
                     // pass a box-proof request on to our own node and hand the answer back unchanged;
                     // the asker verifies it, so we add nothing to trust, only reach
@@ -487,7 +572,7 @@ pub async fn serve(listen: &str, headers: Vec<([u8; 32], Vec<u8>)>, secs: u64, m
                 if frame.code != CODE_REQUEST_MODIFIER { continue }
                 let Ok(inv) = deserialize_inv(&frame.payload) else { return };
                 if inv.type_id != HEADER_TYPE { continue }
-                let found: Vec<([u8; 32], Vec<u8>)> = { let hs = headers.lock().unwrap(); inv.ids.iter().filter_map(|id| hs.iter().find(|h| &h.0 == id).cloned()).collect() };
+                let found: Vec<([u8; 32], Vec<u8>)> = { let hs = headers.lock().unwrap(); let at: std::collections::HashMap<&[u8; 32], &Vec<u8>> = hs.iter().map(|h| (&h.0, &h.1)).collect(); inv.ids.iter().filter_map(|id| at.get(id).map(|b| (*id, (*b).clone()))).collect() };
                 { let mut s = stats.lock().unwrap(); s.header_requests += 1; s.headers_served += found.len(); }
                 if found.is_empty() { continue }
                 let Ok(payload) = serialize_modifiers(&ModifiersData { type_id: HEADER_TYPE, modifiers: found }) else { return };

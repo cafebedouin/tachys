@@ -154,10 +154,12 @@ fn headers_json(hs: &[Header]) -> String {
 }
 /// A network of our own (`--net-file`): its checkpoint, a release floor of `checkpoint difficulty / 1`, and a block
 /// interval (which sets how fast the remembered floor loosens).
-fn net_file(st: &str, checkpoint: &Header, block_interval_ms: u64) -> String {
+fn net_file(st: &str, checkpoint: &Header, block_interval_ms: u64) -> String { net_file_with(st, checkpoint, block_interval_ms, 1) }
+/// `net_file`, with a release floor of `checkpoint difficulty / floor_divisor`.
+fn net_file_with(st: &str, checkpoint: &Header, block_interval_ms: u64, floor_divisor: u32) -> String {
     let cp: Value = serde_json::from_str::<Value>(&headers_json(std::slice::from_ref(checkpoint))).unwrap()[0].clone();
     let path = format!("{st}/net.json");
-    std::fs::write(&path, json!({ "name": "witness", "magic": MAGIC, "genesis": "11".repeat(32), "checkpoint": cp, "floor_divisor": 1, "v2_activation_height": 0, "block_interval_ms": block_interval_ms, "seeds": "", "fee_tree": "" }).to_string()).unwrap();
+    std::fs::write(&path, json!({ "name": "witness", "magic": MAGIC, "genesis": "11".repeat(32), "checkpoint": cp, "floor_divisor": floor_divisor, "v2_activation_height": 0, "block_interval_ms": block_interval_ms, "seeds": "", "fee_tree": "" }).to_string()).unwrap();
     path
 }
 
@@ -319,18 +321,28 @@ fn w3_a_box_confirmed_at_h_is_not_dropped_by_a_proof_against_a_stored_header_bel
 fn w4_a_peers_tip_is_its_highest_pushed_header_that_follows_another_it_pushed() {
     let st = dir("w4");
     let now = now_ms();
-    let cp = make(1000, BlockId(Digest32::from([5u8; 32])), now - 3_600_000, bits(1), &[0u8; 33], 0);
-    let nf = net_file(&st, &cp, 120_000);
     let root = |h: u32| -> Vec<u8> { filler(h).into_iter().chain([0u8; 33]).take(33).collect() };
+    // A first run links the agreed chain back to the release checkpoint, so each arm's network has as its checkpoint the
+    // parent of the chain's first header, at that header's difficulty, and a floor a quarter or an eighth of it (1).
+    let net_below = |name: &str, first: u32, n_bits: u32, divisor: u32, ts: u64| -> (Header, String) {
+        let d = format!("{}/{name}", &*st);
+        std::fs::create_dir_all(&d).unwrap();
+        let cp = make(first - 1, BlockId(Digest32::from([5u8; 32])), ts, n_bits, &[0u8; 33], 0);
+        let nf = net_file_with(&d, &cp, 120_000, divisor);
+        (cp, nf)
+    };
     // ten linked headers at difficulty 4, the newest a minute old; and one header at difficulty 1, five blocks higher,
     // that links to nothing the peer has. Every one carries real work for its own difficulty and passes the floor (1).
-    let real = chain(10, 2000, now - 60_000, bits(4), true, root);
+    let (cp, nf) = net_below("main", 1991, bits(4), 4, now - 11 * 60_000);
+    let real = above(&cp, 10, now - 10 * 60_000, bits(4), root);
+    assert_eq!((real[0].height, real[9].height), (2000, 1991));
     let cheap = mined(2005, BlockId(Digest32::from([8u8; 32])), now - 30_000, bits(1), &[1u8; 33]);
-    let tips = |name: &str, pushed: Vec<Header>| -> Ran {
+    let tips_on = |nf: &str, name: &str, pushed: Vec<Header>| -> Ran {
         let seeds = format!("{}/{name}.seeds", &*st);
         std::fs::write(&seeds, peer(pushed, None, 40)).unwrap();
-        tachys(&["tips", "--net-file", &nf, "--seeds", &seeds, "--peers", "1", "--tries", "1", "--quorum", "1", "--depth", "10", "--wait", "2", "--json"])
+        tachys(&["tips", "--net-file", nf, "--seeds", &seeds, "--peers", "1", "--tries", "1", "--quorum", "1", "--depth", "10", "--wait", "2", "--json"])
     };
+    let tips = |name: &str, pushed: Vec<Header>| -> Ran { tips_on(&nf, name, pushed) };
     // positive arm: the peer pushes the real chain alone; its tip is agreed on
     let r = tips("real", real.clone());
     let j = r.json();
@@ -345,13 +357,14 @@ fn w4_a_peers_tip_is_its_highest_pushed_header_that_follows_another_it_pushed() 
         "W4: a header of difficulty 1 at height 2005 pushed beside a chain of difficulty 4 up to 2000 was taken as the peer's tip; refusals {}; said: {said:#?}", j["refusals"]);
     // an honest fall in difficulty: 1917..1920 at difficulty 8, then 1921 (the first block of an epoch: 1920 = 15 * 128)
     // and on at difficulty 4. The peer's tip is the newest, 1926, not the heavier 1920 below it
+    let (cp_fall, nf_fall) = net_below("fall", 1917, bits(8), 8, now - 11 * 60_000);
     let mut fall: Vec<Header> = vec![];
-    let mut parent = BlockId(Digest32::from([6u8; 32]));
+    let mut parent = cp_fall.id;
     for h in 1917..=1926u32 {
         let x = mined(h, parent, now - (1926 - h) as u64 * 60_000 - 60_000, bits(if h <= 1920 { 8 } else { 4 }), &root(h));
         parent = x.id; fall.insert(0, x);
     }
-    let r = tips("fall", fall);
+    let r = tips_on(&nf_fall, "fall", fall);
     let j = r.json();
     assert_eq!((r.code, &j["verdict"], &j["tip"]["height"]), (0, &json!("agreed"), &json!(1926)), "after an honest fall in difficulty the peer's tip is its newest header: {}", r.err);
     // a peer whose headers follow none of each other, as the reference node pushes them: its highest is its tip

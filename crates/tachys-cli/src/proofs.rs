@@ -69,30 +69,72 @@ pub(crate) fn boxes(args: &[String]) -> crate::out::Ended {
     Ok(())
 }
 
+/// The tree packed at the front of a batch proof, walked as the verifier (`ergo_avltree_rust` 0.1.1,
+/// `BatchAVLVerifier::reconstruct_tree`) walks it, with every bound checked: that verifier indexes the proof without
+/// checking its length and unwraps an empty stack, so a malformed proof panics it, and a tree nested deep enough
+/// overflows the stack when it is labelled, which no `catch_unwind` stops. Returns where the packed tree ends (the
+/// direction bits start after it) and how deep it is (a leaf or a label is 1), or `None` if the verifier could not
+/// build one tree from it. Keys are 32 bytes and values carry their length, as in the state tree.
+pub(crate) fn packed_tree(proof: &[u8]) -> Option<(usize, usize)> {
+    const KEY: usize = 32;
+    let (mut i, mut depths, mut leaf_before) = (0usize, Vec::<usize>::new(), false);
+    loop {
+        let n = *proof.get(i)?; i += 1;
+        match n {
+            4 => break,
+            3 => { i = i.checked_add(32).filter(|&e| e <= proof.len())?; depths.push(1); leaf_before = false }
+            2 => {
+                // the first leaf after a label (or the first of all) carries its own key; a later one takes the key the leaf before named as next
+                if !leaf_before { i = i.checked_add(KEY).filter(|&e| e <= proof.len())?; }
+                i = i.checked_add(KEY).filter(|&e| e <= proof.len())?;
+                let len: [u8; 4] = proof.get(i..i.checked_add(4)?)?.try_into().ok()?; i += 4;
+                i = i.checked_add(u32::from_be_bytes(len) as usize).filter(|&e| e <= proof.len())?;
+                depths.push(1); leaf_before = true
+            }
+            // anything else is an inner node over the two before it (the byte is its balance); the verifier does not
+            // forget the leaf before across one
+            _ => { let r = depths.pop()?; let l = depths.pop()?; depths.push(1 + l.max(r)) }
+        }
+    }
+    (depths.len() == 1).then(|| (i, depths[0]))
+}
+
 /// Read a node's batch proof against one state root: for each key, the box bytes or `None` (proven absent).
 /// `None` overall if the proof does not answer for every key, a returned box does not hash to its id, or the proof
-/// does not reproduce the root. The proof bytes are a node's: a malformed proof that makes the verifier panic is
-/// caught here and counts as no proof. (Where the build aborts on panic, as the phone profile does, the process
-/// still ends; there the core runs as a child process, which is what contains it.)
+/// does not reproduce the root. The proof bytes are a node's, and the verifier trusts them to be well formed
+/// (`packed_tree`), so they are walked first: a tree it could not build, or one deeper than the tree the root
+/// names (its last byte is the tree's height), is no proof. The direction bits that follow the tree are read without
+/// a bound as well; each lookup reads at most one per level, so zero bytes enough for every lookup are added at the
+/// end. That gives a node nothing it could not have sent itself. The `catch_unwind` stays, for whatever the walk does
+/// not foresee; where the build aborts on panic (the phone profile) it stops nothing.
 pub(crate) fn lookup_all(root: &[u8], proof: &[u8], keys: &[[u8; 32]]) -> Option<Vec<Option<Vec<u8>>>> {
+    std::panic::catch_unwind(|| lookup_unguarded(root, proof, keys)).unwrap_or(None)
+}
+
+/// `lookup_all` without the `catch_unwind`: a panic here is a bound the walk missed (the tests call it directly).
+pub(crate) fn lookup_unguarded(root: &[u8], proof: &[u8], keys: &[[u8; 32]]) -> Option<Vec<Option<Vec<u8>>>> {
     use bytes::Bytes;
     use ergo_avltree_rust::authenticated_tree_ops::AuthenticatedTreeOps;
     use ergo_avltree_rust::batch_avl_verifier::BatchAVLVerifier;
     use ergo_avltree_rust::batch_node::{AVLTree, Node, NodeHeader};
     use ergo_avltree_rust::operation::Operation;
-    std::panic::catch_unwind(|| {
-        let tree = AVLTree::new(|d| Node::LabelOnly(NodeHeader::new(Some(*d), None)), 32, None);
-        let mut bv = BatchAVLVerifier::new(&Bytes::copy_from_slice(root), &Bytes::copy_from_slice(proof), tree, None, None).ok()?;
-        let mut found = vec![];
-        for k in keys {
-            match bv.perform_one_operation(&Operation::Lookup(Bytes::copy_from_slice(k))) {
-                Ok(Some(v)) if sigma_util::hash::blake2b256_hash(&v).as_ref() == k.as_slice() => found.push(Some(v.to_vec())),
-                Ok(None) => found.push(None),
-                _ => return None,
-            }
+    if root.len() != 33 { return None }
+    let (_, depth) = packed_tree(proof)?;
+    // a tree of height h has h + 1 levels; one more is allowed, so no honest proof is refused over how height is counted
+    if depth > root[32] as usize + 2 { return None }
+    let mut padded = proof.to_vec();
+    padded.resize(proof.len() + (keys.len() * depth).div_ceil(8) + 1, 0);
+    let tree = AVLTree::new(|d| Node::LabelOnly(NodeHeader::new(Some(*d), None)), 32, None);
+    let mut bv = BatchAVLVerifier::new(&Bytes::copy_from_slice(root), &Bytes::from(padded), tree, None, None).ok()?;
+    let mut found = vec![];
+    for k in keys {
+        match bv.perform_one_operation(&Operation::Lookup(Bytes::copy_from_slice(k))) {
+            Ok(Some(v)) if sigma_util::hash::blake2b256_hash(&v).as_ref() == k.as_slice() => found.push(Some(v.to_vec())),
+            Ok(None) => found.push(None),
+            _ => return None,
         }
-        bv.digest().is_some_and(|d| d.as_ref() == root).then_some(found)
-    }).unwrap_or(None)
+    }
+    bv.digest().is_some_and(|d| d.as_ref() == root).then_some(found)
 }
 fn keys_of(ids: &[String]) -> Result<Vec<[u8; 32]>, String> {
     ids.iter().map(|s| unhex(s).and_then(|b| <[u8; 32]>::try_from(b).ok())).collect::<Option<_>>().ok_or("a box id is not 32 bytes of hex".into())
@@ -308,33 +350,39 @@ pub(crate) fn included(args: &[String]) -> crate::out::Ended {
 /// Returns the height the inputs were proven at, or the reason to refuse.
 /// An `Err` carries whether the refusal is for good (`true`: the payment can be dropped) or may pass (`false`: a
 /// network failure, or something seen only in a block above `agreed`, which settles nothing).
-pub(crate) fn check_parcel(peer: &str, chain: &mut Vec<Header>, agreed: u32, tx: &ergo_lib::chain::transaction::Transaction) -> Result<u32, (String, bool)> {
-    use ergo_chain_types::PreHeader;
-    use ergo_lib::chain::ergo_state_context::ErgoStateContext;
-    use ergo_lib::chain::parameters::Parameters;
-    use ergo_lib::wallet::signing::TransactionContext;
+pub(crate) fn check_parcel(peer: &str, chain: &mut Vec<Header>, agreed: u32, tx: &ergo_lib::chain::transaction::Transaction) -> Result<u32, (String, bool, bool, Option<String>)> {
     use ergotree_ir::chain::ergo_box::ErgoBox;
     use ergotree_ir::serialization::SigmaSerializable;
-    if chain.len() < 10 { return Err(("the carrier has no agreed chain; run `tachys tips` first".into(), false)) }
+    if chain.len() < 10 { return Err(("the carrier has no agreed chain; run `tachys tips` first".into(), false, false, None)) }
     let inputs: Vec<String> = tx.inputs.iter().map(|i| String::from(i.box_id)).collect();
     let data: Vec<String> = tx.data_inputs.as_ref().map(|d| d.iter().map(|i| String::from(i.box_id)).collect()).unwrap_or_default();
     let outputs: Vec<String> = tx.outputs.iter().map(|o| String::from(o.box_id())).collect();
     let mut ids = inputs.clone(); ids.extend(data.clone()); ids.extend(outputs.clone());
     let mut cost = RestCost::default();
-    let (height, found) = prove_p2p(peer, chain, &ids, &mut cost).map_err(|e| (e, false))?;
+    let (height, found) = prove_p2p(peer, chain, &ids, &mut cost).map_err(|e| (e, false, false, None))?;
     let settled = height <= agreed;
     let (fi, rest) = found.split_at(inputs.len());
     let (fd, fo) = rest.split_at(data.len());
-    if fo.iter().any(|o| o.is_some()) { return Err((format!("already on chain (an output exists at height {height})"), settled)) }
-    if let Some(i) = fi.iter().position(|b| b.is_none()) { return Err((format!("input {} is not an unspent box at height {height}", &inputs[i][..16]), settled)) }
-    if fd.iter().any(|b| b.is_none()) { return Err(("a data input is not an unspent box".into(), settled)) }
+    if fo.iter().any(|o| o.is_some()) { return Err((format!("already on chain (an output exists at height {height})"), settled, true, None)) }
+    if let Some(i) = fi.iter().position(|b| b.is_none()) { return Err((format!("input {} is not an unspent box at height {height}", &inputs[i][..16]), settled, false, Some(inputs[i].clone()))) }
+    if fd.iter().any(|b| b.is_none()) { return Err(("a data input is not an unspent box".into(), settled, false, None)) }
     let parse = |v: &[Option<Vec<u8>>]| -> Result<Vec<ErgoBox>, String> { v.iter().map(|b| ErgoBox::sigma_parse_bytes(b.as_ref().expect("checked present")).map_err(|e| format!("box decode: {e:?}"))).collect() };
-    let (boxes, dboxes) = (parse(fi).map_err(|e| (e, true))?, parse(fd).map_err(|e| (e, true))?);
-    let headers: [Header; 10] = chain[..10].to_vec().try_into().map_err(|_| ("header context".to_string(), false))?;
-    let ctx = ErgoStateContext::new(PreHeader::from(headers[0].clone()), headers, Parameters::default());
-    let tc = TransactionContext::new(tx.clone(), boxes, dboxes).map_err(|e| (format!("inputs do not match the transaction: {e:?}"), true))?;
-    tc.validate(&ctx).map_err(|e| (format!("spending proof or balance check failed: {e:?}"), true))?;
+    let (boxes, dboxes) = (parse(fi).map_err(|e| (e, true, false, None))?, parse(fd).map_err(|e| (e, true, false, None))?);
+    verifies(tx, boxes, dboxes, chain).map_err(|e| (e, true, false, None))?;
     Ok(height)
+}
+
+/// Do a payment's spending proofs and balance check out, given the boxes it spends and reads (proven, by the caller)
+/// and the newest ten headers of the agreed chain for its context?
+pub(crate) fn verifies(tx: &ergo_lib::chain::transaction::Transaction, boxes: Vec<ergotree_ir::chain::ergo_box::ErgoBox>, dboxes: Vec<ergotree_ir::chain::ergo_box::ErgoBox>, chain: &[Header]) -> Result<(), String> {
+    use ergo_chain_types::PreHeader;
+    use ergo_lib::chain::ergo_state_context::ErgoStateContext;
+    use ergo_lib::chain::parameters::Parameters;
+    use ergo_lib::wallet::signing::TransactionContext;
+    let headers: [Header; 10] = chain.get(..10).map(|h| h.to_vec()).and_then(|h| h.try_into().ok()).ok_or("fewer than ten headers to check it against")?;
+    let ctx = ErgoStateContext::new(PreHeader::from(headers[0].clone()), headers, Parameters::default());
+    let tc = TransactionContext::new(tx.clone(), boxes, dboxes).map_err(|e| format!("inputs do not match the transaction: {e:?}"))?;
+    tc.validate(&ctx).map_err(|e| format!("spending proof or balance check failed: {e:?}"))
 }
 
 /// The node has moved past the agreed chain (routine on a fast chain). Ask it for its last headers and

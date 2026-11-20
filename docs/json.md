@@ -30,10 +30,21 @@ If a command panics (a fault in tachys), the exit code is 70 and `error` says so
 
 **`tips`** — `verdict`: `"agreed"` or `"not_trusted"`. When agreed: `tip` (`height`, `id`, `timestamp_ms`, `age_s`,
 `state_root`), `groups` (network groups that have reached it), `ahead` (headers kept above it that fewer groups
-have reached), `saved`. Unless no peer was heard at all: `peers_heard`, `refusals`. Always: `checkpoint_age_days`
-(how old this build's checkpoint is; past sixty, take a newer build).
+have reached), `saved`, and `linked` (`from_height`, `headers`, `bytes`, `ms`) when headers were fetched to link the
+chain back to the checkpoint. Unless no peer was heard at all: `peers_heard`, `refusals`. Always: `checkpoint_age_days`
+(how old this build's checkpoint is; past sixty, take a newer build). A first run (no tip agreed before in `--state`;
+always, without one) links the agreed chain back to the release checkpoint, fetching every header since it, and may be
+refused with `code`: `not_linked` (the headers between did not all come, link and check; what did is kept for the next
+try) or `below_pace` (the tip is lower than half the height the time since the checkpoint implies). `--keep-chain`
+keeps the whole linked chain in the state directory and extends it each run, for a wallet that serves others
+(`tachys serve` then passes it on to wallets on their first run). A private network's file may give `epoch_length`
+(blocks between changes of difficulty; 128 if absent).
 
-**`wallet status | receive | restore`** — `address`, `addresses`, `nanoerg`, `boxes` (how many), `tokens`
+**`wallet status | receive | restore`** — (`receive --pools` first asks the nodes' pools of payments not yet in a block for
+one that makes each box asked about; it holds one only if its body makes that box, every coin it spends is proven
+unspent, and its spending proofs verify. `pools` lists `{id, answered, held}` per box: `answered` is false if no REST
+node answered (nodes over the peer protocol are not asked). `void` lists `{boxes, coin_gone, reason}` for a held payment
+found dead by this call.) `address`, `addresses`, `nanoerg`, `boxes` (how many), `tokens`
 (`id`, `amount`), `confirmed_nanoerg` (the part of `nanoerg` in boxes confirmed under an agreed tip: what can be
 spent), `proven_at` (the height of the proof), `agreed_height`, `settled` (the proof is at or below the
 agreed tip), `expecting`, `cost`. `checked` lists each box asked about: `id`, `height`, and `state`:
@@ -44,11 +55,14 @@ agreed tip), `expecting`, `cost`. `checked` lists each box asked about: `id`, `h
 | `seen` | unspent and pays this wallet, but proven only in a block above the agreed tip: one source, not confirmed, not spent |
 | `absent` | no such unspent box |
 | `spent` | a box this wallet tracked is gone (removed), or a receipt asked about that a payment of this wallet has since spent |
+| `undone` | a box this wallet had confirmed is gone, and the header it was confirmed under is no longer the agreed chain's at that height: a reorganisation took its block away. Removed, and remembered (the last 64): asked again it is still `undone`; proven again, it is not `added`. A
+reorganisation deeper than the stored headers (ten to sixteen) cannot be told from a spend and reads `spent` |
+| `void` | a box promised to this wallet (`wallet promise`, or taken from a node's pool with `--pools`) whose payment cannot confirm: a coin it spends, which this wallet had seen unspent, is proven gone, no box it makes exists, and it cannot be proven to be in the chain (found by `wallet receive`/`status`, which keep the height each coin was seen unspent at; a proof from below it settles nothing). A coin never seen is not taken for gone (it may not be made yet). `outbox` keeps such a payment for the sync to judge, and voids one only if its signatures fail. If the coins come back (what spent one was undone), the payment is held again and the boxes expected. The last 64 are remembered |
 | `expected` | a box this wallet expects from its own payment, not on chain yet |
 | `other_address` | it exists and pays someone else |
 | `undecodable` | present, but not a box this build can read |
 | `absent_above_agreed_tip` | a tracked box absent in a block the peers have not reached: kept |
-| `absent_below_confirmed` | a tracked box absent in a block below the one it was confirmed at (the node is behind; the box did not exist yet there): kept |
+| `absent_below_confirmed` | a tracked box absent in a block below the one it was confirmed at (the node is behind; the box did not exist yet there): kept. Whether it was spent or `undone` is told by a proof at or above that height |
 
 `payments` lists what became of payments sent: `tx` and `result` (`waiting`, `confirmed`, `coins spent`,
 `not included`). A payment proven to be in a block though its boxes are gone is `confirmed` with `height` and
@@ -82,7 +96,8 @@ see below.
 **`boxes`** — `proven_at`, `unspent`, `nanoerg`, and `checked` (`id`, `height`, `state`: `unspent`, `absent`, `undecodable`).
 **`nodes`** — `nodes`: `url`, `height`, `ms`, `well_known`, `used`. **`version`** — `version`, `checkpoint_height`,
 `checkpoint_age_days`, `network`. **`token`** — `id`, `name`, `decimals`, `reported_by`.
-**`outbox`** — `sent`, `waiting`, `dropped` (or `submitted`, `refused` over the peer protocol). **`handoff`** — `acknowledged`.
+**`outbox`** — `sent`, `waiting`, `dropped` (or `submitted`, `refused`, `unchecked` over the peer protocol: `unchecked` are
+kept because the proof could not settle them); `void`: `{boxes, reason}` per payment held for this wallet whose signatures failed (it is put aside in `given-up/`, never deleted; see `void` above). **`handoff`** — `acknowledged`.
 **`qr`** — `rows`. **`sync`, `check`** — `proofs_verdict` (`agreed` or `not_trusted`), `tip`, `refusals`.
 **`included --tx TXID`** — proves a transaction is in the agreed chain: `included`, `height`, `confirmations`,
 `agreed_height`. Exit 1 with `included: false` means it could not be shown, not that it is absent.

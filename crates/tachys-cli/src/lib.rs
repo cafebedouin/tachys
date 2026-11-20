@@ -102,7 +102,8 @@ fn setup(args: &[String]) -> out::Ended {
         let n = Net { name: leak(v["name"].as_str().unwrap_or("private").to_string()), magic: [m[0], m[1], m[2], m[3]],
             genesis: leak(v["genesis"].as_str().unwrap_or("").to_string()), checkpoint_json: leak(v["checkpoint"].to_string()),
             floor_divisor: v["floor_divisor"].as_u64().unwrap_or(1 << 20) as u32, v2_activation_height: v["v2_activation_height"].as_u64().unwrap_or(0) as u32,
-            block_interval_ms: v["block_interval_ms"].as_u64().unwrap_or(1000), seeds: leak(v["seeds"].as_str().unwrap_or("").to_string()), testnet: true, fee_tree: leak(v["fee_tree"].as_str().unwrap_or("").to_string()) };
+            block_interval_ms: v["block_interval_ms"].as_u64().unwrap_or(1000),
+            epoch_length: v["epoch_length"].as_u64().filter(|&e| (1..=u32::MAX as u64).contains(&e)).unwrap_or(128) as u32, seeds: leak(v["seeds"].as_str().unwrap_or("").to_string()), testnet: true, fee_tree: leak(v["fee_tree"].as_str().unwrap_or("").to_string()) };
         network::set_net(Box::leak(Box::new(n)));
     }
     if !network::checkpoint_readable() { return Err(out::Fail::new(2, format!("--net-file {net_file}: its checkpoint is not a header"))) }

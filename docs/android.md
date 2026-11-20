@@ -50,3 +50,11 @@ over adb on a Galaxy Note 2 (Android 7.1.2) and a Pixel 6 (Android 17): sync, Re
 Boxes list, the back button. The build released as v0.0.1 was then tried by hand on the Note 2 by
 the maintainer, who reports that most of the app was tried and that everything tried worked; which screens was
 not written down, and no log was kept. It has not been run on the Pixel 6 or any other phone.
+
+After findings 52 to 57 a debug build was driven over adb on the Note 2, on testnet (finding 58,
+`research/runs/2026-11-20-note2-screens.txt`): restore from a phrase (its first sync linking to the checkpoint),
+Receive with Copy and a receipt checked, Send, consolidation, and a signing request opened as an `ergopay:` link and
+signed; each payment was proven from the payee's side. Two faults found there are fixed: a request opened while the
+app synced stayed at "Reading…", and coins seen only in a block one node had shown made the card say "no boxes yet".
+The New, Restore and Read-only forms now go back to the three choices. Not run since: the release build, mainnet, the
+camera, the Pixel 6.

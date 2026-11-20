@@ -15,7 +15,7 @@ A1="${LIP["A,${LINK_OF["A,T1"]}"]}:${P2P[A]}"; A2="${LIP["A,${LINK_OF["A,T2"]}"]
 end=$((SECONDS+240)); while [[ $SECONDS -lt $end ]]; do [[ "$(full_height A)" -ge 20 ]] && break; sleep 4; done
 gen="$(header_at A 1)"; cpid="$(header_at A $(( $(full_height A) - 12 )))"; rest A "/blocks/$cpid/header" > "$W/cp.json"
 jq -n --arg g "$gen" --argjson magic "$MAGIC" --slurpfile cp "$W/cp.json" \
-  '{name:"devnet", magic:$magic, genesis:$g, checkpoint:$cp[0], floor_divisor:1048576, v2_activation_height:0, block_interval_ms:3000, seeds:""}' > "$NETF"
+  '{name:"devnet", magic:$magic, genesis:$g, checkpoint:$cp[0], floor_divisor:1048576, v2_activation_height:0, block_interval_ms:3000, epoch_length:16, seeds:""}' > "$NETF"
 echo "$A1" > "$W/seeds-a-for-t1.txt"; echo "$A2" > "$W/seeds-a-for-t2.txt"; echo "$T1ADDR" > "$W/seeds-t1.txt"
 
 echo "[sf] 1. online: the payer wallet is created, paid by the node's wallet, and proves its box"
@@ -28,7 +28,10 @@ box=""; end=$((SECONDS+120)); while [[ $SECONDS -lt $end && -z "$box" ]]; do sle
 feetree="$(wallet A "/wallet/transactionById?id=$txid" | jq -r '.outputs[] | select(.value==1000000) | .ergoTree' | head -1)"
 jq --arg f "$feetree" '. + {fee_tree:$f}' "$NETF" > "$NETF.tmp" && mv "$NETF.tmp" "$NETF"
 in2 tips --seeds "$W/seeds-a-for-t2.txt" --peers 1 --tries 1 --quorum 1 --state "$W/payer" > /dev/null
-o="$(in2 wallet receive --state "$W/payer" --node "p2p://$A2" --ids "$box")"; echo "$o" | tail -n 2 | sed 's/^/  /'
+# a proof from a node a block past the agreed tip leaves the box "seen", which is not spent: sync and ask again until it is proven
+for try in 1 2 3 4 5 6; do o="$(in2 wallet receive --state "$W/payer" --node "p2p://$A2" --ids "$box")"; echo "$o" | grep -q "proven unspent" && break; sleep 5
+  in2 tips --seeds "$W/seeds-a-for-t2.txt" --peers 1 --tries 1 --quorum 1 --state "$W/payer" > /dev/null; done
+echo "$o" | tail -n 2 | sed 's/^/  /'
 echo "$o" | grep -q "(added)" || fail "payer could not prove its funding box"
 
 echo "[sf] 2. the payer loses its connection to the node"
@@ -67,8 +70,12 @@ for bad in badproof badinput; do
   SERVE=$!; sleep 2
   in2 handoff --peer "$T1ADDR" --parcel "$W/parcel-$bad.json" | sed 's/^/  /'
   wait "$SERVE"
-  in1 tips --seeds "$W/seeds-a-for-t1.txt" --peers 1 --tries 1 --quorum 1 --state "$W/carrier-$bad" > /dev/null
-  o="$(in1 outbox --state "$W/carrier-$bad" --peer "$A1")"; echo "$o" | sed "s/^/  [$bad] /"
+  # a node a block past the carrier's agreed tip settles nothing, and the carrier keeps the parcel: sync and ask again
+  for try in 1 2 3; do
+    in1 tips --seeds "$W/seeds-a-for-t1.txt" --peers 1 --tries 1 --quorum 1 --state "$W/carrier-$bad" > /dev/null
+    o="$(in1 outbox --state "$W/carrier-$bad" --peer "$A1")"; echo "$o" | sed "s/^/  [$bad] /"
+    echo "$o" | grep -q "could not be checked" || break; sleep 4
+  done
   echo "$o" | grep -q "REFUSED before submission" || fail "carrier did not refuse the $bad parcel"
   echo "$o" | grep -q "outbox done: 0 submitted, 1 refused" || fail "carrier submitted the $bad parcel"
 done
