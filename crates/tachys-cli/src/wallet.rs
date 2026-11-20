@@ -566,9 +566,14 @@ fn cmd_send(c: &Ctx, o: Open) -> Ended {
     let Ok(payee_tree) = payee.script() else { return Err("payee address has no script".into()) };
     // Only a box confirmed under a tip the peers agreed on is spent. One proven only in a block a single node has
     // shown is tracked and shown as seen; a payment built on it would be void if that block is not the chain's.
-    let confirmed = w.boxes.values().filter(|b| b.confirmed_at.is_some()).count();
-    let inputs: Vec<ErgoBox> = w.boxes.values().filter(|b| b.confirmed_at.is_some()).filter_map(|b| unhex(&b.bytes)).filter_map(|b| ErgoBox::sigma_parse_bytes(&b).ok()).collect();
-    if inputs.len() != confirmed { return Err("some tracked boxes have no stored bytes; run `tachys wallet status` first".into()) }
+    // A box's stored bytes are used only if they hash to the id they are filed under (as `cmd_request` holds them): the
+    // bytes of another box would be signed for in its place, and the balance and the payment would disagree.
+    let mut inputs: Vec<ErgoBox> = vec![];
+    for (id, b) in w.boxes.iter().filter(|(_, b)| b.confirmed_at.is_some()) {
+        let Some(x) = unhex(&b.bytes).and_then(|x| ErgoBox::sigma_parse_bytes(&x).ok()) else { return Err("some tracked boxes have no stored bytes; run `tachys wallet status` first".into()) };
+        if String::from(x.box_id()) != *id { return Err(format!("the bytes stored for box {id} are another box's ({}); nothing was signed. Run `tachys wallet status`, which reads each box again from its proof", String::from(x.box_id())).into()) }
+        inputs.push(x);
+    }
     if inputs.is_empty() && !w.boxes.is_empty() { return Err("none of this wallet's boxes is confirmed under a tip the peers agree on yet; run `tachys wallet status` again after a block".into()) }
     let more_total: u64 = more.iter().try_fold(0u64, |a, m| a.checked_add(m.1)).ok_or("the amounts add up to more than can exist")?;
     let need_total = amount.checked_add(more_total).and_then(|x| x.checked_add(fee)).ok_or("the amounts add up to more than can exist")?;

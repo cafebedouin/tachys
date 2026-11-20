@@ -76,4 +76,6 @@ fn w1_send_does_not_spend_stored_bytes_that_are_not_the_box_they_are_filed_under
     assert!(!spent.contains(&String::from(other.box_id())) && !spent.contains(&String::from(filed.box_id())),
         "W1: an entry filed under {} holding the bytes of {} was spent anyway: send exit {}, signed inputs {spent:?}",
         String::from(filed.box_id()), String::from(other.box_id()), a.code);
+    // refused, not skipped, and the refusal names the box
+    assert!(a.code != 0 && a.err.contains(&String::from(filed.box_id())), "W1: refused, naming the box: exit {}, {}", a.code, a.err);
 }
