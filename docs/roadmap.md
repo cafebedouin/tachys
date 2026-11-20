@@ -30,7 +30,9 @@ Open, in the order they matter:
    and what was not is in finding 48.
 9. **A node that is always a block ahead of the peers** gives proofs that settle nothing: boxes stay "seen" and
    payments "waiting" until a sync lands on a block the peers have reached. In practice the next sync does; a
-   proof at a named header (over the peer protocol, `node-patches/`) would remove the wait.
+   proof at a named header (over the peer protocol, `node-patches/`) would remove the wait. A sync now also reads a
+   proof at the agreed tip after nodes have added headers above it, so such nodes no longer lock out an honest one;
+   `prove_any` (signing requests, offers, `tachys boxes`) still reads only the newest four stored headers.
 10. **Testnet has no difficulty floor to speak of** (its checkpoint's difficulty divided by 1024 is nothing), and
     its default quorum is two network groups.
 11. **The release checkpoint and seed list age.** The difficulty floor halves every thirty days from the checkpoint;
@@ -71,3 +73,11 @@ instead, which as far as we know is new for Ergo:
 - An in-process binding for the app (the library entry `tachys::call` is ready for one) once item 3 above is closed.
 - The command that builds payments (`wallet send`) and the app's main source file are each too long.
 - Accepting a payment by its transaction id as well as by a box id: most counterparties will hand over the first.
+- A box seen only in a block above the agreed tip can still be dropped by a settled proof below where it was seen;
+  boxes confirmed under the agreed tip are kept (by reading, not tested).
+- A peer whose pushed headers do not follow one another (the reference node pushes tip, tip-16, tip-128, tip-512)
+  has its highest taken as its tip, so a lone cheap header among such headers becomes that peer's tip. It only
+  decides that peer's own vote.
+- `tachys tips` applies the remembered difficulty floor exactly, so it would refuse an honest largest fall in
+  difficulty that rounds into the window `extend_chain` allows.
+- `balance` formats `erg` through a float and loses digits above about nine million ERG; `nanoerg` is exact.
