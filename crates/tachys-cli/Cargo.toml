@@ -35,3 +35,8 @@ getrandom = "0.2"
 zeroize = "1"
 ripemd = "0.1"
 bs58 = { version = "0.5", features = ["check"] }
+
+[dev-dependencies]
+# the peer protocol's codec, for tests that stand in for a node on this machine
+ergo-p2p = { path = "../../vendor/arkadianet-codec/ergo-p2p" }
+ergo-primitives = { path = "../../vendor/arkadianet-codec/ergo-primitives" }

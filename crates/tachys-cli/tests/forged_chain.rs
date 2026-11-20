@@ -292,3 +292,41 @@ fn a_wallet_that_keeps_the_chain_does_not_fetch_it_again_from_the_checkpoint() {
     assert_eq!((code, &v["linked"]["headers"]), (0, &0.into()), "{err}");
     assert!(v["linked"]["from_height"].as_u64().unwrap() > cp.height as u64, "from the kept chain, not the checkpoint: {v}");
 }
+
+/// The headers in a chain file as `tips` writes it (two-byte length, then the header), or None if there is no file.
+fn kept(at: &str) -> Option<usize> {
+    let raw = std::fs::read(format!("{at}/linked-chain.bin")).ok()?;
+    let (mut n, mut i) = (0, 0);
+    while i + 2 <= raw.len() { i += 2 + u16::from_be_bytes([raw[i], raw[i + 1]]) as usize; n += 1; }
+    Some(n)
+}
+
+#[test]
+fn a_kept_chain_survives_a_later_run_whose_link_fails() {
+    // A serving wallet (`--keep-chain`) whose link failed on a later run deleted its whole kept chain, and the next run
+    // fetched it all again from the checkpoint, while a first run keeps what it linked so far. A later run whose link
+    // fails keeps the chain it had.
+    let at = dir("keep-fails");
+    let (cp, cp_json) = checkpoint();
+    let net = net_file(&at, &cp_json);
+    let first = chain(&cp, 18, CHECKPOINT_DIFFICULTY, None, &root(2));
+    // the same chain fifteen blocks later
+    let mut longer = chain(&first[0], 15, CHECKPOINT_DIFFICULTY, None, &root(2));
+    longer.extend(first.iter().cloned());
+    let f = forger(&at, "honest", &net, &first);
+    for st in ["grows", "fails"] {
+        let (code, _, err) = tips_with(&at, st, &net, &[&f], &["--keep-chain"]);
+        assert_eq!((code, kept(&format!("{at}/{st}"))), (0, Some(18)), "the first run keeps the chain from the checkpoint: {err}");
+    }
+    drop(f);
+    // positive arm: a peer with the whole longer chain; the kept chain grows to it
+    let whole = forger(&at, "whole", &net, &longer);
+    let (code, _, err) = tips_with(&at, "grows", &net, &[&whole], &["--keep-chain"]);
+    assert_eq!((code, kept(&format!("{at}/grows"))), (0, Some(33)), "{err}");
+    drop(whole);
+    // a peer that holds only the newest ten: the five between the kept chain and those cannot be linked this time
+    let short = forger(&at, "short", &net, &longer[..10]);
+    let (code, _, err) = tips_with(&at, "fails", &net, &[&short], &["--keep-chain"]);
+    assert_eq!(code, 0, "the tip is still agreed: {err}");
+    assert_eq!(kept(&format!("{at}/fails")), Some(18), "the chain kept before is still there after a link that failed: {err}");
+}

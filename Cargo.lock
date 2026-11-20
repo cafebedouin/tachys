@@ -2004,6 +2004,8 @@ dependencies = [
  "ergo-lib",
  "ergo-merkle-tree",
  "ergo-nipopow",
+ "ergo-p2p",
+ "ergo-primitives",
  "ergo_avltree_rust",
  "ergotree-ir",
  "getrandom 0.2.17",

@@ -588,3 +588,72 @@ fn w6e_a_proof_is_not_settled_against_an_agreed_tip_older_than_a_proof_may_rest_
     let (ok, r) = w.honest_settles();
     assert!(!ok && r.code == 1, "a proof against a four-hour-old agreed tip was read: exit {}; said: {:#?}", r.code, said(&r));
 }
+
+// ---- M2 ----
+
+/// A node carrying the box-proof patch (`node-patches/0001-box-proof-message.patch`), on this machine: it answers a
+/// box-proof request against the header `named`, from `state`, for 1 to 100 ids, and drops the connection on a request
+/// for more, as the patch's `require(count > 0 && count <= MaxIds)` does. Returns its address and how many ids each
+/// request carried.
+fn patched_node(named: [u8; 32], state: Vec<Vec<u8>>) -> (String, std::sync::Arc<std::sync::Mutex<Vec<usize>>>) {
+    use ergo_p2p::connection::Connection;
+    use ergo_p2p::handshake::{serialize_handshake, Handshake, PeerSpec};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let asked: std::sync::Arc<std::sync::Mutex<Vec<usize>>> = Default::default();
+    let seen = asked.clone();
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    l.set_nonblocking(true).unwrap();
+    let addr = l.local_addr().unwrap().to_string();
+    std::thread::spawn(move || tokio::runtime::Runtime::new().unwrap().block_on(async move {
+        let l = tokio::net::TcpListener::from_std(l).unwrap();
+        let state = std::sync::Arc::new(state);
+        while let Ok((mut s, _)) = l.accept().await {
+            let (state, seen) = (state.clone(), seen.clone());
+            tokio::spawn(async move {
+                let mut buf = [0u8; 2048];
+                let _ = s.read(&mut buf).await;
+                let ours = serialize_handshake(&Handshake { time: 1, peer_spec: PeerSpec { agent_name: "patched-node".into(), version: tachys_net::PROTOCOL, node_name: "patched".into(), declared_address: None, features: vec![] } });
+                if s.write_all(&ours).await.is_err() { return }
+                let mut conn = Connection::new_with_buffer(s, MAGIC, vec![]);
+                while let Ok(frame) = conn.read_message().await {
+                    if frame.code != tachys_net::CODE_GET_BOX_PROOF { continue }
+                    let mut r = ergo_primitives::reader::VlqReader::new(&frame.payload);
+                    let Ok(n) = r.get_u16() else { return };
+                    seen.lock().unwrap().push(n as usize);
+                    if n == 0 || n > 100 { return }
+                    let mut ids = vec![];
+                    for _ in 0..n { let Ok(b) = r.get_bytes(32) else { return }; ids.push(hex(b)); }
+                    let proof = unhex(&proof_of(&state, &ids));
+                    let mut w = ergo_primitives::writer::VlqWriter::new();
+                    w.put_bytes(&named); w.put_u32(proof.len() as u32); w.put_bytes(&proof); w.put_u16(0);
+                    if conn.send(tachys_net::CODE_BOX_PROOF, w.result()).await.is_err() { return }
+                }
+            });
+        }
+    }));
+    (addr, asked)
+}
+
+/// M2: a wallet asking a node over the peer protocol for proofs of more than 100 boxes sent them all in one request,
+/// which a patched node refuses. Correct: the proofs come, no request carries more than 100 ids, and each is read
+/// against the same header.
+#[test]
+fn m2_a_sync_over_the_peer_protocol_asks_at_most_a_hundred_boxes_a_request() {
+    let run = |name: &str, n: usize| -> (Ran, Vec<usize>, W6) {
+        let w = w6(name, 0);
+        let (addr, asked) = patched_node(id32(&w.agreed), (w.state)(2000));
+        // the wallet's box and others the node does not have
+        let ids: Vec<String> = std::iter::once(w.b_id.clone()).chain((1..n).map(|i| format!("{i:064x}"))).collect();
+        let r = tachys(&["wallet", "receive", "--ids", &ids.join(","), "--state", &w.st, "--net-file", &w.nf, "--node", &format!("p2p://{addr}"), "--json"]);
+        let sizes = asked.lock().unwrap().clone();
+        (r, sizes, w)
+    };
+    // positive arm: a hundred ids, one request
+    let (r, sizes, _w) = run("m2-hundred", 100);
+    assert_eq!((r.code, &r.json()["proven_at"], sizes.clone()), (0, &json!(2000), vec![100]), "a hundred ids in one request: {}", r.err);
+    // the lead: a hundred and fifty
+    let (r, sizes, w) = run("m2-more", 150);
+    let proven = r.json()["checked"].as_array().is_some_and(|c| c.iter().any(|x| x["id"] == w.b_id.as_str() && x["state"] == "proven"));
+    assert!(r.code == 0 && proven && sizes.iter().all(|n| *n <= 100) && sizes.iter().sum::<usize>() >= 150,
+        "M2: a sync over the peer protocol for 150 boxes: exit {}, the box proven: {proven}, ids per request {sizes:?}; said: {:#?}", r.code, said(&r));
+}

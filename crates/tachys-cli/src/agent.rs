@@ -327,3 +327,124 @@ fn recipes() -> serde_json::Value {
         "more": "docs/agents.md says the same at more length. Every other command takes --json (docs/json.md); those are the owner's tools, and `wallet send` among them signs with no limit when there is no policy file."
     })
 }
+
+#[cfg(test)]
+mod tests {
+    //! `accept` first agrees on a tip with live peers (`Agent::tip`); what it then says of a receipt is `Agent::receipt`,
+    //! tested here on its own against a node on this machine.
+    use super::*;
+    use ergotree_ir::serialization::SigmaSerializable;
+    use sigma_ser::ScorexSerializable;
+    use std::io::{Read, Write};
+
+    const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    fn call(args: &[&str]) -> serde_json::Value {
+        let a = crate::call(&std::iter::once("tachys").chain(args.iter().copied()).chain(["--json"]).map(String::from).collect::<Vec<_>>(), &[]);
+        assert_eq!(a.code, 0, "{args:?}: {} {}", a.out, a.err);
+        serde_json::from_str(a.out.trim()).unwrap()
+    }
+    fn dir(name: &str) -> String {
+        let d = std::env::temp_dir().join(format!("tachys-agent-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d.to_string_lossy().to_string()
+    }
+    fn unhex(s: &str) -> Vec<u8> { crate::util::unhex(s).unwrap() }
+    /// Ten headers stored as the agreed chain: the release's checkpoint, made recent, with `root` as its state root.
+    fn chain_over(st: &str, root: &[u8]) {
+        let mut h = crate::network::checkpoint_header();
+        h.timestamp = crate::chain::now_ms();
+        h.state_root = ergo_chain_types::ADDigest::try_from(root.to_vec()).unwrap();
+        let b = h.scorex_serialize_bytes().unwrap();
+        let mut chain = vec![];
+        for _ in 0..10 { chain.extend_from_slice(&(b.len() as u16).to_be_bytes()); chain.extend_from_slice(&b); }
+        std::fs::write(format!("{st}/agreed-chain.bin"), chain).unwrap();
+        std::fs::write(format!("{st}/agreed-tip.bin"), &b).unwrap();
+    }
+    fn prover(held: &[Vec<u8>]) -> ergo_avltree_rust::batch_avl_prover::BatchAVLProver {
+        use ergo_avltree_rust::batch_node::{AVLTree, Node, NodeHeader};
+        use ergo_avltree_rust::operation::{KeyValue, Operation};
+        let mut p = ergo_avltree_rust::batch_avl_prover::BatchAVLProver::new(AVLTree::new(|d| Node::LabelOnly(NodeHeader::new(Some(*d), None)), 32, None), true);
+        for v in held.iter().cloned().chain(std::iter::once(vec![7u8; 60])) {
+            p.perform_one_operation(&Operation::Insert(KeyValue { key: bytes::Bytes::copy_from_slice(sigma_util::hash::blake2b256_hash(&v).as_ref()), value: bytes::Bytes::from(v) })).unwrap();
+        }
+        p.generate_proof();
+        p
+    }
+    fn root_of(held: &[Vec<u8>]) -> Vec<u8> { use ergo_avltree_rust::authenticated_tree_ops::AuthenticatedTreeOps; prover(held).digest().unwrap().to_vec() }
+    /// A node holding `held` in its state and `pool` (a payment's id and JSON) in its pool. Returns its URL and root.
+    fn node(held: Vec<Vec<u8>>, pool: (String, String)) -> (String, Vec<u8>) {
+        use ergo_avltree_rust::operation::Operation;
+        let root = root_of(&held);
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        std::thread::spawn(move || for c in l.incoming() {
+            let Ok(mut c) = c else { continue };
+            let (mut buf, mut chunk) = (vec![], [0u8; 4096]);
+            let (head, body) = loop {
+                match c.read(&mut chunk) { Ok(0) | Err(_) => break (String::new(), String::new()), Ok(n) => buf.extend_from_slice(&chunk[..n]) }
+                let t = String::from_utf8_lossy(&buf).to_string();
+                if let Some((h, b)) = t.split_once("\r\n\r\n") {
+                    let want: usize = h.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse().unwrap_or(0))).unwrap_or(0);
+                    if b.len() >= want { break (h.to_string(), b.to_string()) }
+                }
+            };
+            let line = head.lines().next().unwrap_or("").to_string();
+            let tx: serde_json::Value = serde_json::from_str(&pool.1).unwrap();
+            let (status, answer) = if line.contains("/utxo/getBoxesBinaryProof") {
+                let ids: Vec<String> = serde_json::from_str(&body).unwrap_or_default();
+                let mut p = prover(&held);
+                for id in &ids { p.perform_one_operation(&Operation::Lookup(bytes::Bytes::from(unhex(id)))).unwrap(); }
+                (200, format!("\"{}\"", crate::util::hex(&p.generate_proof())))
+            } else if let Some(o) = tx["outputs"].as_array().unwrap().iter().find(|o| line.contains(&format!("/transactions/unconfirmed/outputs/byBoxId/{}", o["boxId"].as_str().unwrap()))) {
+                let mut o = o.clone(); o["transactionId"] = pool.0.clone().into(); (200, o.to_string())
+            } else if line.contains(&format!("/transactions/unconfirmed/byTransactionId/{}", pool.0)) { (200, pool.1.clone())
+            } else { (404, r#"{"error":404}"#.to_string()) };
+            let _ = c.write_all(format!("HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}", answer.len()).as_bytes());
+        });
+        (url, root)
+    }
+    fn pending(state: &str, node: &str, receipt: &str) -> (Option<bool>, &'static str) {
+        let a = Agent { state: state.to_string(), node: node.to_string() };
+        let receipt = receipt.to_string();
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        rt.block_on(async move { tokio::spawn(async move { let r = a.receipt(&receipt); (r.pending, r.code) }).await.unwrap() })
+    }
+
+    /// M3: `accept` said `pending: true` for any box a held payment promises, also one held by `wallet promise`, where
+    /// nothing about its coins or signatures was checked. Correct: `true` only for a payment held with its coins proven
+    /// unspent and its signatures verified (`--pools`); one held by `wallet promise` is not `true`.
+    #[test]
+    fn m3_pending_is_true_only_for_a_payment_whose_coins_were_proven() {
+        // a payer with one coin of ten ERG pays two ERG to a payee, offline: a signed payment and the box it makes
+        let payer = dir("m3-payer");
+        let cp = crate::network::checkpoint_header();
+        let me = ergotree_ir::chain::address::Address::P2Pk(ergo_lib::wallet::ext_secret_key::ExtSecretKey::derive_master(ergo_lib::wallet::mnemonic::Mnemonic::to_seed(PHRASE, "")).unwrap()
+            .derive(std::str::FromStr::from_str("m/44'/429'/0'/0/0").unwrap()).unwrap().public_image());
+        let coin = ergotree_ir::chain::ergo_box::ErgoBox::from_box_candidate(&ergo_lib::chain::ergo_box::box_builder::ErgoBoxCandidateBuilder::new(
+            ergotree_ir::chain::ergo_box::box_value::BoxValue::try_from(10_000_000_000u64).unwrap(), me.script().unwrap(), cp.height - 100).build().unwrap(), ergotree_ir::chain::tx_id::TxId::zero(), 0).unwrap();
+        let coin_bytes = coin.sigma_serialize_bytes().unwrap();
+        chain_over(&payer, &root_of(&[coin_bytes.clone()]));
+        let a = ergotree_ir::chain::address::AddressEncoder::new(ergotree_ir::chain::address::NetworkPrefix::Mainnet).address_to_str(&me);
+        std::fs::write(format!("{payer}/wallet.json"), serde_json::json!({ "name": "payer", "address": a, "address_list": [a], "birthday": 0, "mnemonic": PHRASE,
+            "boxes": { String::from(coin.box_id()): { "value": 10_000_000_000u64, "confirmed_at": 1, "bytes": crate::util::hex(&coin_bytes) } } }).to_string()).unwrap();
+        let payee = dir("m3-payee");
+        let to = call(&["wallet", "new", "--state", &payee])["address"].as_str().unwrap().to_string();
+        let parcel = format!("{payer}/parcel.json");
+        let sent = call(&["wallet", "send", "--state", &payer, "--to", &to, "--nanoerg", "2000000000", "--parcel-out", &parcel]);
+        let receipt = sent["receipt"][0].as_str().unwrap().to_string();
+        let p: serde_json::Value = serde_json::from_slice(&std::fs::read(&parcel).unwrap()).unwrap();
+        let (url, root) = node(vec![coin_bytes], (p["tx_id"].as_str().unwrap().to_string(), p["tx_json"].as_str().unwrap().to_string()));
+        // the same payee wallet twice: one holds the payment by `wallet promise`, the other takes it from the node's pool
+        let (promised, pooled) = (dir("m3-promised"), dir("m3-pooled"));
+        for st in [&promised, &pooled] { std::fs::copy(format!("{payee}/wallet.json"), format!("{st}/wallet.json")).unwrap(); chain_over(st, &root); }
+        call(&["wallet", "promise", "--state", &promised, "--tx", p["tx_bytes"].as_str().unwrap()]);
+        // positive arm: taken from the pool, its coin proven unspent and its signature verified: on its way
+        assert_eq!(pending(&pooled, &url, &receipt), (Some(true), "not_yet"), "held from the pool, its coins proven");
+        // the lead: held by `wallet promise`, nothing about it proven
+        let (said, code) = pending(&promised, &url, &receipt);
+        assert!(said != Some(true), "M3: a payment held by `wallet promise`, nothing about it proven, answers pending: {said:?} ({code})");
+        for st in [payer, payee, promised, pooled] { let _ = std::fs::remove_dir_all(st); }
+    }
+}
