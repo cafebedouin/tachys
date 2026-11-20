@@ -59,3 +59,15 @@ fn on_a_stretch_of_mainnet() {
     println!("one epoch declared one step off: wrong at {:?}", r.wrong);
     assert_eq!(r.wrong, vec![bent[start].height]);
 }
+
+#[test]
+fn the_run_a_tip_needs_is_counted_without_overflow_at_any_height() {
+    let p = ChainParams::mainnet();
+    // the module's own figures: 1,026 headers when the tip opens an epoch, 1,153 when it closes one
+    assert_eq!(run_length_for(129, &p), 1_026);
+    assert_eq!(run_length_for(256, &p), 1_153);
+    // height 0 (genesis, or a header claiming it) reads as height 1, not an overflow
+    assert_eq!(run_length_for(0, &p), run_length_for(1, &p));
+    assert_eq!(run_length_for(1, &p), 1_026);
+    assert!(run_length_for(u32::MAX, &p) <= 1_153);
+}

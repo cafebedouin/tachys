@@ -48,10 +48,11 @@ pub struct RunReport {
 }
 
 /// How many headers, ending at a tip of this height, a run must hold for the tip's own epoch to be recomputed
-/// from the run: back to the ninth epoch boundary below the epoch's first header.
+/// from the run: back to the ninth epoch boundary below the epoch's first header. Height 0 (genesis, or a header
+/// claiming it) is read as height 1, not an overflow.
 pub fn run_length_for(tip_height: u32, p: &ChainParams) -> u32 {
-    let epoch_start = ((tip_height - 1) / p.epoch_length) * p.epoch_length + 1;
-    tip_height - epoch_start + 2 + p.use_last_epochs * p.epoch_length
+    let epoch_start = (tip_height.saturating_sub(1) / p.epoch_length) * p.epoch_length + 1;
+    tip_height.saturating_sub(epoch_start) + 2 + p.use_last_epochs * p.epoch_length
 }
 
 /// `None` when the headers are not consecutive by height and parent id.
