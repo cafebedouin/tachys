@@ -50,6 +50,9 @@ fn a_password_and_a_phrase_are_handed_over_as_lines_not_read_from_stdin() {
     // the wrong password is said to be so in a field; the right one opens the phrase
     let (code, j, _) = call(&["wallet", "mnemonic", "--state", &st, "--pass-stdin", "--json"], &["wrong"]);
     assert_eq!((code, &j["bad_password"], j.get("mnemonic")), (1, &Value::Bool(true), None));
+    // a command that does not need the phrase goes on with it closed, and says the password was wrong
+    let (code, j, _) = call(&["wallet", "address", "--state", &st, "--pass-stdin", "--json"], &["wrong"]);
+    assert_eq!((code, &j["bad_password"], &j["addresses"][0]), (0, &Value::Bool(true), &j_address(&st)));
     let (code, j, _) = call(&["wallet", "mnemonic", "--state", &st, "--pass-stdin", "--json"], &["correct horse"]);
     let phrase = j["mnemonic"].as_str().unwrap().to_string();
     assert_eq!((code, phrase.split(' ').count()), (0, 12));

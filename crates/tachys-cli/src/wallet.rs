@@ -140,8 +140,10 @@ struct Open {
     w: WalletFile,
     sealed: bool,
     phrase: Option<Secret>,
-    /// sealed, and no password came with the command
+    /// sealed, and no password came with the command, or one that does not open it
     locked: bool,
+    /// a password came with the command and does not open the phrase
+    bad_password: bool,
     /// why there is no phrase, for a command that needs one
     no_phrase: &'static str,
     addr: Address,
@@ -285,15 +287,23 @@ fn open(c: &Ctx) -> Result<Open, Fail> {
     let Some(w) = c.load()? else { return Err(crate::out::Fail::new(2, format!("no wallet at {path}; run `tachys wallet new --state {state}`"))) };
     // A sealed phrase is opened only when the password comes with the command. Without it the wallet still knows its
     // addresses (they are written beside the sealed phrase), so it can watch, prove and receive; it cannot sign or show the words.
+    // A wrong password leaves it as closed as no password does (`bad_password` says so): a command that needs the phrase
+    // is refused, and one that does not goes on. A sealed phrase that cannot be read at all is an error for every command.
     let sealed = w.secret.as_ref().is_some_and(|s| s.is_object());
+    let mut bad_password = false;
     let phrase: Option<Secret> = if sealed {
-        pass.as_deref().map(|pw| open_phrase(w.secret.as_ref().unwrap_or(&serde_json::Value::Null), pw).map_err(|e| { if e == "bad wallet password" { crate::out::set("bad_password", true); } crate::out::Fail::new(1, format!("wallet: the seed phrase could not be opened: {e}")) })).transpose()?.map(Secret::new)
+        match pass.as_deref().map(|pw| open_phrase(w.secret.as_ref().unwrap_or(&serde_json::Value::Null), pw)) {
+            None => None,
+            Some(Ok(p)) => Some(Secret::new(p)),
+            Some(Err(e)) if e == "bad wallet password" => { crate::out::set("bad_password", true); bad_password = true; None }
+            Some(Err(e)) => return Err(crate::out::Fail::new(1, format!("wallet: the seed phrase could not be opened: {e}"))),
+        }
     } else {
         w.mnemonic.clone()
                 .or_else(|| w.mnemonic_file.as_deref().and_then(|f| std::fs::read_to_string(f).ok()).map(|p| p.trim().to_string())).map(Secret::new)
     };
     let locked = sealed && phrase.is_none();
-    let no_phrase = if locked { "the seed phrase is sealed: give the wallet's password (--pass-stdin, or TACHYS_PASS)" } else { "this wallet holds no phrase" };
+    let no_phrase = if bad_password { "wallet: the seed phrase could not be opened: bad wallet password" } else if locked { "the seed phrase is sealed: give the wallet's password (--pass-stdin, or TACHYS_PASS)" } else { "this wallet holds no phrase" };
     let Some(addr) = phrase.as_deref().and_then(|p| derive(p)).or_else(|| enc.parse_address_from_str(&w.address).ok()) else { return Err(crate::out::Fail::new(1, "wallet file has no usable seed phrase or address".to_string())) };
     if sealed && w.address != enc.address_to_str(&addr) { return Err(crate::out::Fail::new(1, "wallet: the sealed phrase does not lead to this wallet's address; refusing to use it".to_string())) }
     let Ok(my_tree) = addr.script() else { return Err(crate::out::Fail::new(1, "address has no script".to_string())) };
@@ -309,7 +319,7 @@ fn open(c: &Ctx) -> Result<Open, Fail> {
     };
     let my_trees: Vec<_> = my_addrs.iter().filter_map(|a| a.script().ok()).collect();
     let addr_strs: Vec<String> = my_addrs.iter().map(|a| enc.address_to_str(a)).collect();
-    Ok(Open { w, sealed, phrase, locked, no_phrase, addr, my_tree, scanning, n_addr, my_addrs, my_trees, addr_strs })
+    Ok(Open { w, sealed, phrase, locked, bad_password, no_phrase, addr, my_tree, scanning, n_addr, my_addrs, my_trees, addr_strs })
 }
 
 /// wallet encrypt: seal a phrase that is in plain text.
@@ -339,9 +349,9 @@ fn cmd_name(c: &Ctx, o: Open) -> Ended {
 /// wallet address: list the wallet's addresses, or add the next one (`--add`).
 fn cmd_address(c: &Ctx, o: Open) -> Ended {
     let Ctx { args, enc, .. } = c;
-    let Open { mut w, phrase, locked, no_phrase, n_addr, addr_strs, .. } = o;
+    let Open { mut w, phrase, locked, bad_password, no_phrase, n_addr, addr_strs, .. } = o;
     if args.iter().any(|a| a == "--add") {
-        let Some(p) = phrase.as_deref() else { return Err(crate::out::Fail::new(2, (if locked { no_phrase } else { "a read-only wallet has one address" }).to_string())) };
+        let Some(p) = phrase.as_deref() else { return Err(crate::out::Fail::new(if bad_password { 1 } else { 2 }, (if locked { no_phrase } else { "a read-only wallet has one address" }).to_string())) };
         if n_addr >= 20 { return Err(crate::out::Fail::new(2, "twenty addresses is this build's limit".to_string())) }
         let Some(k) = key_at(p, n_addr) else { return Err(crate::out::Fail::new(1, "key derivation failed".to_string())) };
         let mut list = addr_strs.clone(); list.push(enc.address_to_str(&Address::P2Pk(k.public_image())));
@@ -355,20 +365,20 @@ fn cmd_address(c: &Ctx, o: Open) -> Ended {
 /// wallet mnemonic: show the seed phrase.
 fn cmd_mnemonic(c: &Ctx, o: Open) -> Ended {
     let state = &c.state;
-    let Open { phrase, no_phrase, .. } = o;
+    let Open { phrase, no_phrase, bad_password, .. } = o;
     // for the owner to write down; the caller decides who may ask
     if policy::present(state) { return Err(crate::out::Fail::new(2, format!("this wallet is under a spending policy ({}); it does not show its seed phrase", policy::path(state)))) }
-    match phrase.as_deref() { Some(p) => { crate::out::set("mnemonic", p); if !crate::out::json() { say!("{p}") } } None => { return Err(crate::out::Fail::new(2, no_phrase.to_string())) } }
+    match phrase.as_deref() { Some(p) => { crate::out::set("mnemonic", p); if !crate::out::json() { say!("{p}") } } None => { return Err(crate::out::Fail::new(if bad_password { 1 } else { 2 }, no_phrase.to_string())) } }
     Ok(())
 }
 
 /// wallet pubkey: the extended public key, for a watching wallet.
 fn cmd_pubkey(o: Open) -> Ended {
-    let Open { phrase, no_phrase, addr, .. } = o;
+    let Open { phrase, no_phrase, bad_password, addr, .. } = o;
     // The extended public key at m/44'/429'/0', laid out as ergo-appkit's Bip32Serialization does: it lets
     // another wallet watch every address of this one without being able to spend.
     use sha2::Digest;
-    let Some(p) = phrase.as_deref() else { return Err(crate::out::Fail::new(2, no_phrase.to_string())) };
+    let Some(p) = phrase.as_deref() else { return Err(crate::out::Fail::new(if bad_password { 1 } else { 2 }, no_phrase.to_string())) };
     let at = |path: &str| ExtSecretKey::derive_master(Mnemonic::to_seed(p, "")).ok().and_then(|m| m.derive(DerivationPath::from_str(path).ok()?).ok()).and_then(|k| k.public_key().ok());
     let (Some(parent), Some(grand)) = (at("m/44'/429'/0'"), at("m/44'/429'")) else { return Err(crate::out::Fail::new(1, "key derivation failed".to_string())) };
     let finger = ripemd::Ripemd160::digest(sha2::Sha256::digest(grand.pub_key_bytes()));
@@ -536,7 +546,7 @@ fn cmd_request(c: &Ctx, o: Open) -> Ended {
 fn cmd_send(c: &Ctx, o: Open) -> Ended {
     let Ctx { args, state, node, chain, enc, .. } = c;
     let sub = c.sub;
-    let Open { mut w, phrase, no_phrase, locked, addr, my_tree, n_addr, my_trees, .. } = o;
+    let Open { mut w, phrase, no_phrase, locked, bad_password, addr, my_tree, n_addr, my_trees, .. } = o;
     use ergo_lib::chain::ergo_box::box_builder::ErgoBoxCandidateBuilder;
     use ergo_lib::chain::ergo_state_context::ErgoStateContext;
     use ergo_lib::chain::parameters::Parameters;
@@ -815,8 +825,9 @@ fn cmd_send(c: &Ctx, o: Open) -> Ended {
     // what the payment does, read off the transaction as built: the same numbers the spending policy is held to
     crate::out::set("leaves_wallet_nanoerg", ask.nano); crate::out::set("tokens_out", &ask.tokens); crate::out::set("payees", &ask.payees); crate::out::set("fee_nanoerg", fee); crate::out::set("signed", false);
     if args.iter().any(|a| a == "--dry-run") {
-        // a wallet with no phrase at all (read-only) could never sign this, and a dry run that says yes would mislead
-        if phrase.is_none() && !locked { return Err(no_phrase.into()) }
+        // a wallet with no phrase at all (read-only) could never sign this, nor one given a wrong password: a dry run that
+        // says yes would mislead
+        if phrase.is_none() && (!locked || bad_password) { return Err(no_phrase.into()) }
         // built and checked against the policy, as a real payment is; nothing is signed, written or counted
         if let Err(e) = policy::reserve(state, &ask, true) { return Err(format!("the spending policy does not allow it: {e}").into()) }
         say!("dry run: {} nanoERG would leave this wallet (fee {fee} included), to {}; nothing signed", ask.nano, if ask.payees.is_empty() { "itself".to_string() } else { ask.payees.join(", ") });

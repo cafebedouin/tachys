@@ -87,7 +87,9 @@ see below.
 **`included --tx TXID`** — proves a transaction is in the agreed chain: `included`, `height`, `confirmations`,
 `agreed_height`. Exit 1 with `included: false` means it could not be shown, not that it is absent.
 
-**Any command that opens the seed phrase** — `bad_password: true` when the password given does not open it.
+**Any wallet command given a password** — `bad_password: true` when it does not open the seed phrase. A command that
+needs the phrase (signing, `mnemonic`, `pubkey`, `address --add`, a `--dry-run` payment) is then refused; one that
+does not (`status`, `receive`, `address`, …) goes on with the phrase closed, as with no password.
 
 ## How a command ends
 
