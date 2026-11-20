@@ -32,6 +32,8 @@ pub enum Refusal {
     UnsteadyDifficulty,
     /// Two headers linked by hash do not claim consecutive heights.
     NotConsecutive,
+    /// A header's parent id is not the id of the header below it in the chain given.
+    NotLinked,
     /// The tip is older than the release allows.
     Stale { age_ms: u64 },
     /// Too few network groups have their tip on this chain.
@@ -90,10 +92,14 @@ pub fn judge(chain: &[Header], views: &[TipView], older: &[Header], depth: usize
     if chain.is_empty() { return Err(Refusal::Short { have: 0, want: depth }) }
     if chain.len() < depth { return Err(Refusal::Short { have: chain.len(), want: depth }) }
     // newest first: w[0] is the child. Each header must be the next height after the one below it (a height is its
-    // maker's word, and headers linked by hash alone could claim any), and carry the same difficulty, or at the
-    // first block of an epoch a difficulty within the chain's own limits. Without the limits one header at full
-    // difficulty could stand on nine cheap ones and be ranked by its own claim.
-    if !chain.windows(2).all(|w| w[0].height == w[1].height.wrapping_add(1)) { return Err(Refusal::NotConsecutive) }
+    // maker's word, and headers linked by hash alone could claim any) and name it as its parent (callers link by hash
+    // first; this holds them to it), and carry the same difficulty, or at the first block of an epoch a difficulty
+    // within the chain's own limits. Without the limits one header at full difficulty could stand on nine cheap ones
+    // and be ranked by its own claim.
+    for w in chain.windows(2) {
+        if w[0].height != w[1].height.wrapping_add(1) { return Err(Refusal::NotConsecutive) }
+        if w[0].parent_id != w[1].id { return Err(Refusal::NotLinked) }
+    }
     if !chain.windows(2).all(|w| steps(&w[1], &w[0], epoch_length)) { return Err(Refusal::UnsteadyDifficulty) }
     // the newest header that enough groups have reached
     let at = |h: &Header| chain.iter().position(|c| c.id == h.id);

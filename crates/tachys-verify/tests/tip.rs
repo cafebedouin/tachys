@@ -228,3 +228,17 @@ fn one_heavy_header_on_cheap_ones_is_not_a_heavy_chain() {
     let views = [view("a", &c[0]), view("b", &c[0]), view("c", &c[0])];
     assert!(judge(&c, &views, &[], 10, 3, 128, now(&c), MAX_AGE).is_ok());
 }
+
+#[test]
+fn consecutive_heights_with_a_broken_parent_link_are_not_a_chain() {
+    // `judge` checked heights and difficulty steps, not that each header names the one below it as its parent; its
+    // callers link by hash first, and now it holds them to it
+    let c = real();
+    let views = [view("a", &c[0]), view("b", &c[0]), view("c", &c[0])];
+    assert!(judge(&c, &views, &[], 10, 3, 128, now(&c), MAX_AGE).is_ok(), "the real chain");
+    for at in [0, 4, 8] {
+        let mut b = c.clone();
+        b[at].parent_id = BlockId(Digest32::from([0xab; 32]));
+        assert_eq!(judge(&b, &views, &[], 10, 3, 128, now(&b), MAX_AGE), Err(Refusal::NotLinked), "link broken above {}", b[at + 1].height);
+    }
+}
