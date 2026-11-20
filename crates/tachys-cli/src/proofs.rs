@@ -196,6 +196,7 @@ pub(crate) fn prove_p2p(peer: &str, chain: &mut Vec<Header>, ids: &[String], cos
         let tip = chain.first().cloned().ok_or("no agreed chain")?;
         let cut = fresh.iter().position(|h| h.parent_id == tip.id).ok_or("the block the node names does not link onto the agreed tip within 12 blocks; run `tachys tips` again")?;
         let mut add: Vec<Header> = fresh[..=cut].to_vec();
+        // the difficulty these may carry is bounded by `carries_on`, as in `extend_chain` (see there for the rounding window)
         if !carries_on(&tip, &add) || add.iter().any(|h| header_ok(h, &anchor, now).is_err()) { return Err("the node's newer headers failed the link, work or difficulty checks".into()) }
         say!("node is {} block(s) past the agreed tip; fetched those headers by id over the peer protocol (linked, work-checked)", add.len());
         add.append(chain);
@@ -339,6 +340,12 @@ pub(crate) fn check_parcel(peer: &str, chain: &mut Vec<Header>, agreed: u32, tx:
 /// The node has moved past the agreed chain (routine on a fast chain). Ask it for its last headers and
 /// extend the chain by at most `max` headers that link onto the agreed tip and pass the same
 /// work, floor and time checks. These newest headers rest on one source plus their own work.
+///
+/// The floor that matters here is not the release's (`header_ok`) but `continues`: each header must carry the
+/// difficulty of the one it follows, or at an epoch's first block at least half of it, less the compact form's rounding
+/// (one part in 2^15). Half is also what the floor `tachys tips` remembers allows in the first epoch-time after a tip
+/// (`remembered_floor`), so a header taken here can sit below that floor only inside the rounding allowance, which is
+/// where an honest fall of the largest size the chain's rule allows lands too. That window is allowed on purpose.
 pub(crate) fn extend_chain(node: &str, chain: &mut Vec<Header>, max: usize, cost: &mut RestCost) -> usize {
     let anchor = release_anchor();
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);

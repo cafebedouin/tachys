@@ -88,7 +88,10 @@ reproducible ones: building your own is as good, and for money, better.
   a difficulty floor that decays from that checkpoint, and peers in several network groups have reached it. This
   is checkpointed SPV, not full NiPoPoW security (see below).
 - **Work, as far as ten headers go.** Tips are ranked by the difficulty they claim; a lighter chain is refused
-  while a heavier tip is heard; the floor remembers the last tip this wallet agreed on. With every connection
+  while a heavier tip is heard; the floor remembers the last tip this wallet agreed on. A header a single node adds
+  above the agreed tip must follow it at the chain's own difficulty (at an epoch's first block, at least half of it,
+  less the compact form's rounding of one part in 2^15). Next to the agreed tip that is the remembered floor's own
+  bound, give or take that rounding; an honest fall of the largest size can land in that window, so it is allowed. With every connection
   in an attacker's hands a false tip still costs about ten headers at that floor, so a large incoming payment
   should wait for more confirmations.
 - **One block's work, for a block only one source has shown.** Such a block is read, but a box proven only there

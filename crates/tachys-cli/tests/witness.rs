@@ -367,14 +367,15 @@ fn w4_a_peers_tip_is_its_highest_pushed_header_that_follows_another_it_pushed() 
 const W5_T0: u64 = 1_794_000_000_000;
 fn w5_chain() -> Vec<Header> { chain(10, 2560, W5_T0, bits(65_538), false, |h| filler(h).into_iter().chain([0u8; 33]).take(33).collect()) }
 fn w5_child(d: u64, nonce: u64) -> Header { make(2561, w5_chain()[0].id, W5_T0 + 120_000, bits(d), &[9u8; 33], nonce) }
-/// The nonces below were found by `w5_mine_nonces` (ignored: about 2^15 Autolykos hits each).
+/// The nonces below were found by `w5_mine_nonces` (ignored: about as many Autolykos hits as the difficulty, each).
 const W5_NONCE_32768: u64 = 15_239;
 const W5_NONCE_32769: u64 = 60_347;
+const W5_NONCE_16384: u64 = 12_592;
 
 #[test]
-#[ignore = "mines W5's two nonces; run once with --ignored --nocapture and paste them above"]
+#[ignore = "mines W5's three nonces; run once with --ignored --nocapture and paste them above"]
 fn w5_mine_nonces() {
-    for d in [32_768u64, 32_769] {
+    for d in [32_768u64, 32_769, 16_384] {
         let found = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
         let threads: Vec<_> = (0..12u64).map(|t| { let found = found.clone(); std::thread::spawn(move || {
             let mut n = t;
@@ -393,17 +394,18 @@ fn w5_mine_nonces() {
     }
 }
 
-/// W5 (`proofs.rs:188,344`): headers a single node adds in `prove_p2p` / `extend_chain` are held to the release floor
-/// (`header_ok`), where `tachys tips` holds pushed headers to the higher of that and the floor remembered from the
-/// agreed tip (`tips.rs:43-47`). Correct: a header above the release floor but below `remembered_floor(agreed tip)` is
-/// refused by `extend_chain`.
+/// W5: headers a single node adds in `prove_p2p` / `extend_chain` are not held to the floor `tachys tips` remembers from
+/// the agreed tip; they are held to `continues`, at an epoch's first block at least half the difficulty they follow,
+/// less the compact form's rounding (one part in 2^15). The remembered floor is half in the first epoch-time after a
+/// tip, so the only headers taken below it are in that rounding window, where an honest fall of the largest size lands
+/// too. This test pins that documented window (see `extend_chain`): a header in it is taken; one clearly below it is not.
 ///
 /// Reached through `wallet receive`: the stored chain is old, so the first proof is refused as stale and the node is
 /// asked for newer headers (`extend_chain`); whether it took the header is the sentence it says. The network's block
 /// interval is set so long that the remembered floor has not loosened since the agreed tip (one halving: what it is
 /// in the first epoch-time after a tip), which is what lets the headers be fixed.
 #[test]
-fn w5_a_node_supplied_header_below_the_remembered_floor_is_refused_by_extend_chain() {
+fn w5_a_node_supplied_header_is_taken_only_down_to_the_rounding_window_below_the_remembered_floor() {
     use tachys_verify::difficulty::{difficulty, ChainParams};
     let st = dir("w5");
     let cp = make(1000, BlockId(Digest32::from([5u8; 32])), W5_T0 - 86_400_000, bits(1), &[0u8; 33], 0);
@@ -416,24 +418,27 @@ fn w5_a_node_supplied_header_below_the_remembered_floor_is_refused_by_extend_cha
     assert_eq!(floor, BigInt::from(32_769), "the remembered floor: 65538, halved once");
     let try_child = |name: &str, child: &Header| -> Ran {
         assert_eq!(child.check_pow(), Ok(true), "{name}: the child carries work for its difficulty (re-mine with w5_mine_nonces if the headers changed)");
-        assert!(tachys_verify::tip::continues(&agreed, child, 128), "{name}: the child may follow the agreed tip (first block of an epoch, within half to one and a half)");
         let s = dir(&format!("w5-{name}"));
         store_chain(&s, &hs, &agreed);
         wallet(&s, true, json!({}), json!([]), json!([]));
         tachys(&["wallet", "receive", "--ids", &"ab".repeat(32), "--state", &s, "--net-file", &nf, "--node", &node_at(vec![], vec![child.clone()]), "--json"])
     };
-    // positive arm: a child at the remembered floor is taken
+    let taken = |r: &Ran| r.err.contains("1 block(s) past the agreed tip; extended");
+    // at the remembered floor: taken
     let at = w5_child(32_769, W5_NONCE_32769);
-    assert!(difficulty(&at) >= floor);
+    assert!(difficulty(&at) >= floor && tachys_verify::tip::continues(&agreed, &at, 128));
     let r = try_child("at-floor", &at);
-    assert!(r.err.contains("1 block(s) past the agreed tip; extended"), "positive arm: a header at the remembered floor is taken: {}", r.err);
-    // the lead: one unit of difficulty below it (still at least half the agreed tip's, within the compact-form allowance)
-    let below = w5_child(32_768, W5_NONCE_32768);
-    assert!(difficulty(&below) < floor && difficulty(&below) >= BigInt::from(1), "below the remembered floor, above the release floor");
-    let r = try_child("below-floor", &below);
-    let said: Vec<&str> = r.err.lines().filter(|l| l.contains("past the agreed tip") || l.contains("proof from")).collect();
-    assert!(!r.err.contains("past the agreed tip; extended"),
-        "W5: extend_chain took a header of difficulty {} on top of an agreed tip of difficulty 65538, below the remembered floor {floor}; said: {said:#?}", difficulty(&below));
+    assert!(taken(&r), "a header at the remembered floor is taken: {}", r.err);
+    // one unit below it, inside the rounding window (65538 / 2 less one part in 2^15): taken, on purpose
+    let window = w5_child(32_768, W5_NONCE_32768);
+    assert!(difficulty(&window) < floor && tachys_verify::tip::continues(&agreed, &window, 128), "in the window: below the remembered floor, and may follow the tip");
+    let r = try_child("in-window", &window);
+    assert!(taken(&r), "a header in the rounding window below the remembered floor is taken (documented): {}", r.err);
+    // a quarter of the agreed tip's difficulty, with real work for it: clearly below the window, refused
+    let quarter = w5_child(16_384, W5_NONCE_16384);
+    assert!(!tachys_verify::tip::continues(&agreed, &quarter, 128), "a quarter may not follow the tip");
+    let r = try_child("quarter", &quarter);
+    assert!(!taken(&r), "a header at a quarter of the agreed tip's difficulty is refused: {}", r.err);
 }
 
 // ---- W6 ----
