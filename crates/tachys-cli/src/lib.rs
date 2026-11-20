@@ -23,6 +23,8 @@ mod wallet;
 mod walletfile;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod witness;
 
 use crate::network::{Net, net, MAINNET, TESTNET};
 use crate::util::arg;
