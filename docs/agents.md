@@ -68,7 +68,8 @@ block), `timeout`, `node_refused`, `outcome_unknown`, `misuse`, `failed`.
   (`true` also for a box your own payment makes, still waiting, such as its change: this wallet built and signed it
   from coins it had proven unspent, and each check asks about them again; the reason says it is your own);
   `false`, the nodes that answered hold no such payment (not sent, not yet seen, or dropped); `null`, no node
-  answered, or there is nothing to say. A payment you held with `wallet promise` was taken as handed over, with
+  answered, or there is nothing to say, as for a payment a node shows whose coins are not yet proven unspent under
+  the tip the peers agree on (one made in a block they have not all reached): ask again after a block. A payment you held with `wallet promise` was taken as handed over, with
   nothing about it checked: its receipt answers `pending: null`, not `true`, until it is in a block. Once held, a coin of it
   spent elsewhere makes the answer `failed`, unless the payment is proven to be in the chain; and if what spent the
   coin is itself undone, it is held again. A payment dropped from every pool before it was first asked about cannot

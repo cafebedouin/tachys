@@ -994,13 +994,15 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
         for id in ids.clone() {
             if w.boxes.contains_key(&id) || w.expect.contains(&id) || w.void.contains(&id) || own.contains(&id) { continue }
             let (found, answered) = pending_payment(&nodes, &id);
+            // a node showed such a payment, held or not: then nobody can say there is none
+            let offered = found.is_some();
             let mut held = false;
             if let Some(tx) = found.filter(|t| !own_tx.contains(&String::from(t.id()))) {
                 let coins: Vec<String> = tx.inputs.iter().map(|i| String::from(i.box_id)).collect();
                 let reads: Vec<String> = tx.data_inputs.as_ref().map(|d| d.iter().map(|i| String::from(i.box_id)).collect()).unwrap_or_default();
                 let all: Vec<String> = coins.iter().chain(reads.iter()).cloned().collect();
                 let mut seen_at = 0u64;
-                let checked = prove_any(node, chain, &all, &mut cost).map_err(|e| format!("its coins could not be proven ({e})")).and_then(|(h, f)| {
+                let checked = prove_any_agreed(node, chain, agreed_height(state), &all, &mut cost).map_err(|e| format!("its coins could not be proven ({e})")).and_then(|(h, f)| {
                     seen_at = h as u64;
                     let parse = |v: &[Option<Vec<u8>>]| v.iter().map(|b| b.as_ref().ok_or("a coin it spends is not an unspent box (spent, or made by a payment not yet in a block)".to_string()).and_then(|b| ErgoBox::sigma_parse_bytes(b).map_err(|e| format!("box decode: {e:?}")))).collect::<Result<Vec<_>, String>>();
                     let (fi, fd) = f.split_at(coins.len());
@@ -1011,7 +1013,7 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
                     Err(why) => say!("  {id}  a node holds a payment that makes it, but it is not held: {why}"),
                 }
             }
-            crate::out::push("pools", serde_json::json!({ "id": id, "answered": answered, "held": held }));
+            crate::out::push("pools", serde_json::json!({ "id": id, "answered": answered, "offered": offered, "held": held }));
         }
     }
     // payments still waiting, and ones given up on (they may yet be included): the boxes they spend and one they create.

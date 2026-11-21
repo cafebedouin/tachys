@@ -132,7 +132,10 @@ impl Agent {
         // of this wallet's own, still waiting (true); no node holding one, among nodes that answered (false); nobody
         // answered, or nothing to say (null), which is also what a payment held by `wallet promise` gets: it was handed
         // over and nothing about it was checked
-        let answered = r.json["pools"].as_array().is_some_and(|a| a.iter().any(|p| p["id"] == receipt && p["answered"] == true));
+        // false only if a node answered and none showed such a payment: one shown but not held (its coins not yet proven
+        // under the agreed tip, or its proof did not check) is not "none", and a payee told so might ask to be paid twice
+        let answered = r.json["pools"].as_array().is_some_and(|a| a.iter().any(|p| p["id"] == receipt && p["answered"] == true))
+            && !r.json["pools"].as_array().is_some_and(|a| a.iter().any(|p| p["id"] == receipt && p["offered"] == true));
         let (proven, own) = (found["held_proven"] == true, found["own"] == true);
         let pending = match found["state"].as_str() { Some("expected") if proven || own => Some(true), Some("absent") if answered => Some(false), _ => None };
         let confirmations: u64 = found["confirmations"].as_u64().unwrap_or(0);
@@ -596,5 +599,34 @@ mod tests {
         assert_eq!(what(&payer, &change), (false, Some(10_000_000_000 - 2_000_000_000 - 1_100_000), 0), "its own payment's change: what is left after the payment and the fee");
         assert_eq!(what(&payee, &receipt), (false, Some(2_000_000_000), 0), "a payment held for it: what it pays");
         for st in [payer, payee] { let _ = std::fs::remove_dir_all(st); }
+    }
+
+    /// A payment fetched from a node's pool (`--pools`) had its coins proven with `prove_any`, held to no tip: a proof
+    /// that matched only a header above the agreed tip, which one node alone has shown, was taken, and the receipt
+    /// answered `pending: true` on that node's word. Its coins are now proven under the agreed tip, as the comment on
+    /// `--pools` says, or the payment is not held.
+    #[test]
+    fn a_pool_payment_is_held_only_on_coins_proven_under_the_agreed_tip() {
+        let (payer, coin, p, payee) = paid("pool-above");
+        let change = wallet_json(&payer)["expect"][0].as_str().unwrap().to_string();
+        let tx: serde_json::Value = serde_json::from_str(p["tx_json"].as_str().unwrap()).unwrap();
+        let receipt = tx["outputs"].as_array().unwrap().iter().map(|o| o["boxId"].as_str().unwrap().to_string()).find(|b| *b != change).unwrap();
+        let (url, root) = node(vec![coin], (p["tx_id"].as_str().unwrap().to_string(), p["tx_json"].as_str().unwrap().to_string()));
+        let under = dir("pool-under");
+        std::fs::copy(format!("{payee}/wallet.json"), format!("{under}/wallet.json")).unwrap();
+        // under: the agreed tip's state holds the coin
+        chain_over(&under, &root);
+        // above: the agreed tip's state does not; a header one block above it, which a node added, does
+        chain_over(&payee, &root_of(&[vec![9u8; 60]]));
+        let mut h = crate::network::checkpoint_header();
+        h.timestamp = crate::chain::now_ms(); h.height += 1;
+        h.state_root = ergo_chain_types::ADDigest::try_from(root.clone()).unwrap();
+        let hb = h.scorex_serialize_bytes().unwrap();
+        let mut chain = (hb.len() as u16).to_be_bytes().to_vec(); chain.extend_from_slice(&hb);
+        chain.extend_from_slice(&std::fs::read(format!("{payee}/agreed-chain.bin")).unwrap());
+        std::fs::write(format!("{payee}/agreed-chain.bin"), chain).unwrap();
+        assert_eq!(pending(&under, &url, &receipt).0, Some(true), "its coin proven under the agreed tip: held, on its way");
+        assert_eq!(pending(&payee, &url, &receipt).0, None, "its coin proven only above the agreed tip: not held");
+        for st in [payer, payee, under] { let _ = std::fs::remove_dir_all(st); }
     }
 }

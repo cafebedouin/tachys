@@ -42,8 +42,9 @@ keeps the whole linked chain in the state directory and extends it each run, for
 
 **`wallet status | receive | restore`** — (`receive --pools` first asks the nodes' pools of payments not yet in a block for
 one that makes each box asked about; it holds one only if its body makes that box, every coin it spends is proven
-unspent, and its spending proofs verify. `pools` lists `{id, answered, held}` per box: `answered` is false if no REST
-node answered (nodes over the peer protocol are not asked). `void` lists `{boxes, coin_gone, reason}` for a held payment
+unspent under the tip the peers agree on, and its spending proofs verify. `pools` lists `{id, answered, offered, held}`
+per box: `answered` is false if no REST node answered (nodes over the peer protocol are not asked); `offered`, a node
+showed such a payment, held or not. `void` lists `{boxes, coin_gone, reason}` for a held payment
 found dead by this call.) `address`, `addresses`, `nanoerg`, `boxes` (how many), `tokens`
 (`id`, `amount`), `confirmed_nanoerg` (the part of `nanoerg` in boxes confirmed under an agreed tip: what can be
 spent), `proven_at` (the height of the proof), `agreed_height`, `settled` (the proof is at or below the
