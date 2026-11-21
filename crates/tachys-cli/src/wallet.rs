@@ -1188,6 +1188,9 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
     let quiet: Vec<String> = still.iter().flat_map(|p| p.inputs.iter().chain(std::iter::once(&p.watch))).chain(done.iter().flat_map(|d| d.inputs.iter().chain(std::iter::once(&d.watch)))).cloned().chain(made).collect();
     w.pending = still;
     w.done = done;
+    // the boxes paying this wallet that its own payments still waiting make: built and signed here from coins proven
+    // unspent under an agreed tip, which this sync has asked about again (a coin of one gone has settled it, above)
+    let own_waiting: Vec<String> = w.pending.iter().flat_map(|p| outputs_of(p, &my_trees)).filter(|x| x.1).map(|x| x.0).collect();
     // a box confirmed under a header the agreed chain no longer has there left with its block: undone, not spent.
     // Only the stored chain can say, so a reorganisation further back than it reaches still reads as a spend.
     let header_at = |h: u64| chain.iter().find(|x| x.height as u64 == h).map(|x| hex(&crate::chain::id32(x)));
@@ -1249,7 +1252,7 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
                     say!("  {id}  gone at height {height}, and the block it was confirmed under (height {}) is no longer in the chain the peers agree on: UNDONE by a reorganisation. It may be included again, or its coins may have been spent elsewhere; until it is proven again it is not a payment", old.confirmed_at.unwrap_or(0));
                 }
                 Some(_) => { checked(id, "spent"); if !spent_by_us.contains(id) { refresh = true; } say!("  {id}  gone at height {height}: spent{}; removed", if spent_by_us.contains(id) { "" } else { " (not by a payment of this wallet)" }); }
-                None if expect.contains(id) => { crate::out::push("checked", serde_json::json!({ "id": id, "state": "expected", "height": height, "held_proven": proven_held.contains(id) })); say!("  {id}  expected from our own payment, not on chain yet at {height}"); }
+                None if expect.contains(id) => { crate::out::push("checked", serde_json::json!({ "id": id, "state": "expected", "height": height, "held_proven": proven_held.contains(id), "own": own_waiting.contains(id) })); say!("  {id}  expected from our own payment, not on chain yet at {height}"); }
                 // an undone box stays undone, asked about again, until it is back or its coins are spent
                 None if undone.contains(id) => { checked(id, "undone"); say!("  {id}  undone by a reorganisation and not back in the chain at height {height}: not a payment now"); }
                 None if void.contains(id) => { checked(id, "void"); say!("  {id}  VOID: the payment that was to make it can never confirm (a coin it spends is gone, or it was refused for good): not accepted"); }

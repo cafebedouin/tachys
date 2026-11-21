@@ -128,12 +128,13 @@ impl Agent {
         // not tell a late payment from a double-spent one.
         let r = self_run(&["wallet", "receive", "--state", &self.state, "--node", &self.node, "--ids", receipt, "--pools"]);
         let found = if r.ok { r.json["checked"].as_array().and_then(|a| a.iter().find(|c| c["id"] == receipt)).cloned().unwrap_or(serde_json::Value::Null) } else { serde_json::Value::Null };
-        // pending: held with its coins proven unspent and its signatures verified when it was taken (true); no node holding
-        // one, among nodes that answered (false); nobody answered, or nothing to say (null), which is also what a payment
-        // held by `wallet promise` gets: it was handed over and nothing about it was checked
+        // pending: held with its coins proven unspent and its signatures verified when it was taken, or made by a payment
+        // of this wallet's own, still waiting (true); no node holding one, among nodes that answered (false); nobody
+        // answered, or nothing to say (null), which is also what a payment held by `wallet promise` gets: it was handed
+        // over and nothing about it was checked
         let answered = r.json["pools"].as_array().is_some_and(|a| a.iter().any(|p| p["id"] == receipt && p["answered"] == true));
-        let proven = found["held_proven"] == true;
-        let pending = match found["state"].as_str() { Some("expected") if proven => Some(true), Some("absent") if answered => Some(false), _ => None };
+        let (proven, own) = (found["held_proven"] == true, found["own"] == true);
+        let pending = match found["state"].as_str() { Some("expected") if proven || own => Some(true), Some("absent") if answered => Some(false), _ => None };
         let confirmations: u64 = found["confirmations"].as_u64().unwrap_or(0);
         let (accepted, code, why) = match found["state"].as_str() {
             Some("proven") if confirmations >= 1 => (true, "", if found["added"] == true { "proven unspent and pays this wallet" } else { "already in this wallet, proven unspent" }),
@@ -144,6 +145,8 @@ impl Agent {
             Some("void") => (false, "failed", "the payment that was to make this box can never confirm: a coin it spends is gone (spent first by another payment), or it was refused for good"),
             // the block that confirmed it left the chain: not a payment now, and perhaps one again later
             Some("undone") => (false, "not_yet", "the block that confirmed this box is no longer in the chain the peers agree on (a reorganisation): it is not a payment now. It may be included again (then it is accepted with first_seen false: the same payment); or its coins were spent elsewhere, and it never will be"),
+            // the wallet's own payment, waiting: each sync proves its coins again, and one gone settles it
+            Some("expected") if own => (false, "not_yet", "the payment that makes this box is this wallet's own, built and signed by it from coins it had proven unspent: it is not in a block yet"),
             // the payment is held and none of its coins is gone: it is on its way
             Some("expected") if proven => (false, "not_yet", "the payment that makes this box is held by this wallet, its coins proven unspent and its signatures verified: it is not in a block yet"),
             Some("expected") => (false, "not_yet", "the payment that makes this box is held by this wallet as it was handed over, nothing about it proven: it is not in a block yet"),
@@ -408,15 +411,16 @@ mod tests {
         });
         (url, root)
     }
-    fn pending(state: &str, node: &str, receipt: &str) -> (Option<bool>, &'static str) {
+    fn receipt_of(state: &str, node: &str, receipt: &str) -> Receipt {
         // one call at a time, as `crate::call` holds it: the inner `wallet receive` writes its answer where a call
         // started by another test beside this one would clear it
         let _one = crate::ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
         let a = Agent { state: state.to_string(), node: node.to_string() };
         let receipt = receipt.to_string();
         let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
-        rt.block_on(async move { tokio::spawn(async move { let r = a.receipt(&receipt); (r.pending, r.code) }).await.unwrap() })
+        rt.block_on(async move { tokio::spawn(async move { a.receipt(&receipt) }).await.unwrap() })
     }
+    fn pending(state: &str, node: &str, receipt: &str) -> (Option<bool>, &'static str) { let r = receipt_of(state, node, receipt); (r.pending, r.code) }
 
     /// M3: `accept` said `pending: true` for any box a held payment promises, also one held by `wallet promise`, where
     /// nothing about its coins or signatures was checked. Correct: `true` only for a payment held with its coins proven
@@ -508,5 +512,27 @@ mod tests {
         assert_eq!((w["pending"].as_array().map_or(0, |a| a.len()), w["done"].clone()), (1, serde_json::Value::Null), "a waiting payment whose coin is unspent is still waiting");
         assert_eq!(wallet_json(&gave_up)["done"][0]["result"], "not included", "a payment given up on whose coin is unspent is still not included");
         for st in [payer, gave_up] { let _ = std::fs::remove_dir_all(st); }
+    }
+
+    /// A box from the wallet's own payment, still waiting (its change), answered `pending: null`, as a payment held by
+    /// `wallet promise` with nothing about it checked does. It was built and signed by this wallet from coins it had
+    /// proven unspent, and each sync proves them again: `pending: true`, with a reason of its own. A coin of it gone
+    /// settles the payment, and the answer is `failed`.
+    #[test]
+    fn a_box_from_the_wallets_own_waiting_payment_is_pending() {
+        let (payer, coin, p) = paid("own-pending");
+        let change = wallet_json(&payer)["expect"][0].as_str().unwrap().to_string();
+        let pool = (p["tx_id"].as_str().unwrap().to_string(), p["tx_json"].as_str().unwrap().to_string());
+        let gone = dir("own-pending-gone");
+        for f in ["wallet.json", "agreed-chain.bin"] { std::fs::copy(format!("{payer}/{f}"), format!("{gone}/{f}")).unwrap(); }
+        let (url, _) = node(vec![coin], pool.clone());
+        let r = receipt_of(&payer, &url, &change);
+        assert_eq!((r.pending, r.code), (Some(true), "not_yet"), "the wallet's own payment, its coin unspent: on its way");
+        assert!(r.why.contains("this wallet's own"), "with its own reason: {}", r.why);
+        // its coin spent by something else: a node whose state holds another box, the chain read against its root
+        let (url, root) = node(vec![vec![9u8; 60]], pool);
+        chain_over(&gone, &root);
+        assert_eq!(pending(&gone, &url, &change).1, "failed", "the wallet's own payment, its coin gone");
+        for st in [payer, gone] { let _ = std::fs::remove_dir_all(st); }
     }
 }

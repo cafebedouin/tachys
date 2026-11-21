@@ -62,7 +62,9 @@ block), `timeout`, `node_refused`, `outcome_unknown`, `misuse`, `failed`.
   `code:"failed"`: it will never be paid by that payment. Given only the box id, `accept` asks the nodes whether one
   holds, in its pool, the payment that makes that box. The wallet holds it only if, as read, it makes that box, every
   coin it spends is proven unspent, and its signatures verify against them. `receipt.pending` then says what is
-  known: `true`, such a payment is held, its coins proven unspent and its signatures verified, so it is on its way;
+  known: `true`, such a payment is held, its coins proven unspent and its signatures verified, so it is on its way
+  (`true` also for a box your own payment makes, still waiting, such as its change: this wallet built and signed it
+  from coins it had proven unspent, and each check asks about them again; the reason says it is your own);
   `false`, the nodes that answered hold no such payment (not sent, not yet seen, or dropped); `null`, no node
   answered, or there is nothing to say. A payment you held with `wallet promise` was taken as handed over, with
   nothing about it checked: its receipt answers `pending: null`, not `true`, until it is in a block. Once held, a coin of it
