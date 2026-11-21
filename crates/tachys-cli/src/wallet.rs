@@ -18,7 +18,7 @@ use crate::network::{net, private_net};
 use crate::out::{Ended, Fail};
 use crate::policy;
 use crate::walletfile::{Asset, Done, Pending, TrackedBox, WalletFile};
-use crate::proofs::{extend_chain, prove_any, prove_included, prove_p2p, prove_reading, send_tx, NotSent, RestCost};
+use crate::proofs::{extend_chain, prove_any, prove_any_agreed, prove_included, prove_p2p, prove_reading, send_tx, NotSent, RestCost};
 use crate::seal::{open_phrase, phrase_problem, seal_phrase};
 use crate::util::{arg, clip, hex, http, one_line, private_dir, stdin_line, unhex, write_private, write_whole};
 
@@ -35,6 +35,10 @@ pub(crate) fn names(p: &ergotree_ir::sigma_protocol::sigma_boolean::SigmaBoolean
         SigmaBoolean::SigmaConjecture(SigmaConjecture::Cthreshold(c)) => c.children.iter().any(|x| names(x, keys)),
     }
 }
+
+/// The script of a Babel fee offer (EIP-31) for a token, in hex: ERG locked under it may be taken by putting enough of
+/// that token back into the same box, at the price in R5.
+pub(crate) fn babel_hex(token: &str) -> String { format!("100604000e20{token}0400040005000500d803d601e30004d602e4c6a70408d603e4c6a7050595e67201d804d604b2a5e4720100d605b2db63087204730000d606db6308a7d60799c1a7c17204d1968302019683050193c27204c2a7938c720501730193e4c672040408720293e4c672040505720393e4c67204060ec5a796830201929c998c7205029591b1720673028cb272067303000273047203720792720773057202") }
 
 /// The script every network fee is paid to, in hex.
 pub(crate) fn fee_tree_hex() -> String { if net().fee_tree.is_empty() { ergo_lib::wallet::miner_fee::MINERS_FEE_BASE16_BYTES.to_string() } else { net().fee_tree.to_string() } }
@@ -659,11 +663,11 @@ fn cmd_send(c: &Ctx, o: Open) -> Ended {
     // anyone may take ERG from it by putting at least (ERG taken / price) of the token back into the same box.
     use ergotree_ir::chain::ergo_box::NonMandatoryRegisterId::{R4, R5, R6};
     use ergotree_ir::mir::constant::{Constant, TryExtractInto};
-    let babel_hex = |token: &str| format!("100604000e20{token}0400040005000500d803d601e30004d602e4c6a70408d603e4c6a7050595e67201d804d604b2a5e4720100d605b2db63087204730000d606db6308a7d60799c1a7c17204d1968302019683050193c27204c2a7938c720501730193e4c672040408720293e4c672040505720393e4c67204060ec5a796830201929c998c7205029591b1720673028cb272067303000273047203720792720773057202");
     let babel_tree = |token: &str| unhex(&babel_hex(token)).and_then(|b| ergotree_ir::ergo_tree::ErgoTree::sigma_parse_bytes(&b).ok());
     let price_of = |b: &ErgoBox| -> i64 { b.additional_registers.get_constant(R5).ok().flatten().and_then(|c| c.try_extract_into::<i64>().ok()).unwrap_or(0) };
-    // The node lists the offers; each one is then proven unspent under the agreed tip and checked to sit under
-    // the Babel contract for this token, so a node can hide an offer but cannot invent one.
+    // The node lists the offers; each one is then proven unspent under the agreed tip (a proof only above it, against
+    // a block one node has shown, is not used) and checked to sit under the Babel contract for this token, so a node
+    // can hide an offer but cannot invent one.
     let babel_offers = |token: &str| -> Vec<ErgoBox> {
         let Some(tree) = babel_tree(token) else { return vec![] };
         let n = crate::nodes::each(node).into_iter().find(|n| !n.starts_with("p2p://")).unwrap_or_default();
@@ -671,7 +675,7 @@ fn cmd_send(c: &Ctx, o: Open) -> Ended {
         let ids: Vec<String> = serde_json::from_str::<serde_json::Value>(&r.into_string().unwrap_or_default()).ok().and_then(|v| v.as_array().map(|x| x.iter().filter_map(|b| b["boxId"].as_str().map(String::from)).collect())).unwrap_or_default();
         if ids.is_empty() { return vec![] }
         let mut cost = RestCost::default();
-        match prove_any(node, chain, &ids, &mut cost) {
+        match prove_any_agreed(node, chain, agreed_height(state), &ids, &mut cost) {
             Ok((_, found)) => found.into_iter().flatten().filter_map(|b| ErgoBox::sigma_parse_bytes(&b).ok()).filter(|b| b.ergo_tree == tree && price_of(b) > 0).collect(),
             Err(e) => { complain!("offer lookup: {e}"); vec![] }
         }

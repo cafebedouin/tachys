@@ -185,6 +185,21 @@ pub(crate) fn prove_any(nodes: &str, chain: &[Header], ids: &[String], cost: &mu
     Err(last)
 }
 
+/// `prove_any`, held to the tip the peers agreed on (`agreed`, its height): read against the newest headers and those at
+/// or below the agreed tip (`prove_reading`), and a proof that matches only a header above it, which rests on that
+/// header's one source, is not taken.
+pub(crate) fn prove_any_agreed(nodes: &str, chain: &[Header], agreed: u32, ids: &[String], cost: &mut RestCost) -> Result<Proven, String> {
+    let mut last = "no node given".to_string();
+    for n in crate::nodes::each(nodes).iter().filter(|n| !n.starts_with("p2p://")) {
+        match prove_reading(n, chain, Some(agreed), ids, cost) {
+            Ok((h, _)) if h > agreed => last = format!("{n} proves only against a block above the tip the peers agree on ({h} > {agreed})"),
+            Ok(x) => return Ok(x),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
 /// Why a signed transaction was not taken.
 pub(crate) enum NotSent {
     /// A node read it and said no (its status and words): asking another node the same thing is not a retry.

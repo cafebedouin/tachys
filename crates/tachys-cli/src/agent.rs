@@ -380,7 +380,9 @@ mod tests {
     }
     fn root_of(held: &[Vec<u8>]) -> Vec<u8> { use ergo_avltree_rust::authenticated_tree_ops::AuthenticatedTreeOps; prover(held).digest().unwrap().to_vec() }
     /// A node holding `held` in its state and `pool` (a payment's id and JSON) in its pool. Returns its URL and root.
-    fn node(held: Vec<Vec<u8>>, pool: (String, String)) -> (String, Vec<u8>) {
+    fn node(held: Vec<Vec<u8>>, pool: (String, String)) -> (String, Vec<u8>) { node_listing(held, pool, vec![]) }
+    /// The same, listing `listed` as the unspent boxes under any script asked about.
+    fn node_listing(held: Vec<Vec<u8>>, pool: (String, String), listed: Vec<String>) -> (String, Vec<u8>) {
         use ergo_avltree_rust::operation::Operation;
         let root = root_of(&held);
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -406,6 +408,7 @@ mod tests {
             } else if let Some(o) = tx["outputs"].as_array().unwrap().iter().find(|o| line.contains(&format!("/transactions/unconfirmed/outputs/byBoxId/{}", o["boxId"].as_str().unwrap()))) {
                 let mut o = o.clone(); o["transactionId"] = pool.0.clone().into(); (200, o.to_string())
             } else if line.contains(&format!("/transactions/unconfirmed/byTransactionId/{}", pool.0)) { (200, pool.1.clone())
+            } else if line.contains("/blockchain/box/unspent/byErgoTree") { (200, serde_json::Value::from(listed.iter().map(|b| serde_json::json!({ "boxId": b })).collect::<Vec<_>>()).to_string())
             } else { (404, r#"{"error":404}"#.to_string()) };
             let _ = c.write_all(format!("HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}", answer.len()).as_bytes());
         });
@@ -534,5 +537,39 @@ mod tests {
         chain_over(&gone, &root);
         assert_eq!(pending(&gone, &url, &change).1, "failed", "the wallet's own payment, its coin gone");
         for st in [payer, gone] { let _ = std::fs::remove_dir_all(st); }
+    }
+
+    /// A Babel fee offer was proven with `prove_any`, held to no tip: a proof that matched a header above the agreed tip,
+    /// which one node alone has shown, was taken, and a payment could be built on an offer the chain may not have. It is
+    /// now held to the agreed tip, as `wallet sync` holds what it settles.
+    #[test]
+    fn a_babel_offer_is_proven_under_the_agreed_tip_or_not_used() {
+        use ergotree_ir::chain::ergo_box::NonMandatoryRegisterId::{R4, R5};
+        let token = "ab".repeat(32);
+        let tree = ergotree_ir::ergo_tree::ErgoTree::sigma_parse_bytes(&unhex(&crate::wallet::babel_hex(&token))).unwrap();
+        let pk = ergo_lib::wallet::ext_secret_key::ExtSecretKey::derive_master(ergo_lib::wallet::mnemonic::Mnemonic::to_seed(PHRASE, "")).unwrap().public_image();
+        let cp = crate::network::checkpoint_header();
+        let mut b = ergo_lib::chain::ergo_box::box_builder::ErgoBoxCandidateBuilder::new(ergotree_ir::chain::ergo_box::box_value::BoxValue::try_from(50_000_000u64).unwrap(), tree, cp.height - 100);
+        b.set_register_value(R4, pk.into()); b.set_register_value(R5, 1_000i64.into());
+        let offer = ergotree_ir::chain::ergo_box::ErgoBox::from_box_candidate(&b.build().unwrap(), ergotree_ir::chain::tx_id::TxId::zero(), 0).unwrap();
+        let offer_bytes = offer.sigma_serialize_bytes().unwrap();
+        let (url, root) = node_listing(vec![offer_bytes], (String::new(), r#"{"outputs":[]}"#.to_string()), vec![String::from(offer.box_id())]);
+        let (under, above) = (dir("babel-under"), dir("babel-above"));
+        for st in [&under, &above] { call(&["wallet", "new", "--state", st]); }
+        // under: the agreed tip's state holds the offer
+        chain_over(&under, &root);
+        // above: the agreed tip's state does not; a header one block above it, which a node added, does
+        chain_over(&above, &root_of(&[vec![9u8; 60]]));
+        let mut h = crate::network::checkpoint_header();
+        h.timestamp = crate::chain::now_ms(); h.height += 1;
+        h.state_root = ergo_chain_types::ADDigest::try_from(root.clone()).unwrap();
+        let hb = h.scorex_serialize_bytes().unwrap();
+        let mut chain = (hb.len() as u16).to_be_bytes().to_vec(); chain.extend_from_slice(&hb);
+        chain.extend_from_slice(&std::fs::read(format!("{above}/agreed-chain.bin")).unwrap());
+        std::fs::write(format!("{above}/agreed-chain.bin"), chain).unwrap();
+        let offers = |st: &str| call(&["wallet", "babel-list", "--state", st, "--node", &url, "--token", &token])["offers"].as_array().map_or(0, |a| a.len());
+        assert_eq!(offers(&under), 1, "an offer proven under the agreed tip is listed");
+        assert_eq!(offers(&above), 0, "an offer proven only above the agreed tip is not used");
+        for st in [under, above] { let _ = std::fs::remove_dir_all(st); }
     }
 }

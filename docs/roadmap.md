@@ -47,8 +47,10 @@ Open, in the order they matter:
    payments "waiting" until a sync lands on a block the peers have reached. The only testnet node did this through
    most of our runs (it mines); the app now shows such coins apart instead of as nothing. A proof at a named header (over the
    peer protocol, `node-patches/`) would remove the wait. A sync now also reads a proof at the agreed tip after nodes
-   have added headers above it, so such nodes no longer lock out an honest one; `prove_any` (signing requests, offers,
-   `wallet receive --pools`, `tachys boxes`) still reads only the newest four stored headers.
+   have added headers above it, so such nodes no longer lock out an honest one; `prove_any` (signing requests,
+   `wallet receive --pools`, `tachys boxes`) still reads only the newest four stored headers, and takes a proof
+   against one above the agreed tip. A Babel offer is read as a sync reads, and only a proof at or below the
+   agreed tip is used.
 7. **The scalar arithmetic the signing library uses** carries an advisory (RUSTSEC-2026-0387); what was checked
    and what was not is in finding 48.
 8. **Testnet has no difficulty floor to speak of** (its checkpoint's difficulty divided by 1024 is nothing), and
