@@ -180,7 +180,8 @@ pub(crate) fn parse(text: &str) -> Result<WalletFile, String> {
             None => return Err("its version is not a number".into()),
         },
     }
-    serde_json::from_value(v).map_err(|e| format!("a field is not what this build expects ({e})"))
+    // the field is named by its path in the file (`boxes.aa.value`): serde_json's own error does not say which it is
+    serde_path_to_error::deserialize(v).map_err(|e| format!("a field is not what this build expects (`{}`: {})", e.path(), e.inner()))
 }
 
 /// The text to write: always this build's version.
@@ -245,7 +246,8 @@ mod tests {
             (r#"{ "address": "9abc", "boxes": { "aa": { "bytes": "00" } } }"#, "value"), (r#"{ "address": "9abc", "pending": [{ "inputs": "i1" }] }"#, "inputs"), (r#"{ "address": "9abc", "addresses": -1 }"#, "addresses")] {
             let e = parse(bad).unwrap_err();
             assert!(e.contains("not what this build expects"), "{bad}: {e}");
-            let _ = field;
+            // by its path (`boxes.aa.value`: ...), or, when it is missing, in the reason (`boxes.aa`: missing field `value`)
+            assert!(e.contains(&format!("{field}`")), "{bad}: the field is named: {e}");
         }
         assert!(parse(r#"{ "version": 1, "address": "9abc" }"#).is_ok(), "this build's own version, with nothing else, is a wallet with no boxes");
     }
