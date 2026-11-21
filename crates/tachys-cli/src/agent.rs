@@ -409,6 +409,9 @@ mod tests {
         (url, root)
     }
     fn pending(state: &str, node: &str, receipt: &str) -> (Option<bool>, &'static str) {
+        // one call at a time, as `crate::call` holds it: the inner `wallet receive` writes its answer where a call
+        // started by another test beside this one would clear it
+        let _one = crate::ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
         let a = Agent { state: state.to_string(), node: node.to_string() };
         let receipt = receipt.to_string();
         let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
@@ -428,16 +431,21 @@ mod tests {
         let coin = ergotree_ir::chain::ergo_box::ErgoBox::from_box_candidate(&ergo_lib::chain::ergo_box::box_builder::ErgoBoxCandidateBuilder::new(
             ergotree_ir::chain::ergo_box::box_value::BoxValue::try_from(10_000_000_000u64).unwrap(), me.script().unwrap(), cp.height - 100).build().unwrap(), ergotree_ir::chain::tx_id::TxId::zero(), 0).unwrap();
         let coin_bytes = coin.sigma_serialize_bytes().unwrap();
-        chain_over(&payer, &root_of(&[coin_bytes.clone()]));
+        chain_over(&payer, &root_of(std::slice::from_ref(&coin_bytes)));
         let a = ergotree_ir::chain::address::AddressEncoder::new(ergotree_ir::chain::address::NetworkPrefix::Mainnet).address_to_str(&me);
         std::fs::write(format!("{payer}/wallet.json"), serde_json::json!({ "name": "payer", "address": a, "address_list": [a], "birthday": 0, "mnemonic": PHRASE,
             "boxes": { String::from(coin.box_id()): { "value": 10_000_000_000u64, "confirmed_at": 1, "bytes": crate::util::hex(&coin_bytes) } } }).to_string()).unwrap();
         let payee = dir("m3-payee");
-        let to = call(&["wallet", "new", "--state", &payee])["address"].as_str().unwrap().to_string();
+        call(&["wallet", "new", "--state", &payee]);
+        // read from the files, not from the answers: a test beside this one that signs without `crate::call` writes its
+        // fields into whatever answer is under way
+        let to = serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(format!("{payee}/wallet.json")).unwrap()).unwrap()["address"].as_str().unwrap().to_string();
         let parcel = format!("{payer}/parcel.json");
-        let sent = call(&["wallet", "send", "--state", &payer, "--to", &to, "--nanoerg", "2000000000", "--parcel-out", &parcel]);
-        let receipt = sent["receipt"][0].as_str().unwrap().to_string();
+        call(&["wallet", "send", "--state", &payer, "--to", &to, "--nanoerg", "2000000000", "--parcel-out", &parcel]);
         let p: serde_json::Value = serde_json::from_slice(&std::fs::read(&parcel).unwrap()).unwrap();
+        let to_tree = crate::util::hex(&ergotree_ir::chain::address::AddressEncoder::unchecked_parse_address_from_str(&to).unwrap().script().unwrap().sigma_serialize_bytes().unwrap());
+        let tx: serde_json::Value = serde_json::from_str(p["tx_json"].as_str().unwrap()).unwrap();
+        let receipt = tx["outputs"].as_array().unwrap().iter().find(|o| o["ergoTree"] == to_tree.as_str()).expect("the payment pays the payee")["boxId"].as_str().unwrap().to_string();
         let (url, root) = node(vec![coin_bytes], (p["tx_id"].as_str().unwrap().to_string(), p["tx_json"].as_str().unwrap().to_string()));
         // the same payee wallet twice: one holds the payment by `wallet promise`, the other takes it from the node's pool
         let (promised, pooled) = (dir("m3-promised"), dir("m3-pooled"));
