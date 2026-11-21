@@ -630,6 +630,9 @@ fn cmd_send(c: &Ctx, o: Open) -> Ended {
     // minting pays the new token to ourselves; a token payment carries the minimum ERG a box needs
     let to_self = !mint_name.is_empty() || sub != "send";
     let to: String = if to_self { enc.address_to_str(&addr) } else { arg(args, "--to", String::new())? };
+    // `--pay` and `--also-token` are read below as the word after each; one given last has none, and is misuse, as an
+    // option without its value is everywhere (`util::try_arg`), not a payee or token quietly left out
+    if let Some(last) = args.last().filter(|a| *a == "--pay" || *a == "--also-token") { return Err(crate::out::Fail::new(2, format!("{last} needs a value"))) }
     // further payees in the same payment, one fee for all: --pay ADDRESS:NANOERG (repeatable)
     let more: Vec<(ergotree_ir::ergo_tree::ErgoTree, u64)> = args.iter().enumerate().filter(|(_, a)| *a == "--pay").filter_map(|(i, _)| args.get(i + 1)).map(|spec| {
         let (a, n) = spec.split_once(':').unwrap_or((spec.as_str(), ""));
@@ -1463,6 +1466,28 @@ mod tests {
         assert!(refused(&["request", "--code", "nonsense"]).contains("not an ergopay"));
         assert!(refused(&["request", "--code", "ergopay:AAAA"]).contains("does not hold a transaction"));
         assert!(signed(&st).is_none());
+        let _ = std::fs::remove_dir_all(&st);
+    }
+
+    /// `--pay` and `--also-token` were read with `filter_map` over the word after each, so one given last, with no
+    /// value, was dropped: the payment was signed without that payee or token, and the command said yes. Each is
+    /// refused now, as any option without its value is, and nothing is signed.
+    #[test]
+    fn a_pay_or_also_token_given_last_with_no_value_is_refused() {
+        let st = state("no-value");
+        let payee = text(&address(1));
+        // `run` puts `--state` last; here the option itself must be the last word
+        let last_word = |last: &str| -> Result<(), String> {
+            let args: Vec<String> = ["tachys", "wallet", "send", "--state", &st, "--to", &payee, "--nanoerg", "1000000000", last].iter().map(|s| s.to_string()).collect();
+            let c = Ctx::new(&args).map_err(|f| f.text().to_string())?;
+            let o = open(&c).map_err(|f| f.text().to_string())?;
+            cmd_send(&c, o).map_err(|f| f.text().to_string())
+        };
+        for last in ["--pay", "--also-token"] {
+            let e = last_word(last).expect_err("refused");
+            assert!(e.contains(&format!("{last} needs a value")), "{last}: {e}");
+            assert!(signed(&st).is_none(), "{last}: nothing is signed");
+        }
         let _ = std::fs::remove_dir_all(&st);
     }
 
