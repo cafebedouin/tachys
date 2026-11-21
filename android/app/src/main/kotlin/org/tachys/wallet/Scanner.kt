@@ -115,5 +115,9 @@ fun payRequestFromCode(code: String): PayRequest {
     return PayRequest(address, erg, (params["description"] ?: "").take(80), params.keys.any { it.startsWith("token-") })
 }
 
-/** What a scanned code means for a field that wants a box id. */
-fun boxIdFromCode(code: String): String = code.trim().lowercase().filter { it in '0'..'9' || it in 'a'..'f' }.take(64)
+/** What a scanned code means for a field that wants a box id: the code itself if it is one (64 hex characters, either
+ *  case), and nothing otherwise. A receipt's link form is read by `Receipt.parse`, which gives this its `box`. */
+fun boxIdFromCode(code: String): String = code.trim().lowercase().takeIf { it.length == 64 && it.all { c -> c in '0'..'9' || c in 'a'..'f' } } ?: ""
+
+/** What is typed or pasted into a box-id field, as it is typed: its hex characters, at most 64. */
+fun boxIdTyped(text: String): String = text.lowercase().filter { it in '0'..'9' || it in 'a'..'f' }.take(64)

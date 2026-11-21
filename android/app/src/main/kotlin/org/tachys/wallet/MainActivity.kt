@@ -973,6 +973,7 @@ fun Receive(core: Core, w: WalletView, busy: Boolean, check: (String, (String) -
                 "Promised: $erg ERG$more. Not on chain yet, so not yours yet: the payer could still spend these coins elsewhere. This phone will submit it on its next sync and add it once proven." + if (rc.purpose.isNotEmpty()) "\nPurpose: ${rc.purpose}" else ""
             }
         } else if (rc.box.length == 64) run(rc.box, rc.purpose)
+        else result = "That code is not a receipt: a receipt is a box id (64 hex characters) or a tachys receipt link."
     }, { scanning = false }); return }
     CardBox {
         Text("Receive to", color = Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
@@ -994,7 +995,7 @@ fun Receive(core: Core, w: WalletView, busy: Boolean, check: (String, (String) -
         Text("Have a receipt?", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
         Text("The payer gives you a box id. It is accepted only if proven unspent, under a tip the peers agree on, and paying this address.", color = Dim, fontSize = 13.sp)
         Spacer(Modifier.height(8.dp))
-        Field(receipt, "box id", onScan = { scanning = true }) { receipt = boxIdFromCode(it); purpose = "" }
+        Field(receipt, "box id", onScan = { scanning = true }) { receipt = boxIdTyped(it); purpose = "" }
         Spacer(Modifier.height(10.dp))
         Pill(if (busy) "Checking…" else "Check receipt", Color.White, Color.Black, Modifier.fillMaxWidth()) { focus.clearFocus(); if (receipt.length == 64) run(receipt, purpose) }
         if (result.isNotEmpty()) { Spacer(Modifier.height(8.dp)); Text(result, color = Color.White, fontSize = 15.sp) }
