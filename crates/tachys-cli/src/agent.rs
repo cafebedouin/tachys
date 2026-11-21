@@ -620,6 +620,66 @@ mod tests {
         for st in [under, above] { let _ = std::fs::remove_dir_all(st); }
     }
 
+    /// Under a policy that lists the payees allowed, a payment whose fee is paid in a token (`--babel`) was refused:
+    /// the offer box the fee recreates, back under the offer's own script, was counted as a payee ("script ... is
+    /// not on the policy's list"). It is the fee's counterpart, as the miner's fee output is, and is no longer listed.
+    /// Only that box: a payment to the same script anywhere else is a payee, and the payee itself is still held to the
+    /// list.
+    #[test]
+    fn a_babel_fee_is_not_a_payee_under_a_list_of_allowed_payees() {
+        use ergotree_ir::chain::ergo_box::NonMandatoryRegisterId::{R4, R5};
+        use ergotree_ir::chain::token::{Token, TokenAmount, TokenId};
+        let token = "ab".repeat(32);
+        let enc = ergotree_ir::chain::address::AddressEncoder::new(ergotree_ir::chain::address::NetworkPrefix::Mainnet);
+        let tree = ergotree_ir::ergo_tree::ErgoTree::sigma_parse_bytes(&unhex(&crate::wallet::babel_hex(&token))).unwrap();
+        let key = |i: u32| ergo_lib::wallet::ext_secret_key::ExtSecretKey::derive_master(ergo_lib::wallet::mnemonic::Mnemonic::to_seed(PHRASE, "")).unwrap()
+            .derive(std::str::FromStr::from_str(&format!("m/44'/429'/0'/0/{i}")).unwrap()).unwrap().public_image();
+        let (me, payee, other) = (ergotree_ir::chain::address::Address::P2Pk(key(0)), enc.address_to_str(&ergotree_ir::chain::address::Address::P2Pk(key(1))), enc.address_to_str(&ergotree_ir::chain::address::Address::P2Pk(key(2))));
+        let cp = crate::network::checkpoint_header();
+        let value = |n: u64| ergotree_ir::chain::ergo_box::box_value::BoxValue::try_from(n).unwrap();
+        // an offer of 0.05 ERG at 1000 nanoERG a token unit, made by someone else (the third key)
+        let mut b = ergo_lib::chain::ergo_box::box_builder::ErgoBoxCandidateBuilder::new(value(50_000_000), tree.clone(), cp.height - 100);
+        b.set_register_value(R4, key(2).into()); b.set_register_value(R5, 1_000i64.into());
+        let offer = ergotree_ir::chain::ergo_box::ErgoBox::from_box_candidate(&b.build().unwrap(), ergotree_ir::chain::tx_id::TxId::zero(), 0).unwrap();
+        let offer_bytes = offer.sigma_serialize_bytes().unwrap();
+        let (url, root) = node_listing(vec![offer_bytes], (String::new(), r#"{"outputs":[]}"#.to_string()), vec![String::from(offer.box_id())]);
+        // the wallet: 0.0015 ERG, too little for a payment and its fee, and 5000 units of the token
+        let mut c = ergo_lib::chain::ergo_box::box_builder::ErgoBoxCandidateBuilder::new(value(1_500_000), me.script().unwrap(), cp.height - 100);
+        c.add_token(Token { token_id: TokenId::from(ergo_chain_types::Digest32::try_from(token.clone()).unwrap()), amount: TokenAmount::try_from(5_000u64).unwrap() });
+        let coin = ergotree_ir::chain::ergo_box::ErgoBox::from_box_candidate(&c.build().unwrap(), ergotree_ir::chain::tx_id::TxId::zero(), 1).unwrap();
+        let st = dir("babel-payees");
+        let a = enc.address_to_str(&me);
+        std::fs::write(format!("{st}/wallet.json"), serde_json::json!({ "name": "w", "address": a, "address_list": [a], "birthday": 0, "mnemonic": PHRASE,
+            "boxes": { String::from(coin.box_id()): { "value": 1_500_000u64, "confirmed_at": 1, "bytes": crate::util::hex(&coin.sigma_serialize_bytes().unwrap()) } } }).to_string()).unwrap();
+        chain_over(&st, &root);
+        let policy = |allowed: &[&str]| { std::fs::write(format!("{st}/policy.json"), serde_json::json!({ "max_per_payment_nanoerg": 10_000_000_000u64, "max_per_day_nanoerg": 10_000_000_000u64,
+            "allowed_payees": allowed, "allow_tokens": true, "token_limits": { &token: { "per_payment": 5_000, "per_day": 5_000 } } }).to_string()).unwrap(); std::fs::write(format!("{st}/payments.log"), "").unwrap(); };
+        let send = |extra: &[&str]| {
+            let args: Vec<String> = ["tachys", "wallet", "send", "--state", &st, "--node", &url, "--to", &payee, "--nanoerg", "1000000", "--babel", &token, "--babel-max", "5000", "--dry-run"].iter().copied().chain(extra.iter().copied()).chain(["--json"]).map(String::from).collect();
+            let r = crate::call(&args, &[]);
+            (r.code, serde_json::from_str::<serde_json::Value>(r.out.trim()).unwrap_or_default(), r.err)
+        };
+        // the payee on the list: allowed, and the offer is not among the payees
+        policy(&[&payee]);
+        let (code, v, err) = send(&[]);
+        assert_eq!(code, 0, "{v} {err}");
+        assert_eq!(v["payees"], serde_json::json!([payee]), "{v}");
+        assert_eq!(v["fee_token_units"], 1_600, "the fee in tokens: 1.6 mERG short at 1000 nanoERG a unit");
+        assert_eq!(v["tokens_out"][&token], 1_600, "and they still count against the token's limits");
+        // the payee not on the list: refused, for the payee
+        policy(&[&other]);
+        let (code, v, err) = send(&[]);
+        assert_eq!(code, 1, "{v}");
+        assert!(format!("{v} {err}").contains(&format!("{payee} is not on the policy's list")), "{v} {err}");
+        // a payment to the offer's script beside the fee: a payee like any other, and refused
+        policy(&[&payee]);
+        let to_script = format!("{}:1000000", enc.address_to_str(&ergotree_ir::chain::address::Address::recreate_from_ergo_tree(&tree).unwrap()));
+        let (code, v, err) = send(&["--pay", &to_script]);
+        assert_eq!(code, 1, "{v}");
+        assert!(format!("{v} {err}").contains("is not on the policy's list"), "{v} {err}");
+        let _ = std::fs::remove_dir_all(&st);
+    }
+
     /// A receipt whose payment is held and not in a block yet answered `nanoerg: null`: the amount came only from the
     /// boxes the wallet tracks. It now says what the held payment would make that box hold, its own payment's change
     /// or a payment held for it, and is still not accepted.

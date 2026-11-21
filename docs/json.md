@@ -77,7 +77,7 @@ put in less what comes back, fee included: the number the spending policy is hel
 `payees`. Once signed: `tx`, `receipt` (the payee's box ids), `change`. If a node took it: `broadcast`
 (`node`, `accepted: true`); there is no `broadcast` field otherwise. `outcome_unknown: true` (with exit 1): a node
 was sent the payment and did not answer. It may have gone out; it is kept as waiting with its coins set aside, and
-the next `status` settles it. It must not be paid again on a guess. `fee_token`, `fee_token_units`: a fee paid in a token. With `--parcel-out`: `parcel`, `tx_bytes`.
+the next `status` settles it. It must not be paid again on a guess. `fee_token`, `fee_token_units`: a fee paid in a token (the offer box it recreates is not among the `payees`). With `--parcel-out`: `parcel`, `tx_bytes`.
 With `--request-out`: `request`. **`--dry-run`** builds the same transaction, asks the policy, and stops before
 signing: the same fields with `signed: false`, and nothing written or counted.
 

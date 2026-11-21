@@ -866,8 +866,17 @@ fn cmd_send(c: &Ctx, o: Open) -> Ended {
             nano_in = nano_in.saturating_add(*b.value.as_u64());
             for t in b.tokens.iter().flat_map(|ts| ts.iter()) { let n = tok_in.entry(String::from(t.token_id)).or_default(); *n = n.saturating_add(*t.amount.as_u64()); }
         }
+        // A Babel fee recreates the offer box it takes ERG from, under the offer's own script: the fee's counterpart, as
+        // the miner's fee output is, not a payee the owner chose. Only that box: the output the contract is told it
+        // is, under the script of the offer spent, with no more ERG than the offer had (it takes none of ours). Any
+        // other output to that script is a payee. The tokens it is paid still count as leaving the wallet.
+        let offer_back: Option<(usize, &ErgoBox)> = extension.as_ref().and_then(|(id, ext)| {
+            let at = ext.values.get(&0)?.clone().try_extract_into::<i32>().ok()?;
+            Some((usize::try_from(at).ok()?, spent.iter().find(|b| b.box_id() == *id)?))
+        });
         let mut payees: Vec<String> = vec![];
-        for o in unsigned.output_candidates.iter() {
+        for (i, o) in unsigned.output_candidates.iter().enumerate() {
+            if offer_back.is_some_and(|(at, offer)| at == i && o.ergo_tree == offer.ergo_tree && o.value.as_u64() <= offer.value.as_u64()) { continue }
             if my_trees.contains(&o.ergo_tree) {
                 nano_back = nano_back.saturating_add(*o.value.as_u64());
                 for t in o.tokens.iter().flat_map(|ts| ts.iter()) { let n = tok_back.entry(String::from(t.token_id)).or_default(); *n = n.saturating_add(*t.amount.as_u64()); }

@@ -106,7 +106,9 @@ the wallet, read off the transaction itself: what its boxes put in, less what co
 - `max_per_payment_nanoerg`, `max_per_day_nanoerg`: hard caps on the nanoERG that leaves, **the
   network fee included** (a payment of 0.02 ERG counts as 0.0211). A limit left out is zero.
 - `allowed_payees`: if not empty, every output that is not the wallet's own or the fee must go to one
-  of these addresses.
+  of these addresses. A fee paid in a token (`--babel`) puts the offer box it takes ERG from back under the
+  offer's own script; that box is part of the fee, like the network fee, not a payee (its tokens still count
+  under `token_limits`).
 - `allow_tokens` and `token_limits`: a token leaves the wallet (paid, burned, or paid as a fee) only
   if `allow_tokens` is true and the token has its own `per_payment` and `per_day`, in raw units.
 - `DIR/payments.log` must exist: create an empty one beside the policy. A missing log is a refusal,
