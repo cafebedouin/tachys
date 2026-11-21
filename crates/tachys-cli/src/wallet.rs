@@ -963,9 +963,6 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
             v.extend(w.expect.iter().cloned());
             // boxes undone by a reorganisation are asked about until they are back (or seen no more for long: the last 64)
             v.extend(w.undone.iter().filter(|u| !v.contains(u)).cloned().collect::<Vec<_>>());
-            // payments still waiting, and ones given up on (they may yet be included): the boxes they spend and one they create
-            let watched = w.pending.iter().map(|p| (&p.inputs, &p.watch)).chain(w.done.iter().filter(|d| d.result == "not included").map(|d| (&d.inputs, &d.watch)));
-            for id in watched.flat_map(|(inputs, watch)| inputs.iter().chain(std::iter::once(watch))) { if !id.is_empty() && !v.contains(id) { v.push(id.clone()); } }
             v
         }
         _ => { return Err(crate::out::Fail::new(2, "usage: tachys wallet new|restore|receive|status|send ...".to_string())) }
@@ -1004,6 +1001,11 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
             crate::out::push("pools", serde_json::json!({ "id": id, "answered": answered, "held": held }));
         }
     }
+    // payments still waiting, and ones given up on (they may yet be included): the boxes they spend and one they create.
+    // On every sync, `receive` too: each such payment is settled by this proof, and a coin of it not asked about would
+    // read as gone
+    let watched = w.pending.iter().map(|p| (&p.inputs, &p.watch)).chain(w.done.iter().filter(|d| d.result == "not included").map(|d| (&d.inputs, &d.watch)));
+    for id in watched.flat_map(|(inputs, watch)| inputs.iter().chain(std::iter::once(watch))) { if !id.is_empty() && !ids.contains(id) { ids.push(id.clone()); } }
     // payments this wallet holds that someone else made to it (`wallet promise`, or fetched from a node's pool with
     // `--pools`): the boxes each promises and the coins it spends are asked about too, so that one whose coin is gone
     // is known to be dead (void) and not waited for
