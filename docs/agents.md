@@ -51,7 +51,9 @@ block), `timeout`, `node_refused`, `outcome_unknown`, `misuse`, `failed`.
   plus the balance fields. A receipt is accepted only if the box is proven unspent, under a tip the peers agree
   on, and pays this wallet. **That is all `accepted` says.** Whether it is the payment you were owed is for you to
   check: `receipt.nanoerg` and `receipt.tokens` are what that one box holds, and `receipt.first_seen` is false for
-  a box this wallet already knew (the same receipt shown twice, or the wallet's own change). Until the payment
+  a box this wallet already knew (the same receipt shown twice, or the wallet's own change). For a receipt whose
+  payment this wallet holds and that is not in a block yet (`pending` true or null, below), they are what that
+  held payment would make the box hold, read from the signed payment: not on chain, and `accepted` is false. Until the payment
   is in a block the answer is `ok:false`, `accepted:false`, exit 1, `code:"not_yet"`; so it is while only the node
   has shown the block it is in. Ask again after a block (about two minutes on mainnet), or use `wait`.
   `confirmations` is a lower bound; for a large payment wait for more. One confirmation can be undone: if a longer

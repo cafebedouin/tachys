@@ -61,6 +61,15 @@ fn held_promises(state: &str, w: &WalletFile) -> Vec<Held> {
     }).collect()
 }
 
+/// Box `id` as the payment that makes it would make it, read from that signed payment: one of this wallet's own still
+/// waiting, or one it holds for someone else (`held_promises`). `None` if no such payment makes it. Not in a block yet,
+/// and only as good as that payment is known to be.
+pub(crate) fn expected_box(state: &str, w: &WalletFile, id: &str) -> Option<ErgoBox> {
+    let own = w.pending.iter().filter_map(|p| serde_json::from_str::<ergo_lib::chain::transaction::Transaction>(&p.json).ok());
+    let held = held_promises(state, w).into_iter().filter_map(|(_, v, _, _)| ergo_lib::chain::transaction::Transaction::sigma_parse_bytes(&unhex(v["tx_bytes"].as_str()?)?).ok());
+    own.chain(held).flat_map(|t| t.outputs.into_iter().collect::<Vec<_>>()).find(|o| String::from(o.box_id()) == id)
+}
+
 /// The payment that makes box `id`, from a node's pool of payments not yet in a block, and whether any node given
 /// answered at all. A node's word that it holds the payment is all this rests on, and only the payment's body is
 /// checked here: a box's id is a hash over its payment's id and the box, and the payment's id a hash over the payment

@@ -154,9 +154,16 @@ impl Agent {
             Some("absent") => (false, "not_yet", "no such unspent box, and no node asked holds a payment that makes it: not sent, not yet seen, already dropped, or not a real receipt"),
             _ => (false, "not_proven", "could not be checked"),
         };
-        let held = self.wallet().ok().and_then(|w| w.boxes.get(receipt).cloned());
-        Receipt { accepted, code, why, confirmations, first_seen: found["added"] == true, pending,
-            nanoerg: held.as_ref().map(|b| b.value), tokens: held.map(|b| b.assets.iter().map(|a| serde_json::json!({ "id": a.id, "amount": a.amount })).collect()).unwrap_or_default() }
+        let w = self.wallet().ok();
+        let held = w.as_ref().and_then(|w| w.boxes.get(receipt).cloned());
+        // a box not in a block yet, whose payment this wallet holds: what that payment would make it hold
+        let expected = if held.is_none() && found["state"] == "expected" { w.as_ref().and_then(|w| crate::wallet::expected_box(&self.state, w, receipt)) } else { None };
+        let (nanoerg, tokens) = match (held, expected) {
+            (Some(b), _) => (Some(b.value), b.assets.iter().map(|a| serde_json::json!({ "id": a.id, "amount": a.amount })).collect()),
+            (None, Some(b)) => (Some(*b.value.as_u64()), b.tokens.iter().flat_map(|t| t.iter()).map(|t| serde_json::json!({ "id": String::from(t.token_id), "amount": t.amount.as_u64() })).collect()),
+            (None, None) => (None, vec![]),
+        };
+        Receipt { accepted, code, why, confirmations, first_seen: found["added"] == true, pending, nanoerg, tokens }
     }
     /// What became of a payment this wallet sent: "waiting", "confirmed", "coins spent", "not included", or `None` if it sent no such payment.
     fn payment(&self, tx: &str) -> Result<Option<String>, No> {
@@ -468,8 +475,9 @@ mod tests {
 
     /// A wallet of the test phrase tracking one coin of ten ERG, confirmed, over an agreed chain whose state holds that
     /// coin; it has signed a payment of two ERG to a new wallet's address, offline (`--parcel-out`): the payment is
-    /// waiting and its change expected. Returns the wallet's directory, the coin's bytes and the payment (the parcel).
-    fn paid(name: &str) -> (String, Vec<u8>, serde_json::Value) {
+    /// waiting and its change expected. Returns the wallet's directory, the coin's bytes, the payment (the parcel) and
+    /// the payee's directory.
+    fn paid(name: &str) -> (String, Vec<u8>, serde_json::Value, String) {
         let payer = dir(name);
         let cp = crate::network::checkpoint_header();
         let me = ergotree_ir::chain::address::Address::P2Pk(ergo_lib::wallet::ext_secret_key::ExtSecretKey::derive_master(ergo_lib::wallet::mnemonic::Mnemonic::to_seed(PHRASE, "")).unwrap()
@@ -484,11 +492,10 @@ mod tests {
         let payee = dir(&format!("{name}-payee"));
         call(&["wallet", "new", "--state", &payee]);
         let to = serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(format!("{payee}/wallet.json")).unwrap()).unwrap()["address"].as_str().unwrap().to_string();
-        let _ = std::fs::remove_dir_all(&payee);
         let parcel = format!("{payer}/parcel.json");
         call(&["wallet", "send", "--state", &payer, "--to", &to, "--nanoerg", "2000000000", "--parcel-out", &parcel]);
         let p: serde_json::Value = serde_json::from_slice(&std::fs::read(&parcel).unwrap()).unwrap();
-        (payer, coin_bytes, p)
+        (payer, coin_bytes, p, payee)
     }
     fn wallet_json(st: &str) -> serde_json::Value { serde_json::from_str(&std::fs::read_to_string(format!("{st}/wallet.json")).unwrap()).unwrap() }
 
@@ -498,7 +505,7 @@ mod tests {
     /// about now on every sync, as `status` asks.
     #[test]
     fn a_receipt_asked_about_leaves_the_wallets_own_payments_as_they_are() {
-        let (payer, coin, p) = paid("own-waiting");
+        let (payer, coin, p, payee) = paid("own-waiting");
         let change = wallet_json(&payer)["expect"][0].as_str().unwrap().to_string();
         let (url, _) = node(vec![coin], (p["tx_id"].as_str().unwrap().to_string(), p["tx_json"].as_str().unwrap().to_string()));
         // the same wallet with its payment given up on: not included after ten blocks, its coin still unspent
@@ -514,7 +521,7 @@ mod tests {
         let w = wallet_json(&payer);
         assert_eq!((w["pending"].as_array().map_or(0, |a| a.len()), w["done"].clone()), (1, serde_json::Value::Null), "a waiting payment whose coin is unspent is still waiting");
         assert_eq!(wallet_json(&gave_up)["done"][0]["result"], "not included", "a payment given up on whose coin is unspent is still not included");
-        for st in [payer, gave_up] { let _ = std::fs::remove_dir_all(st); }
+        for st in [payer, gave_up, payee] { let _ = std::fs::remove_dir_all(st); }
     }
 
     /// A box from the wallet's own payment, still waiting (its change), answered `pending: null`, as a payment held by
@@ -523,7 +530,7 @@ mod tests {
     /// settles the payment, and the answer is `failed`.
     #[test]
     fn a_box_from_the_wallets_own_waiting_payment_is_pending() {
-        let (payer, coin, p) = paid("own-pending");
+        let (payer, coin, p, payee) = paid("own-pending");
         let change = wallet_json(&payer)["expect"][0].as_str().unwrap().to_string();
         let pool = (p["tx_id"].as_str().unwrap().to_string(), p["tx_json"].as_str().unwrap().to_string());
         let gone = dir("own-pending-gone");
@@ -536,7 +543,7 @@ mod tests {
         let (url, root) = node(vec![vec![9u8; 60]], pool);
         chain_over(&gone, &root);
         assert_eq!(pending(&gone, &url, &change).1, "failed", "the wallet's own payment, its coin gone");
-        for st in [payer, gone] { let _ = std::fs::remove_dir_all(st); }
+        for st in [payer, gone, payee] { let _ = std::fs::remove_dir_all(st); }
     }
 
     /// A Babel fee offer was proven with `prove_any`, held to no tip: a proof that matched a header above the agreed tip,
@@ -571,5 +578,23 @@ mod tests {
         assert_eq!(offers(&under), 1, "an offer proven under the agreed tip is listed");
         assert_eq!(offers(&above), 0, "an offer proven only above the agreed tip is not used");
         for st in [under, above] { let _ = std::fs::remove_dir_all(st); }
+    }
+
+    /// A receipt whose payment is held and not in a block yet answered `nanoerg: null`: the amount came only from the
+    /// boxes the wallet tracks. It now says what the held payment would make that box hold, its own payment's change
+    /// or a payment held for it, and is still not accepted.
+    #[test]
+    fn a_pending_receipt_says_what_the_held_payment_would_make() {
+        let (payer, coin, p, payee) = paid("amount");
+        let change = wallet_json(&payer)["expect"][0].as_str().unwrap().to_string();
+        let tx: serde_json::Value = serde_json::from_str(p["tx_json"].as_str().unwrap()).unwrap();
+        let receipt = tx["outputs"].as_array().unwrap().iter().map(|o| o["boxId"].as_str().unwrap().to_string()).find(|b| *b != change).unwrap();
+        let (url, root) = node(vec![coin], (p["tx_id"].as_str().unwrap().to_string(), p["tx_json"].as_str().unwrap().to_string()));
+        chain_over(&payee, &root);
+        call(&["wallet", "promise", "--state", &payee, "--tx", p["tx_bytes"].as_str().unwrap()]);
+        let what = |st: &str, b: &str| { let r = receipt_of(st, &url, b); (r.accepted, r.nanoerg, r.tokens.len()) };
+        assert_eq!(what(&payer, &change), (false, Some(10_000_000_000 - 2_000_000_000 - 1_100_000), 0), "its own payment's change: what is left after the payment and the fee");
+        assert_eq!(what(&payee, &receipt), (false, Some(2_000_000_000), 0), "a payment held for it: what it pays");
+        for st in [payer, payee] { let _ = std::fs::remove_dir_all(st); }
     }
 }
