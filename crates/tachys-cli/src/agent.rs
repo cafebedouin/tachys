@@ -424,7 +424,7 @@ mod tests {
 
     /// M3: `accept` said `pending: true` for any box a held payment promises, also one held by `wallet promise`, where
     /// nothing about its coins or signatures was checked. Correct: `true` only for a payment held with its coins proven
-    /// unspent and its signatures verified (`--pools`); one held by `wallet promise` is not `true`.
+    /// unspent and its signatures verified (`--pools`); one held by `wallet promise` is `null`.
     #[test]
     fn m3_pending_is_true_only_for_a_payment_whose_coins_were_proven() {
         // a payer with one coin of ten ERG pays two ERG to a payee, offline: a signed payment and the box it makes
@@ -459,7 +459,7 @@ mod tests {
         assert_eq!(pending(&pooled, &url, &receipt), (Some(true), "not_yet"), "held from the pool, its coins proven");
         // the lead: held by `wallet promise`, nothing about it proven
         let (said, code) = pending(&promised, &url, &receipt);
-        assert!(said != Some(true), "M3: a payment held by `wallet promise`, nothing about it proven, answers pending: {said:?} ({code})");
+        assert_eq!(said, None, "M3: a payment held by `wallet promise`, nothing about it proven, answers pending: {said:?} ({code})");
         for st in [payer, payee, promised, pooled] { let _ = std::fs::remove_dir_all(st); }
     }
 
