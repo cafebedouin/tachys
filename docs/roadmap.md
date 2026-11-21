@@ -42,7 +42,8 @@ Open, in the order they matter:
    as `spent`. `undone` has been shown in a test, not on the rig.
 4. **The decimal places of a token** not shipped with the app are what a node reported, not something proven.
 5. **Nodes are asked over plain HTTP** unless they offer HTTPS: what is asked (addresses) and sent (payments) can
-   be read on the way, though not altered without the proofs failing.
+   be read on the way, though not altered without the proofs failing. A node, or anyone on the path, can still
+   slow every request down to the two minutes each may take.
 6. **A node that is always a block ahead of the peers** gives proofs that settle nothing: boxes stay "seen" and
    payments "waiting" until a sync lands on a block the peers have reached. The only testnet node did this through
    most of our runs (it mines); the app now shows such coins apart instead of as nothing. A proof at a named header (over the

@@ -426,3 +426,65 @@ fn a_header_with_a_table_index_of_0_is_judged_not_a_panic() {
     let low = tachys_verify::Anchor { checkpoint_height: w.height - 1, checkpoint_difficulty: 4.into(), floor_divisor: 1, floor_halving_ms: 0, ..crate::network::release_anchor() };
     assert_eq!(judge(&w, &low, w.timestamp + 60_000), Ok(Ok(())));
 }
+
+/// A node that answers with a 200 and then sends `body` one byte every `gap` (or all at once), closing cleanly.
+fn trickling_node(body: Vec<u8>, gap: Option<std::time::Duration>) -> String {
+    use std::io::{Read, Write};
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", l.local_addr().unwrap());
+    std::thread::spawn(move || for c in l.incoming() {
+        let Ok(mut c) = c else { continue };
+        let mut buf = [0u8; 65536]; let _ = c.read(&mut buf);
+        let _ = c.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes());
+        match gap {
+            None => { let _ = c.write_all(&body); }
+            Some(g) => for b in &body { if c.write_all(&[*b]).and_then(|_| c.flush()).is_err() { break } std::thread::sleep(g); },
+        }
+        let _ = c.shutdown(std::net::Shutdown::Write);
+        let _ = c.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+        let _ = std::io::copy(&mut c, &mut std::io::sink());
+    });
+    url
+}
+
+/// A node that sent its answer a byte at a time held any request as long as it kept sending: the connect, read and
+/// write limits each start again with every byte, and there was no limit on the whole. A node trickling 14 bytes 5 s
+/// apart held `send_tx` 65 s against a 30 s read limit, then it returned as an answer. Every request now ends within
+/// `WHOLE_REQUEST`, or by the deadline `tachys wait` sets if that comes first. Shown here with a deadline of 3 s against
+/// a trickle of 14 s; the two-minute limit itself is `a_trickling_node_is_given_up_on_after_two_minutes`.
+#[test]
+fn a_node_that_trickles_its_answer_is_given_up_on() {
+    use std::time::{Duration, Instant};
+    assert_eq!(crate::util::request_time(), crate::util::WHOLE_REQUEST, "with no deadline set, the limit on the whole");
+    // control: an answer sent at once
+    let t = Instant::now();
+    let r = crate::proofs::send_tx(&trickling_node(b"\"0123456789ab\"".to_vec(), None), "{}");
+    assert!(r.is_ok() && t.elapsed() < Duration::from_secs(5));
+    // 14 bytes a second apart, under a deadline 3 s away: given up on at the deadline, not after 14 s
+    let t = Instant::now();
+    let r = { let _d = crate::util::Deadline::set(t + Duration::from_secs(3)); crate::proofs::send_tx(&trickling_node(b"\"0123456789ab\"".to_vec(), Some(Duration::from_secs(1))), "{}") };
+    let s = t.elapsed().as_secs_f64();
+    // the node said 200 at once (it took the payment), and its words were cut short at the deadline
+    assert!((2.5..6.0).contains(&s), "at the deadline: {s:.1} s");
+    assert!(r.as_ref().is_ok_and(|x| x.1.len() < 14), "the node's 200 stands; what it said after is cut short");
+    // the deadline is gone with its holder
+    assert_eq!(crate::util::request_time(), crate::util::WHOLE_REQUEST);
+    // and a body too big is not read into memory: ureq stops at 10 MiB, and reads 9 MiB whole
+    let read = |n: usize| crate::util::http().post(&format!("{}/utxo/getBoxesBinaryProof", trickling_node(vec![b'a'; n], None))).send_string("[]").map(|r| r.into_string()).map_err(|e| e.to_string());
+    assert!(matches!(read(11 << 20), Ok(Err(e)) if e.to_string().contains("too big")));
+    assert_eq!(read(9 << 20).unwrap().unwrap().len(), 9 << 20);
+}
+
+/// The limit on the whole request with no deadline: a node trickling 15 bytes 10 s apart (150 s) is given up on at
+/// two minutes. Slow; run by hand: `cargo test -p tachys --lib -- --ignored a_trickling_node_is_given_up_on_after_two_minutes`.
+#[test]
+#[ignore]
+fn a_trickling_node_is_given_up_on_after_two_minutes() {
+    use std::time::{Duration, Instant};
+    let t = Instant::now();
+    let r = crate::proofs::send_tx(&trickling_node(b"\"0123456789abc\"".to_vec(), Some(Duration::from_secs(10))), "{}");
+    let s = t.elapsed().as_secs_f64();
+    println!("given up on after {s:.1} s: {}", match &r { Ok(x) => format!("the node's 200 stands, its words cut short to {:?}", x.1), Err(_) => "not sent, or not known".into() });
+    assert!((119.0..126.0).contains(&s), "{s:.1} s");
+    assert!(r.as_ref().is_ok_and(|x| x.1.len() < 15));
+}

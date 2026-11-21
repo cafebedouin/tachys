@@ -81,7 +81,9 @@ block), `timeout`, `node_refused`, `outcome_unknown`, `misuse`, `failed`.
   TXID` answers `{"tx":…,"result":"confirmed","confirmations":N}` once a payment this wallet made has them. It exits
   1 otherwise: with `code:"timeout"` if the time ran out (15 minutes unless `--timeout` says otherwise), at once if
   the receipt pays someone else, its payment can never confirm (`failed`), or the payment ended as `coins spent` or
-  `not included`.
+  `not included`. The time given holds inside the steps too: a request to a node and a `tips` under way end at it,
+  so the answer comes within a second or so of it (node discovery, when it runs, keeps its own limit of a few
+  seconds a round). Any one request to a node, in every command, ends within two minutes.
 - `setup`: `{"created":…,"address":…,"network":…,"sealed":…,"can_pay":…,"note":…}`. `history`:
   `{"address":…,"sent":[{"tx":…,"result":…}],"expecting":[…],"payments_log":[…]}`, as the last sync left them.
 - Token payments: `--token ID --token-amount RAW` in place of `--erg` (raw units, no decimals). The

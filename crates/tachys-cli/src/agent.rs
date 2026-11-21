@@ -19,7 +19,14 @@ impl Ran {
 pub(crate) fn self_run(args: &[&str]) -> Ran {
     let full: Vec<String> = std::iter::once("tachys").chain(args.iter().copied()).chain(["--json"]).map(String::from).collect();
     crate::out::begin_inner(&full);
-    let ended = tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(crate::dispatch(&full)));
+    // under `wait --timeout`, a command run from here (`tips`, over the peer protocol) is stopped at the deadline;
+    // the requests to nodes the others make end by it already (`util::request_time`)
+    let ended = tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async {
+        match crate::util::Deadline::left() {
+            Some(left) => tokio::time::timeout(left, crate::dispatch(&full)).await.unwrap_or_else(|_| Err(crate::out::Fail::new(1, "the time given ran out".into()))),
+            None => crate::dispatch(&full).await,
+        }
+    }));
     let code = match ended { Ok(()) => 0, Err(f) => { if let Some(m) = f.msg { complain!("{m}"); } f.code } };
     let (json, said) = crate::out::end_inner(code);
     Ran { ok: code == 0 && json["ok"] == true && json["v"] == crate::out::V, json, said }
@@ -240,11 +247,16 @@ fn online(a: &Agent, cmd: &str, args: &[String]) -> Result<serde_json::Value, No
             if !tx.is_empty() && a.payment(&tx)?.is_none() { return Err(refused("this wallet has no record of sending that transaction")) }
             if want == 0 { return Err(misuse("--confirmations is at least 1")) }
             let t0 = std::time::Instant::now();
+            // every request to a node from here on ends by the deadline, and a nested `tips` is stopped at it: the answer
+            // comes back about when the time given is up, not after the slowest node has finished
+            let limit = std::time::Duration::from_secs(timeout);
+            let _deadline = crate::util::Deadline::set(t0 + limit);
             // a block is the least that can change anything; half a block between looks, and never less than five seconds
             let pause = std::time::Duration::from_millis((net().block_interval_ms / 2).clamp(5_000, 60_000));
             let mut last = serde_json::json!({ "reason": "no agreed chain tip yet" });
             loop {
-                if let Ok(tip) = a.tip() {
+                // a tip agreed only after the time ran out is not acted on: what is asked after it would fail at once
+                if let Some(tip) = a.tip().ok().filter(|_| t0.elapsed() < limit) {
                     if !receipt.is_empty() {
                         let r = a.receipt(&receipt);
                         let enough = r.accepted && r.confirmations >= want;
@@ -547,6 +559,31 @@ mod tests {
         chain_over(&gone, &root);
         assert_eq!(pending(&gone, &url, &change).1, "failed", "the wallet's own payment, its coin gone");
         for st in [payer, gone, payee] { let _ = std::fs::remove_dir_all(st); }
+    }
+
+    /// `wait --timeout` looked at the time only between its steps, and a step could run on far past it: a nested
+    /// `tips` (a peer may take 20 s to shake hands, and 24 are tried four at a time) or a request to a node that
+    /// trickles its answer. The deadline now holds inside them. A nested `tips` whose one peer takes the connection and
+    /// says nothing, which `tips` gives up on after 20 s, ends at a deadline 2 s away.
+    #[test]
+    fn a_nested_command_ends_at_the_deadline_wait_sets() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap().to_string();
+        std::thread::spawn(move || { let mut held = vec![]; for c in l.incoming() { held.push(c); } });
+        let st = dir("deadline");
+        let seeds = format!("{st}/seeds.txt");
+        std::fs::write(&seeds, &addr).unwrap();
+        let _one = crate::ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let t = std::time::Instant::now();
+        let ran = rt.block_on(async move { tokio::spawn(async move {
+            let _d = crate::util::Deadline::set(std::time::Instant::now() + std::time::Duration::from_secs(2));
+            self_run(&["tips", "--seeds", &seeds, "--peers", "1", "--tries", "1", "--quorum", "1", "--state", &st])
+        }).await.unwrap() });
+        let s = t.elapsed().as_secs_f64();
+        assert!(!ran.ok, "no tip: the peer said nothing");
+        assert!((1.5..5.0).contains(&s), "ended at the deadline: {s:.1} s");
+        let _ = std::fs::remove_dir_all(dir("deadline"));
     }
 
     /// A Babel fee offer was proven with `prove_any`, held to no tip: a proof that matched a header above the agreed tip,

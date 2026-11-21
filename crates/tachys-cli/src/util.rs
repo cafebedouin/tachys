@@ -52,12 +52,40 @@ pub(crate) fn clip(s: &str, n: usize) -> String { s.chars().take(n).collect() }
 /// What a node said, as one line for a message: no line breaks or control characters, so it cannot pass for a line of ours.
 pub(crate) fn one_line(s: &str) -> String { s.chars().map(|c| if c.is_control() { ' ' } else { c }).take(400).collect::<String>().trim().to_string() }
 
-/// One HTTP client for every request to a node. A node that takes the connection and then says nothing is given up on.
-pub(crate) fn http() -> &'static ureq::Agent {
+/// The longest one request to a node may take, from connecting to the last byte of its answer. The connect, read and
+/// write limits start again with every byte, so without this a node that sends a byte now and then holds a call for as
+/// long as it likes. The largest answers read are lists of up to 200 boxes (a box is at most 4 KB, so at most about
+/// 2 MB of JSON) and box proofs for up to 100 ids; nothing over 10 MiB is read at all (ureq's `into_string`). Two
+/// minutes reads 2 MB at 140 kbit/s.
+pub(crate) const WHOLE_REQUEST: Duration = Duration::from_secs(120);
+
+thread_local! { static DEADLINE: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) }; }
+/// While this is held, every request to a node made on this thread ends by `at` (`tachys wait --timeout`); dropped,
+/// the deadline before it is back.
+pub(crate) struct Deadline(Option<std::time::Instant>);
+impl Deadline {
+    pub(crate) fn set(at: std::time::Instant) -> Deadline { Deadline(DEADLINE.with(|d| d.replace(Some(at)))) }
+    /// What is left of the deadline set on this thread, if one is.
+    pub(crate) fn left() -> Option<Duration> { DEADLINE.with(|d| d.get()).map(|at| at.saturating_duration_since(std::time::Instant::now())) }
+}
+impl Drop for Deadline { fn drop(&mut self) { DEADLINE.with(|d| d.set(self.0)); } }
+/// The time one request may take now: `WHOLE_REQUEST`, or less if a deadline comes sooner (at least a millisecond:
+/// a request past its deadline fails at once).
+pub(crate) fn request_time() -> Duration { Deadline::left().map_or(WHOLE_REQUEST, |l| l.min(WHOLE_REQUEST)).max(Duration::from_millis(1)) }
+
+/// One HTTP client for every request to a node. A node that takes the connection and then says nothing is given up on,
+/// and so is one that answers too slowly to finish within `request_time`.
+pub(crate) struct Http(&'static ureq::Agent);
+impl Http {
+    pub(crate) fn get(&self, url: &str) -> ureq::Request { self.0.get(url).timeout(request_time()) }
+    pub(crate) fn post(&self, url: &str) -> ureq::Request { self.0.post(url).timeout(request_time()) }
+}
+pub(crate) fn http() -> Http {
     static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
-    AGENT.get_or_init(|| ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(10)).timeout_read(Duration::from_secs(30)).timeout_write(Duration::from_secs(30))
+    Http(AGENT.get_or_init(|| ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(10)).timeout_read(Duration::from_secs(30)).timeout_write(Duration::from_secs(30))
+        .timeout(WHOLE_REQUEST)
         // a node is asked at the address it was found or named at, and nowhere it then points: a redirect could send an address lookup or a signed payment to another host
-        .redirects(0).build())
+        .redirects(0).build()))
 }
 
 /// Write a file that only its owner can read: a wallet file holds a seed phrase, sealed or not.
