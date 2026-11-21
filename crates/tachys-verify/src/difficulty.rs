@@ -35,8 +35,12 @@ pub fn difficulty(h: &Header) -> BigInt { decode_compact_bits(h.n_bits) }
 
 fn normalize(d: &BigInt) -> BigInt { decode_compact_bits(encode_compact_bits(d) as u32) }
 
-pub fn next_recalculation_height(height: u32, epoch: u32) -> u32 {
-    if height.is_multiple_of(epoch) { height + 1 } else { (height / epoch + 1) * epoch + 1 }
+/// The height at which the difficulty is next recalculated after `height`: the first height of the next epoch. `None`
+/// when that is past the largest height a header can carry (heights from 4,294,967,169 up, with 128-block epochs):
+/// computed in `u32`, it wrapped to 1 in a release build, and a debug build panicked.
+pub fn next_recalculation_height(height: u32, epoch: u32) -> Option<u32> {
+    let (h, e) = (u64::from(height), u64::from(epoch));
+    u32::try_from(if h % e == 0 { h + 1 } else { (h / e + 1) * e + 1 }).ok()
 }
 
 /// Heights whose headers are needed to compute the difficulty of `height`.
@@ -52,8 +56,9 @@ pub fn previous_heights_required(height: u32, epoch: u32, use_last_epochs: u32) 
     }
 }
 
-pub fn heights_for_next_recalculation(height: u32, p: &ChainParams) -> Vec<u32> {
-    previous_heights_required(next_recalculation_height(height, p.epoch_length), p.epoch_length, p.use_last_epochs)
+/// `None` when there is no next recalculation height (`next_recalculation_height`).
+pub fn heights_for_next_recalculation(height: u32, p: &ChainParams) -> Option<Vec<u32>> {
+    next_recalculation_height(height, p.epoch_length).map(|n| previous_heights_required(n, p.epoch_length, p.use_last_epochs))
 }
 
 fn interval_diff(start: &Header, end: &Header, p: &ChainParams) -> Option<BigInt> {
@@ -75,7 +80,7 @@ fn interpolate(data: &[(u32, BigInt)], epoch: u32) -> Option<BigInt> {
     if den == BigInt::from(0) { return None }
     let b = (&xy * &n - &x * &y) * &prec / den;
     let a = (&y * &prec - &b * &x) / &n / &prec;
-    let point = BigInt::from(data.iter().map(|d| d.0).max()? + epoch);
+    let point = BigInt::from(data.iter().map(|d| d.0).max()?) + epoch;
     Some(a + b * point / prec)
 }
 

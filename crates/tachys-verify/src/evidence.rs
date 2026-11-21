@@ -61,7 +61,7 @@ pub fn assemble(proof: &NipopowProof, settled: &HashSet<BlockId>, run: &[Header]
     let suffix: Vec<&Header> = std::iter::once(&proof.suffix_head.header).chain(proof.suffix_tail.iter()).collect();
     let all: Vec<&Header> = proof.prefix.iter().map(|x| &x.header).chain(suffix.iter().copied()).collect();
     if let Some(w) = all.windows(2).find(|w| w[0].height >= w[1].height) { return Err(Refused::ProofShape(w[1].height)) }
-    if let Some(w) = suffix.windows(2).find(|w| w[1].parent_id != w[0].id || w[1].height != w[0].height + 1) {
+    if let Some(w) = suffix.windows(2).find(|w| w[1].parent_id != w[0].id || w[0].height.checked_add(1) != Some(w[1].height)) {
         return Err(Refused::ProofShape(w[1].height));
     }
     let before_v2 = |h: &Header| h.height < p.v2_activation_height;

@@ -58,7 +58,7 @@ pub fn run_length_for(tip_height: u32, p: &ChainParams) -> u32 {
 /// `None` when the headers are not consecutive by height and parent id.
 pub fn check_run(headers: &[Header], p: &ChainParams) -> Option<RunReport> {
     let (first, last) = (headers.first()?, headers.last()?);
-    if headers.windows(2).any(|w| w[1].parent_id != w[0].id || w[1].height != w[0].height + 1) { return None; }
+    if headers.windows(2).any(|w| w[1].parent_id != w[0].id || w[0].height.checked_add(1) != Some(w[1].height)) { return None; }
     let by_height: BTreeMap<u32, &Header> = headers.iter().map(|h| (h.height, h)).collect();
     let mut r = RunReport { first_height: first.height, last_height: last.height, recomputed: 0, as_parent: 0, within_bounds: 0, unchecked: 0,
         wrong: vec![], exact_from: None, work: headers.iter().map(difficulty).sum(), work_exact: BigInt::from(0) };
@@ -67,7 +67,7 @@ pub fn check_run(headers: &[Header], p: &ChainParams) -> Option<RunReport> {
         // there is no header at height 0: near the start of a chain the earlier rule reads the boundaries that exist
         let inputs: Vec<u32> = previous_heights_required(h.height, p.epoch_length, p.use_last_epochs).into_iter().filter(|x| *x >= 1).collect();
         let enough = if p.earlier_rule.is_some() { !inputs.is_empty() } else { inputs.len() == p.use_last_epochs as usize + 1 };
-        let at_v2 = parent.height == p.v2_activation_height || parent.height + 1 == p.v2_activation_height;
+        let at_v2 = parent.height == p.v2_activation_height || parent.height.checked_add(1) == Some(p.v2_activation_height);
         let standing = if let Some(d) = p.earlier_rule.as_ref().filter(|_| at_v2) {
             if difficulty(h) == *d { Declared::Recomputed } else { Declared::Wrong }
         } else if inputs.len() == 1 && inputs[0] + 1 == h.height && !(h.height - 1).is_multiple_of(p.epoch_length) {

@@ -90,7 +90,7 @@ pub(crate) async fn tips(args: &[String]) -> crate::out::Ended {
                     // the peer sent it, never the tip itself
                     // always switch to the most recent such header: offering an old one (the release
                     // checkpoint on a first run) makes each peer announce up to 400 header ids, about 13 KB
-                    if let Some(b) = good.iter().filter(|h| h.height + 8 <= tip.height).max_by_key(|h| h.height) {
+                    if let Some(b) = good.iter().filter(|h| u64::from(h.height) + 8 <= u64::from(tip.height)).max_by_key(|h| h.height) {
                         if let Ok(bytes) = b.scorex_serialize_bytes() { let _ = btx.send(Some(bytes)); }
                     }
                     pushed.push((addr.clone(), (*tip).clone(), hs.clone()));

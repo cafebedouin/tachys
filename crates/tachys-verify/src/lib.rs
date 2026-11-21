@@ -174,7 +174,7 @@ pub fn reach_with(proof: &NipopowProof, settled: &std::collections::HashSet<Bloc
     let mut prefix: Vec<&ergo_nipopow::PoPowHeader> = proof.prefix.iter().collect();
     prefix.sort_by_key(|h| std::cmp::Reverse(h.header.height));
     for h in prefix {
-        let by_parent = as_parent.get(&h.header.id) == Some(&(h.header.height + 1));
+        let by_parent = as_parent.get(&h.header.id).copied() == h.header.height.checked_add(1);
         let by_interlink = as_interlink.get(&h.header.id).is_some_and(|from| *from > h.header.height);
         if by_parent || by_interlink {
             out.reached.push(h.header.height);
@@ -210,7 +210,7 @@ pub fn verify(proof: &NipopowProof, extra: &[Header], anchor: &Anchor, p: &Chain
         f.push((Check::C3Heights, format!("{} then {}", w[0].height, w[1].height)));
     }
     // C4
-    if let Some(w) = suffix.windows(2).find(|w| w[1].parent_id != w[0].id || w[1].height != w[0].height + 1) {
+    if let Some(w) = suffix.windows(2).find(|w| w[1].parent_id != w[0].id || w[0].height.checked_add(1) != Some(w[1].height)) {
         f.push((Check::C4SuffixLinks, format!("at height {}", w[1].height)));
     }
     // C5, C7 over the proof's headers and the extras
@@ -243,7 +243,11 @@ pub fn verify(proof: &NipopowProof, extra: &[Header], anchor: &Anchor, p: &Chain
     // C9
     let by_height: BTreeMap<u32, &Header> = chain.iter().copied().chain(extra.iter()).map(|h| (h.height, h)).collect();
     let sh = proof.suffix_head.header.height;
-    let needed: Vec<u32> = heights_for_next_recalculation(sh, p).into_iter().filter(|h| *h > 0 && *h < sh).collect();
+    let needed: Vec<u32> = match heights_for_next_recalculation(sh, p) {
+        Some(hs) => hs.into_iter().filter(|h| *h > 0 && *h < sh).collect(),
+        // no header can carry the height of the next recalculation, so none of the headers it needs can be named
+        None => { f.push((Check::C9DifficultyHeaders, format!("the next difficulty recalculation after height {sh} is past the largest height"))); vec![] }
+    };
     let missing: Vec<u32> = needed.iter().copied().filter(|h| !chain.iter().any(|x| x.height == *h)).collect();
     if !missing.is_empty() { f.push((Check::C9DifficultyHeaders, format!("missing heights {:?}", missing))); }
     // C10: walk boundary headers and suffix in height order
