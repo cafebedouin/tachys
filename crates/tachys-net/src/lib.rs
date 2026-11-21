@@ -549,7 +549,7 @@ pub async fn serve(listen: &str, headers: Vec<([u8; 32], Vec<u8>)>, secs: u64, m
                     if let Some(relay) = &relay {
                         let mut r = ergo_primitives::reader::VlqReader::new(&frame.payload);
                         let Ok(n) = r.get_u16() else { return };
-                        if n == 0 || n > 20 { continue }
+                        if n == 0 || n as usize > MAX_BOX_PROOF_IDS { continue }
                         let mut ids = Vec::with_capacity(n as usize);
                         for _ in 0..n { let Ok(b) = r.get_bytes(32) else { return }; let mut id = [0u8; 32]; id.copy_from_slice(b); ids.push(id); }
                         if let Some(ans) = relay(ids).await {

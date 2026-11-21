@@ -100,6 +100,10 @@ async fn a_box_proof_request_is_relayed_and_the_headers_it_rests_on_are_served()
     // the block the proof names was newer than what was served; it is served now
     let (got, _) = fetch_chain_back(&addr, id(10), 1, SHORT, parent).await.unwrap();
     assert_eq!(got, vec![header(10).1]);
+    // a full batch, as many ids as a node takes in one request, is relayed too
+    let full: Vec<[u8; 32]> = (0..MAX_BOX_PROOF_IDS as u8).map(id).collect();
+    assert!(fetch_box_proof(&addr, &full, SHORT).await.is_ok(), "a batch of {MAX_BOX_PROOF_IDS} ids is relayed");
+    assert_eq!(asked.lock().unwrap().last().unwrap().len(), MAX_BOX_PROOF_IDS);
     // a wallet that does not relay never answers, and the client gives up in time
     let plain = serving(None, None).await;
     let t = Instant::now();
