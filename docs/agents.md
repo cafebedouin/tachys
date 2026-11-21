@@ -152,5 +152,10 @@ command. A second line follows with the transaction id and the receipt; it count
   blocks. That is the cautious reading, and it costs a wait.
 - Nothing is read against a chain more than three hours old: if the chain itself stalls that long, every command
   that needs a proof refuses until blocks come again.
-- A wallet restored from a phrase is looked over at twenty addresses, once. If none holds a coin then, only the
-  first is kept: a payment made later to another of them is not seen until the wallet is restored again.
+- A wallet restored from a phrase is looked over at twenty addresses, and keeps those up to the last that holds a
+  coin (only the first, if none does). A payment made later to an address it did not keep is not seen until it
+  looks over all twenty again. It does so on `wallet status --reconcile` (which `balance`, `pay` and `wait --tx`
+  run; `accept` does not), and on a `wallet status` after a sync saw a sign of another wallet of the phrase at
+  work, but only with the seed phrase open: in plain text, or sealed with its password given (`TACHYS_PASS`). It
+  then keeps any address up to the last that holds a coin, never fewer than before, if every node answered for
+  every address.
