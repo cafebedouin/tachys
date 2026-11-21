@@ -28,7 +28,12 @@ async fn serving(parcels: Option<ParcelSink>, relay: Option<ProofRelay>) -> Stri
     let addr = free_addr().await;
     let a = addr.clone();
     tokio::spawn(async move { let _ = serve(&a, chain(), 8, 8, parcels, relay, None).await; });
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    // until it listens: a fixed pause lost the race on a loaded machine ("connection refused")
+    let t = Instant::now();
+    while tokio::net::TcpStream::connect(&addr).await.is_err() {
+        assert!(t.elapsed() < Duration::from_secs(5), "the serving wallet did not start listening");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     addr
 }
 fn nothing_to_offer() -> tokio::sync::watch::Receiver<Option<Vec<u8>>> { tokio::sync::watch::channel(None).1 }
