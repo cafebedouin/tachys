@@ -5,13 +5,13 @@
 //! valid for a difficulty of at least `2^nu` is always under it. So for any set of headers, `2^nu` times the
 //! number under `nu` estimates the work behind them, and no header counts for more than any other. Integers
 //! only: the same answer on every machine.
-use ergo_chain_types::autolykos_pow_scheme::{order_bigint, AutolykosPowScheme};
+use ergo_chain_types::autolykos_pow_scheme::order_bigint;
 use ergo_chain_types::Header;
 use num_bigint::BigUint;
 use std::collections::BTreeMap;
 
 /// The proof-of-work hit of a header: the lower, the more work it took to find.
-pub fn hit(h: &Header) -> Option<BigUint> { AutolykosPowScheme::default().pow_hit(h).ok() }
+pub fn hit(h: &Header) -> Option<BigUint> { crate::pow::pow_hit(h).ok() }
 
 fn order() -> BigUint { order_bigint().to_biguint().expect("the group order is positive") }
 

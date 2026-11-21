@@ -90,3 +90,22 @@ fn pr2461_new_form_is_not_read_yet() {
     assert_eq!(p.scorex_serialize_bytes().unwrap().len(), bytes.len() - 1, "written back, it is the old form: one byte shorter");
     assert!(!interlinks_proof_ok(&p.suffix_head), "the new form's interlink proof does not verify here");
 }
+
+/// A header one of whose 32 Autolykos table indexes is 0 made the library's `check_pow` panic
+/// (<https://github.com/ergoplatform/sigma-rust/issues/964>), and C5 called it on every header of a proof a peer
+/// sends. The proof's tip with such a nonce (found by `mine_index_zero_nonces` in `tests/pow.rs`) is now refused for
+/// its work, as any header without the work it declares.
+#[test]
+fn a_proof_whose_tip_has_a_table_index_of_0_is_refused_for_its_work_not_a_panic() {
+    const ZERO_INDEX_NONCE: u64 = 20_713_447;
+    let cp = ChainParams::mainnet();
+    let p = real();
+    let a = anchor(&p);
+    let now = tip_ts(&p) + 600_000;
+    let mut q = p.clone();
+    q.suffix_tail.last_mut().unwrap().autolykos_solution.nonce = ZERO_INDEX_NONCE.to_be_bytes().to_vec();
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| verify(&q, &[], &a, &cp, now))).expect("verify answers, it does not panic");
+    show("tip with a table index of 0", &r);
+    assert_eq!(r.failed(), vec![C5Work]);
+    assert!(r.failures.iter().any(|f| f.1 == format!("height {}", p.suffix_tail.last().unwrap().height)));
+}

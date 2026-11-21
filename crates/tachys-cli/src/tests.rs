@@ -397,3 +397,32 @@ fn a_proof_nested_deeper_than_its_root_says_is_refused_before_it_is_labelled() {
     assert_eq!(crate::proofs::lookup_all(&root, &p, &[[5u8; 32]]), None);
 }
 
+
+/// A header one of whose 32 Autolykos table indexes is 0 made the library's `check_pow` panic
+/// (<https://github.com/ergoplatform/sigma-rust/issues/964>), and `header_ok` called it first, on every header a peer
+/// pushes or a node returns: `tips` failed with exit 70 at every run, and the phone app, built to abort on a panic,
+/// stopped. No work is needed for such a header, only a scan of nonces. It is now judged as any other: refused if it
+/// lacks the work its difficulty asks, taken if it has it, as an honest header with an index of 0 is. The nonces are
+/// found by `mine_index_zero_nonces` (crates/tachys-verify/tests/pow.rs).
+#[test]
+fn a_header_with_a_table_index_of_0_is_judged_not_a_panic() {
+    use crate::chain::header_ok;
+    use ergo_chain_types::autolykos_pow_scheme::encode_compact_bits;
+    use ergo_chain_types::Header;
+    use sigma_ser::ScorexSerializable;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    const ZERO_INDEX_NONCE: u64 = 20_713_447;
+    const ZERO_INDEX_WORK_NONCE: u64 = 45_878_571;
+    let with_nonce = |h: &Header, n: u64| { let mut h = h.clone(); h.autolykos_solution.nonce = n.to_be_bytes().to_vec(); Header::scorex_parse_bytes(&h.scorex_serialize_bytes().unwrap()).unwrap() };
+    let judge = |h: &Header, a: &tachys_verify::Anchor, now: u64| catch_unwind(AssertUnwindSafe(|| header_ok(h, a, now))).map_err(|_| "panic");
+    // mainnet's tip at 1,915,819 with another nonce: mainnet's difficulty, and none of that work
+    let p = ergo_nipopow::NipopowProof::scorex_parse_bytes(include_bytes!("../../../vectors/mainnet-1915810.bin")).unwrap();
+    let poison = with_nonce(p.suffix_tail.last().unwrap(), ZERO_INDEX_NONCE);
+    assert_eq!(judge(&poison, &crate::network::release_anchor(), poison.timestamp + 60_000), Ok(Err("work".to_string())));
+    // the release checkpoint declaring a difficulty of 4, with the work for it, against a checkpoint just below it
+    let mut w = crate::network::checkpoint_header();
+    w.n_bits = encode_compact_bits(&4.into()) as u32;
+    let w = with_nonce(&w, ZERO_INDEX_WORK_NONCE);
+    let low = tachys_verify::Anchor { checkpoint_height: w.height - 1, checkpoint_difficulty: 4.into(), floor_divisor: 1, floor_halving_ms: 0, ..crate::network::release_anchor() };
+    assert_eq!(judge(&w, &low, w.timestamp + 60_000), Ok(Ok(())));
+}

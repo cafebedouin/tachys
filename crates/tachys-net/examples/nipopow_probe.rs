@@ -130,7 +130,7 @@ async fn main() {
                 all.last().map_or(0, |h| h.height), all.last().map_or(String::new(), |h| String::from(h.id.0)));
             if a.get(5).map(String::as_str) == Some("mainnet") {
                 let p = tachys_verify::difficulty::ChainParams::mainnet();
-                let invalid_pow = all.iter().filter(|h| !matches!(h.check_pow(), Ok(true))).count();
+                let invalid_pow = all.iter().filter(|h| !matches!(tachys_verify::pow::pow_ok(h), Ok(true))).count();
                 match tachys_verify::run::check_run(&all, &p) {
                     Some(r) => println!("check first={} last={} recomputed={} as_parent={} within_bounds={} wrong={:?} exact_from={:?} exact_headers={} work={} work_exact={} invalid_pow={}",
                         r.first_height, r.last_height, r.recomputed, r.as_parent, r.within_bounds, r.wrong, r.exact_from,

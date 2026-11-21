@@ -65,7 +65,7 @@ pub fn assemble(proof: &NipopowProof, settled: &HashSet<BlockId>, run: &[Header]
         return Err(Refused::ProofShape(w[1].height));
     }
     let before_v2 = |h: &Header| h.height < p.v2_activation_height;
-    let work_ok = |h: &Header| before_v2(h) || (h.version != 1 && matches!(h.check_pow(), Ok(true)));
+    let work_ok = |h: &Header| before_v2(h) || (h.version != 1 && matches!(crate::pow::pow_ok(h), Ok(true)));
     if let Some(h) = all.iter().copied().chain(run.iter()).find(|h| !work_ok(h)) { return Err(Refused::InvalidWork(h.height)) }
 
     let reach = reach_with(proof, settled);

@@ -4,6 +4,7 @@ pub mod difficulty;
 pub mod evidence;
 pub mod miller;
 pub mod peers;
+pub mod pow;
 pub mod run;
 pub mod threshold;
 pub mod tip;
@@ -218,7 +219,7 @@ pub fn verify(proof: &NipopowProof, extra: &[Header], anchor: &Anchor, p: &Chain
     for h in chain.iter().copied().chain(extra.iter()) {
         if h.height >= p.v2_activation_height && h.version != 1 {
             work_checked += 1;
-            if !matches!(h.check_pow(), Ok(true)) { f.push((Check::C5Work, format!("height {}", h.height))); }
+            if !matches!(pow::pow_ok(h), Ok(true)) { f.push((Check::C5Work, format!("height {}", h.height))); }
         } else if h.height >= p.v2_activation_height {
             f.push((Check::C5Work, format!("version 1 header at height {}", h.height)));
         } else {

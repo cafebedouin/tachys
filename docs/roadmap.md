@@ -117,4 +117,10 @@ instead, which as far as we know is new for Ergo:
   decides that peer's own vote.
 - `tachys tips` applies the remembered difficulty floor exactly, so it would refuse an honest largest fall in
   difficulty that rounds into the window `extend_chain` allows.
+- The proof-of-work hit is computed in `tachys_verify::pow`, not by the library's `Header::check_pow`, which panics on
+  a header with a table index of 0 at the sigma-rust revision pinned (sigma-rust issue 964): a peer could make one
+  without work and stop `tips`, or abort the phone app. It agrees with the library on every real header in
+  `vectors/` and with the reference node on two index-0 headers; once a sigma-rust release carries the fix, it can go
+  back to the library. The research module `miller` still reads levels through the library's `max_level_of`, on
+  the repository's vectors only.
 - `balance` formats `erg` through a float and loses digits above about nine million ERG; `nanoerg` is exact.

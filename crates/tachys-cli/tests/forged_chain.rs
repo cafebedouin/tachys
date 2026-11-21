@@ -39,7 +39,7 @@ fn mine(parent: &Header, difficulty: u32, root: &ADDigest, timestamp: u64) -> He
     h.timestamp = timestamp;
     for n in 0u64.. {
         h.autolykos_solution.nonce = n.to_be_bytes().to_vec();
-        if h.check_pow() == Ok(true) { return sealed(&h) }
+        if tachys_verify::pow::pow_ok(&h) == Ok(true) { return sealed(&h) }
     }
     unreachable!()
 }
@@ -329,4 +329,24 @@ fn a_kept_chain_survives_a_later_run_whose_link_fails() {
     let (code, _, err) = tips_with(&at, "fails", &net, &[&short], &["--keep-chain"]);
     assert_eq!(code, 0, "the tip is still agreed: {err}");
     assert_eq!(kept(&format!("{at}/fails")), Some(18), "the chain kept before is still there after a link that failed: {err}");
+}
+
+/// A peer that pushes a header one of whose 32 Autolykos table indexes is 0 made the library's `check_pow` panic
+/// (<https://github.com/ergoplatform/sigma-rust/issues/964>): `tachys tips` ended with exit 70 at every run while that
+/// peer was asked, and the phone app aborted. The header needs no work, only a scan of nonces (here mainnet's tip at
+/// 1,915,819 with a nonce found by `mine_index_zero_nonces` in crates/tachys-verify/tests/pow.rs). It is now refused
+/// for want of work, as any header without it.
+#[test]
+fn a_peer_pushing_a_header_with_a_table_index_of_0_is_refused_not_a_crash() {
+    const ZERO_INDEX_NONCE: u64 = 20_713_447;
+    let at = dir("index0");
+    let (_, cp_json) = checkpoint();
+    let net = net_file(&at, &cp_json);
+    let p = ergo_nipopow::NipopowProof::scorex_parse_bytes(include_bytes!("../../../vectors/mainnet-1915810.bin")).unwrap();
+    let mut poison = p.suffix_tail.last().unwrap().clone();
+    poison.autolykos_solution.nonce = ZERO_INDEX_NONCE.to_be_bytes().to_vec();
+    let f = forger(&at, "poison", &net, &[sealed(&poison)]);
+    let (code, v, err) = tips(&at, "victim", &net, &[&f]);
+    assert_eq!((code, v["verdict"].as_str()), (1, Some("not_trusted")), "{err}");
+    assert!(err.contains("(0 pass)"), "the header is pushed and refused: {err}");
 }

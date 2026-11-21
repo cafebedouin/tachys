@@ -60,7 +60,7 @@ pub(crate) fn carries_on(tip: &Header, add: &[Header]) -> bool {
 }
 
 pub(crate) fn header_ok(h: &Header, anchor: &Anchor, now: u64) -> Result<(), String> {
-    if !matches!(h.check_pow(), Ok(true)) { return Err("work".into()) }
+    if !matches!(tachys_verify::pow::pow_ok(h), Ok(true)) { return Err("work".into()) }
     if h.height <= anchor.checkpoint_height { return Err("at or below checkpoint".into()) }
     if tachys_verify::difficulty::difficulty(h) < anchor.floor_at(now) { return Err("below floor".into()) }
     if h.timestamp > now + anchor.max_future_drift_ms { return Err("future".into()) }

@@ -109,7 +109,7 @@ fn make(height: u32, parent: BlockId, ts: u64, n_bits: u32, root: &[u8], nonce: 
 }
 /// `make`, with the first nonce whose Autolykos v2 hit meets the header's own difficulty: real work, if little of it.
 fn mined(height: u32, parent: BlockId, ts: u64, n_bits: u32, root: &[u8]) -> Header {
-    (0u64..).map(|n| make(height, parent, ts, n_bits, root, n)).find(|h| h.check_pow() == Ok(true)).unwrap()
+    (0u64..).map(|n| make(height, parent, ts, n_bits, root, n)).find(|h| tachys_verify::pow::pow_ok(h) == Ok(true)).unwrap()
 }
 /// A linked chain of headers `top - n + 1 ..= top`, newest first, one block a minute up to `top_ts`.
 fn chain(n: u32, top: u32, top_ts: u64, n_bits: u32, work: bool, root: impl Fn(u32) -> Vec<u8>) -> Vec<Header> {
@@ -430,7 +430,7 @@ fn w5_a_node_supplied_header_is_taken_only_down_to_the_rounding_window_below_the
     let floor = tachys_verify::tip::remembered_floor(&agreed, now_ms(), &params);
     assert_eq!(floor, BigInt::from(32_769), "the remembered floor: 65538, halved once");
     let try_child = |name: &str, child: &Header| -> Ran {
-        assert_eq!(child.check_pow(), Ok(true), "{name}: the child carries work for its difficulty (re-mine with w5_mine_nonces if the headers changed)");
+        assert_eq!(tachys_verify::pow::pow_ok(child), Ok(true), "{name}: the child carries work for its difficulty (re-mine with w5_mine_nonces if the headers changed)");
         let s = dir(&format!("w5-{name}"));
         store_chain(&s, &hs, &agreed);
         wallet(&s, true, json!({}), json!([]), json!([]));
