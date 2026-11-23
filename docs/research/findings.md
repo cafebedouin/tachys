@@ -1035,3 +1035,37 @@ checkpoint). Clippy clean. `tachys tips --network testnet` from an empty state d
 tip at 661,154, linked to the new checkpoint by 1960 headers.
 **Not run:** a second mainnet refresh (`--check` showed three sources agreeing at 1,922,393; nothing was written),
 which is what would show that no mainnet test leans on the header any more.
+
+## 63. The first release by the workflow (v0.0.2): what it caught, and what a person caught
+
+v0.0.2 is the first release made as `docs/maintaining.md` now says: CI on the commit, the tag, the workflow's draft,
+the APKs added by hand. Three things went otherwise than the steps said.
+
+- **CI's audit failed on the commit before the release's** (RUSTSEC-2026-0592, `url` 2.5.8, a stack overflow in
+  `Url::origin()` on nested `blob:` URLs; it comes in through the signing library's `ergo-chain-types`). `url` is
+  now 2.5.9 in `Cargo.lock`. Whether the wallet ever reached that function was not looked into. The release
+  workflow does not run the audit: it was step 1's wait for CI that stopped a tag here.
+- **The APKs first built for the release were signed with the debug key.** No key was named to Gradle on the
+  build machine, and `assembleRelease` then falls back to the debug key (`android/app/build.gradle.kts`), succeeds,
+  and says nothing. They were renamed for upload before `apksigner verify --print-certs` showed `CN=Android Debug`
+  and not the fingerprint in `SECURITY.md`; they were not uploaded. Built again with the key named through the
+  environment, both give `6501129c…9d20ff7b`. `docs/maintaining.md` step 3 now says to check the fingerprint
+  before adding them, and how to name the key for one build. The build itself still does not refuse: that is a
+  change to `build.gradle.kts` not made here.
+- **`gh attestation verify` did not exist in the maintainer's `gh`** (2.45.0, Ubuntu's package; the command came in
+  2.49). With 2.105.0 it passed on the program downloaded from the draft: built and signed by
+  `.github/workflows/release.yml@refs/tags/v0.0.2` of this repository. Step 4 now names the version.
+
+The fuzz targets, which `docs/maintaining.md` asks for before a release, were run after the tag and before the
+draft was published: no crash.
+
+**Tests:** none new. **Run:** on the commit tagged (14b364c): `cargo test --workspace --locked`, all passed; clippy
+clean; CI's three jobs passed, `oldest-rust` and `app` for the first time; the release workflow passed and opened
+the draft. All four files downloaded again from the draft: `sha256sum -c SHA256SUMS` OK for each. The four fuzz
+targets for 600 s each, the four at once, each from the corpus earlier runs had left and its seed
+(`runs/2026-11-23-fuzz-v0.0.2.txt`): box proofs 32.6 million runs, peer messages 20.2 million, signed bytes 3.8
+million, headers 2.1 million; nothing written to `fuzz/artifacts/`.
+**Not run:** either APK installed on a phone, or installed over v0.0.1's (which is what shows the key is the same
+one to a phone); the Linux program from the release run for anything but its checksum and attestation (the one
+`./build-linux.sh` makes is not expected to be the same bytes); the fuzz targets with inputs over 4096 bytes, in
+the phone build, or for the JSON of REST answers; `cargo audit` in the release workflow.

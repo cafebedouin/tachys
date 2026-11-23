@@ -99,7 +99,12 @@ What changed is the findings added to `docs/research/findings.md` since the last
 3. Build the two APKs on your own machine (`android/build-core.sh`, then `./gradlew assembleRelease` with the
    release key; the key and its password are the maintainer's and are nowhere in the repository or on GitHub:
    whoever loses the key can no longer update an installed app). Name them
-   `tachys-X.Y.Z-android-arm64-v8a.apk` and `tachys-X.Y.Z-android-armeabi-v7a.apk`, and add them to the draft:
+   `tachys-X.Y.Z-android-arm64-v8a.apk` and `tachys-X.Y.Z-android-armeabi-v7a.apk` (copies in `android/` are
+   ignored by git). **With no key named, `assembleRelease` succeeds and signs with the debug key**, and says nothing
+   of it (finding 63): before adding them, see that `apksigner verify --print-certs FILE.apk` gives the fingerprint
+   in `SECURITY.md` for both. The key can be named for one build without writing its password to a file:
+   `ORG_GRADLE_PROJECT_tachysStoreFile=… ORG_GRADLE_PROJECT_tachysStorePassword=… ORG_GRADLE_PROJECT_tachysKeyPassword=… ./gradlew assembleRelease`.
+   Then add them to the draft:
 
    ```
    gh release download vX.Y.Z -p SHA256SUMS
@@ -107,8 +112,8 @@ What changed is the findings added to `docs/research/findings.md` since the last
    gh release upload vX.Y.Z tachys-X.Y.Z-android-*.apk SHA256SUMS --clobber
    ```
 
-4. Read the draft's notes, check `gh attestation verify tachys-X.Y.Z-linux-x86_64 -R OWNER/REPO` on the program
-   downloaded from it, then publish: `gh release edit vX.Y.Z --draft=false`.
+4. Read the draft's notes, check `gh attestation verify tachys-X.Y.Z-linux-x86_64 -R OWNER/REPO` (`gh` 2.49 or
+   newer; Ubuntu's own package is older) on the program downloaded from it, then publish: `gh release edit vX.Y.Z --draft=false`.
 
 `./build-linux.sh` builds the same program on any Linux machine (into `target/dist/`); it is not expected to be
 the same bytes as the workflow's.

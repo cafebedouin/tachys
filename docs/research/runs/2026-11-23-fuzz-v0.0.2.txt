@@ -1,0 +1,58 @@
+The four fuzz targets (fuzz/, docs/maintaining.md) on the commit tagged v0.0.2 (14b364c), 2026-11-23, before the
+release was published. cargo-fuzz 0.13.2, nightly, Linux x86_64, twelve cores; the four at once, each
+`cargo +nightly fuzz run TARGET corpus/TARGET seeds/TARGET -- -max_total_time=600`. Each began from the corpus
+earlier runs had left on this machine (not tracked) and its tracked seed. Inputs up to libFuzzer's usual 4096 bytes. No crash: each ended with exit 0 and nothing was written to fuzz/artifacts/. Below, for each target, the
+lines libFuzzer began with and its last lines; build-machine paths replaced.
+
+==== box_proof
+INFO: Seed: 804023315
+INFO: Loaded 1 modules   (5146 inline 8-bit counters): 5146 [0x563f6bbb5050, 0x563f6bbb646a), 
+INFO: Loaded 1 PC tables (5146 PCs): 5146 [0x563f6bbb6470,0x563f6bbca610), 
+INFO:       85 files found in corpus/box_proof
+INFO:        1 files found in seeds/box_proof
+INFO: seed corpus: files: 86 min: 1b max: 2226b total: 30770b rss: 58Mb
+#87	INITED cov: 557 ft: 1344 corp: 73/25Kb exec/s: 0 rss: 58Mb
+#29336572	REDUCE cov: 558 ft: 1369 corp: 78/26Kb lim: 4096 exec/s: 54126 rss: 530Mb L: 389/2209 MS: 1 EraseBytes-
+#32649637	DONE   cov: 558 ft: 1369 corp: 78/26Kb lim: 4096 exec/s: 54325 rss: 530Mb
+Done 32649637 runs in 601 second(s)
+exit=0
+
+==== header
+INFO: Seed: 693238878
+INFO: Loaded 1 modules   (10069 inline 8-bit counters): 10069 [0x57ad71a54d10, 0x57ad71a57465), 
+INFO: Loaded 1 PC tables (10069 PCs): 10069 [0x57ad71a57468,0x57ad71a7e9b8), 
+INFO:      162 files found in corpus/header
+INFO:        1 files found in seeds/header
+INFO: seed corpus: files: 163 min: 1b max: 409b total: 34814b rss: 58Mb
+#164	INITED cov: 1290 ft: 2079 corp: 138/29Kb exec/s: 0 rss: 70Mb
+#2097152	pulse  cov: 1291 ft: 2083 corp: 140/29Kb lim: 4096 exec/s: 3506 rss: 430Mb
+#2103562	DONE   cov: 1291 ft: 2083 corp: 140/29Kb lim: 4096 exec/s: 3500 rss: 430Mb
+Done 2103562 runs in 601 second(s)
+exit=0
+
+==== peer_message
+INFO: Seed: 772902701
+INFO: Loaded 1 modules   (3016 inline 8-bit counters): 3016 [0x5bd69f7e91c0, 0x5bd69f7e9d88), 
+INFO: Loaded 1 PC tables (3016 PCs): 3016 [0x5bd69f7e9d88,0x5bd69f7f5a08), 
+INFO:      493 files found in corpus/peer_message
+INFO:        3 files found in seeds/peer_message
+INFO: seed corpus: files: 496 min: 1b max: 3465b total: 112163b rss: 58Mb
+#497	INITED cov: 614 ft: 2011 corp: 376/78Kb exec/s: 497 rss: 58Mb
+#20237092	REDUCE cov: 615 ft: 2084 corp: 412/97Kb lim: 4096 exec/s: 33728 rss: 496Mb L: 566/3482 MS: 4 PersAutoDict-ChangeBit-PersAutoDict-EraseBytes- DE: "s\000\000\000"-"\377d"-
+#20244247	DONE   cov: 615 ft: 2084 corp: 412/97Kb lim: 4096 exec/s: 33684 rss: 496Mb
+Done 20244247 runs in 601 second(s)
+exit=0
+
+==== signed_bytes
+INFO: Seed: 672251024
+INFO: Loaded 1 modules   (48257 inline 8-bit counters): 48257 [0x5a3fbe1849c0, 0x5a3fbe190641), 
+INFO: Loaded 1 PC tables (48257 PCs): 48257 [0x5a3fbe190648,0x5a3fbe24ce58), 
+INFO:     3711 files found in corpus/signed_bytes
+INFO:        1 files found in seeds/signed_bytes
+INFO: seed corpus: files: 3712 min: 1b max: 558b total: 395556b rss: 58Mb
+#3718	INITED cov: 7701 ft: 23586 corp: 2784/251Kb exec/s: 464 rss: 190Mb
+#3783700	REDUCE cov: 9483 ft: 34820 corp: 4510/658Kb lim: 4096 exec/s: 6306 rss: 1160Mb L: 158/3934 MS: 1 EraseBytes-
+#3783995	DONE   cov: 9483 ft: 34820 corp: 4510/658Kb lim: 4096 exec/s: 6296 rss: 1160Mb
+Done 3783995 runs in 601 second(s)
+exit=0
+

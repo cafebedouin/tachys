@@ -6,3 +6,5 @@
 *:Zone.Identifier
 # wallet seeds, state directories and notes that are not for publishing
 /private/
+# the release's APKs, named for upload (docs/maintaining.md); they live on the Releases page
+/android/tachys-*.apk
