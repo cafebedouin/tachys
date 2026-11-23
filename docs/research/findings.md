@@ -1050,8 +1050,10 @@ the APKs added by hand. Three things went otherwise than the steps said.
   and says nothing. They were renamed for upload before `apksigner verify --print-certs` showed `CN=Android Debug`
   and not the fingerprint in `SECURITY.md`; they were not uploaded. Built again with the key named through the
   environment, both give `6501129c…9d20ff7b`. `docs/maintaining.md` step 3 now says to check the fingerprint
-  before adding them, and how to name the key for one build. The build itself still does not refuse: that is a
-  change to `build.gradle.kts` not made here.
+  before adding them, and how to name the key for one build. The build now refuses too: a release build (APK or bundle) with no key named fails
+  with a line saying what to name, unless `-PtachysIdSuffix` is given, which makes the copy that installs beside
+  the real app and is still signed with the debug key. A key that is named but is not the project's is not
+  refused: the build cannot know the project's, and someone building from source has their own.
 - **`gh attestation verify` did not exist in the maintainer's `gh`** (2.45.0, Ubuntu's package; the command came in
   2.49). With 2.105.0 it passed on the program downloaded from the draft: built and signed by
   `.github/workflows/release.yml@refs/tags/v0.0.2` of this repository. Step 4 now names the version.
@@ -1065,7 +1067,10 @@ the draft. All four files downloaded again from the draft: `sha256sum -c SHA256S
 targets for 600 s each, the four at once, each from the corpus earlier runs had left and its seed
 (`runs/2026-11-23-fuzz-v0.0.2.txt`): box proofs 32.6 million runs, peer messages 20.2 million, signed bytes 3.8
 million, headers 2.1 million; nothing written to `fuzz/artifacts/`.
-**Not run:** either APK installed on a phone, or installed over v0.0.1's (which is what shows the key is the same
+The build's refusal, on the build machine: `assembleRelease` and `bundleRelease` with no key, refused; with
+`-PtachysIdSuffix=.test`, built, `CN=Android Debug`; with a key made for the test, built, that key's certificate;
+`testDebugUnitTest assembleDebug` (what CI runs), passed.
+**Not run:** `assembleRelease` with the project's key since the refusal was added; either APK installed on a phone, or installed over v0.0.1's (which is what shows the key is the same
 one to a phone); the Linux program from the release run for anything but its checksum and attestation (the one
 `./build-linux.sh` makes is not expected to be the same bytes); the fuzz targets with inputs over 4096 bytes, in
 the phone build, or for the JSON of REST answers; `cargo audit` in the release workflow.

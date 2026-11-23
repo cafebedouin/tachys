@@ -12,8 +12,13 @@ android/build-core.sh              # the core for arm64 and 32-bit ARM, into app
 cd android && ./gradlew assembleRelease     # or assembleDebug, the only build that keeps the adb test hooks
 ```
 
+`assembleRelease` needs a signing key and is refused without one: name your own (the comment in
+`android/app/build.gradle.kts` says how; an app signed with another key than the project's will not install over
+the project's), or build the copy below, or `assembleDebug`.
+
 To try a build on a phone that is in use, `./gradlew assembleRelease -PtachysIdSuffix=.test` makes a copy that
-installs beside the real app (`org.tachys.wallet.test`) with its own wallets.
+installs beside the real app (`org.tachys.wallet.test`) with its own wallets. It needs no key: it is signed with
+the debug key.
 
 `build-core.sh` needs the Android NDK and the Rust targets `aarch64-linux-android` and `armv7-linux-androideabi`.
 It keeps the build machine's paths out of the binary and fails if any is left. The launcher icons are made from

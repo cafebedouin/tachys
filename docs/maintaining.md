@@ -100,8 +100,8 @@ What changed is the findings added to `docs/research/findings.md` since the last
    release key; the key and its password are the maintainer's and are nowhere in the repository or on GitHub:
    whoever loses the key can no longer update an installed app). Name them
    `tachys-X.Y.Z-android-arm64-v8a.apk` and `tachys-X.Y.Z-android-armeabi-v7a.apk` (copies in `android/` are
-   ignored by git). **With no key named, `assembleRelease` succeeds and signs with the debug key**, and says nothing
-   of it (finding 63): before adding them, see that `apksigner verify --print-certs FILE.apk` gives the fingerprint
+   ignored by git). With no key named `assembleRelease` is refused (finding 63; it used to sign with the debug key and say
+   nothing), but a key is not thereby the project's: before adding them, see that `apksigner verify --print-certs FILE.apk` gives the fingerprint
    in `SECURITY.md` for both. The key can be named for one build without writing its password to a file:
    `ORG_GRADLE_PROJECT_tachysStoreFile=… ORG_GRADLE_PROJECT_tachysStorePassword=… ORG_GRADLE_PROJECT_tachysKeyPassword=… ./gradlew assembleRelease`.
    Then add them to the draft:
