@@ -108,7 +108,11 @@ instead, which as far as we know is new for Ergo:
   `concurrent_readers_over_budget_*`, fail on a loaded machine and pass alone.)
 - An in-process binding for the app (the library entry `tachys::call` is ready for one): the box-proof panics that
   blocked it are closed, and the other decoders were fuzzed without one (findings 52, 57).
-- The command that builds payments (`wallet send`) and the app's main source file are each too long.
+- The app's main source file is too long. (`wallet send` and the sync were, and are split into their steps: finding 61.)
+  What the app makes of the core's answers is tested for a payment's outcome, a derived address and a wrong password
+  (`vectors/app/`, finding 61); what it reads of a sync, a receipt, an offer list and the wallet file is not.
+- The fuzz targets (`fuzz/`: box proofs, peer messages, signed bytes, headers) have run for minutes, not days, and
+  not in CI; the JSON of REST answers has no target.
 - The fuzzing ran on the build machine, in the unwinding build; none of it has run in the phone build, where any panic
   ends the core.
 - A box seen only in a block above the agreed tip can still be dropped by a settled proof below where it was seen;

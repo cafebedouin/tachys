@@ -11,7 +11,8 @@ use tachys_verify::pow::{header_indexes, indexes, pow_hit, pow_ok};
 /// The mainnet proof's tip (height 1,915,819) with this nonce: one of its 32 indexes is 0. Its declared difficulty is
 /// mainnet's, and it carries no such work. Found by `mine_index_zero_nonces`.
 const ZERO_INDEX_NONCE: u64 = 20_713_447;
-/// The release checkpoint (height 1,914,880) declaring a difficulty of 4, with this nonce: an index of 0, and a hit
+/// The header at height 1,914,880 (a release checkpoint once, kept in vectors/ so that a new checkpoint does not ask
+/// for a new nonce) declaring a difficulty of 4, with this nonce: an index of 0, and a hit
 /// under the target a difficulty of 4 sets. Found by `mine_index_zero_nonces`.
 const ZERO_INDEX_WORK_NONCE: u64 = 45_878_571;
 const WORK_DIFFICULTY: u32 = 4;
@@ -21,7 +22,7 @@ fn sealed(h: &Header) -> Header { Header::scorex_parse_bytes(&h.scorex_serialize
 fn with_nonce(h: &Header, n: u64) -> Header { let mut h = h.clone(); h.autolykos_solution.nonce = n.to_be_bytes().to_vec(); sealed(&h) }
 fn tip_template() -> Header { real().suffix_tail.last().unwrap().clone() }
 fn work_template() -> Header {
-    let mut h: Header = serde_json::from_str(include_str!("../../../anchors/mainnet.json")).unwrap();
+    let mut h: Header = serde_json::from_str(include_str!("../../../vectors/header-1914880.json")).unwrap();
     h.n_bits = encode_compact_bits(&BigInt::from(WORK_DIFFICULTY)) as u32;
     h
 }
@@ -119,6 +120,21 @@ fn a_header_with_an_index_of_0_is_checked_and_not_a_panic() {
     // its `validate` fails the first, "h(f) < b condition not met", and passes the second)
     assert_eq!(pow_hit(&h).unwrap().to_string(), "46667783097212936493496946474608683650378190699675068216039239605861734379391");
     assert_eq!(pow_hit(&w).unwrap().to_string(), "28826635331816278422055773760399954877389389236516583930937018919255638089733");
+}
+
+/// `refresh-anchors.sh` counts an explorer that gives the same id as a source for the header: that holds only if the
+/// id in each checkpoint file is the hash of the header in it.
+#[test]
+fn the_id_each_release_checkpoint_gives_is_the_hash_of_its_header() {
+    for json in [include_str!("../../../anchors/mainnet.json"), include_str!("../../../anchors/testnet.json")] {
+        let said = serde_json::from_str::<serde_json::Value>(json).unwrap()["id"].as_str().unwrap().to_string();
+        let h: Header = serde_json::from_str(json).unwrap();
+        assert_eq!(String::from(sealed(&h).id.0), said);
+        // and a header with one field changed is another id
+        let mut other = h.clone();
+        other.timestamp += 1;
+        assert_ne!(String::from(sealed(&other).id.0), said);
+    }
 }
 
 /// Finds the two pinned nonces, from 0 upward: `cargo test --release -p tachys-verify --test pow -- --ignored --nocapture`.

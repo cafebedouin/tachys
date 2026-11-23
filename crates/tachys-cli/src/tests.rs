@@ -419,8 +419,9 @@ fn a_header_with_a_table_index_of_0_is_judged_not_a_panic() {
     let p = ergo_nipopow::NipopowProof::scorex_parse_bytes(include_bytes!("../../../vectors/mainnet-1915810.bin")).unwrap();
     let poison = with_nonce(p.suffix_tail.last().unwrap(), ZERO_INDEX_NONCE);
     assert_eq!(judge(&poison, &crate::network::release_anchor(), poison.timestamp + 60_000), Ok(Err("work".to_string())));
-    // the release checkpoint declaring a difficulty of 4, with the work for it, against a checkpoint just below it
-    let mut w = crate::network::checkpoint_header();
+    // the header at 1,914,880 (vectors/, not the release checkpoint: the nonce is for this header) declaring a
+    // difficulty of 4, with the work for it, against a checkpoint just below it
+    let mut w: Header = serde_json::from_str(include_str!("../../../vectors/header-1914880.json")).unwrap();
     w.n_bits = encode_compact_bits(&4.into()) as u32;
     let w = with_nonce(&w, ZERO_INDEX_WORK_NONCE);
     let low = tachys_verify::Anchor { checkpoint_height: w.height - 1, checkpoint_difficulty: 4.into(), floor_divisor: 1, floor_halving_ms: 0, ..crate::network::release_anchor() };

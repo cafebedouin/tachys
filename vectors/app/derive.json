@@ -1,0 +1,10 @@
+{
+ "answer": {
+  "address": "9fv2n41gttbUx8oqqhexi68qPfoETFPxnLEEbTfaTk4SmY2knYC",
+  "command": "wallet derive",
+  "exit": 0,
+  "ok": true,
+  "v": 1
+ },
+ "code": 0
+}

@@ -32,7 +32,8 @@ in2 tips --seeds "$W/seeds-a-for-t2.txt" --peers 1 --tries 1 --quorum 1 --state 
 for try in 1 2 3 4 5 6; do o="$(in2 wallet receive --state "$W/payer" --node "p2p://$A2" --ids "$box")"; echo "$o" | grep -q "proven unspent" && break; sleep 5
   in2 tips --seeds "$W/seeds-a-for-t2.txt" --peers 1 --tries 1 --quorum 1 --state "$W/payer" > /dev/null; done
 echo "$o" | tail -n 2 | sed 's/^/  /'
-echo "$o" | grep -q "(added)" || fail "payer could not prove its funding box"
+# (not "(added)": a box first seen above the agreed tip is added then, and is proven, already tracked, on a later try)
+echo "$o" | grep -q "proven unspent" || fail "payer could not prove its funding box"
 
 echo "[sf] 2. the payer loses its connection to the node"
 partition A T2

@@ -758,3 +758,51 @@ fn a_held_payment_whose_coin_was_never_seen_is_not_called_void() {
     assert_eq!(state_of(&r, &receipt).as_deref(), Some("expected"), "{}", r.err);
     assert!(std::fs::read_dir(format!("{payee}/outbox")).map(|d| d.count()).unwrap_or(0) == 1, "back in the outbox, to be sent");
 }
+
+/// A JSON value with every leaf replaced by the name of its type: what a reader of the answer relies on.
+fn shape(v: &Value) -> Value {
+    match v {
+        Value::Null => "null".into(), Value::Bool(_) => "bool".into(), Value::Number(_) => "number".into(), Value::String(_) => "text".into(),
+        Value::Array(a) => Value::Array(a.first().map(shape).into_iter().collect()),
+        Value::Object(o) => Value::Object(o.iter().map(|(k, v)| (k.clone(), shape(v))).collect()),
+    }
+}
+
+#[test]
+fn the_answers_the_app_reads_keep_the_fields_and_types_of_the_ones_it_is_tested_on() {
+    // `vectors/app/` holds answers of the core that the app's own tests read (android/app/src/test). Each is made
+    // again here, and must have the same fields with the same types: a field renamed, retyped or dropped fails this
+    // test before it reaches a phone. (Values differ from run to run, and are not compared.)
+    let with = |args: &[&str], pass: Option<&str>, input: &str| -> Ran {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_tachys"));
+        c.args(args).env_remove("TACHYS_PASS").stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+        if let Some(p) = pass { c.env("TACHYS_PASS", p); }
+        let mut child = c.spawn().unwrap();
+        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        let o = child.wait_with_output().unwrap();
+        Ran { code: o.status.code().unwrap_or(-1), out: String::from_utf8_lossy(&o.stdout).to_string(), err: String::from_utf8_lossy(&o.stderr).to_string() }
+    };
+    let payee = text(&address(1));
+    let mut made: Vec<(&str, i32, Value)> = vec![];
+    let r = with(&["wallet", "derive", "--mnemonic-file", "-", "--json"], None, &format!("{PHRASE}\n"));
+    made.push(("derive", r.code, r.json()));
+    let st = funded("app-queued");
+    let r = tachys(&["wallet", "send", "--state", &st, "--to", &payee, "--nanoerg", "1000000000", "--parcel-out", &format!("{st}/parcel.json"), "--json"]);
+    made.push(("send-queued", r.code, r.json()));
+    for (name, status, body) in [("send-sent", 200, "\"0000000000000000000000000000000000000000000000000000000000000000\""), ("send-refused", 400, r#"{"error":400,"reason":"bad.request","detail":"double spend"}"#), ("send-unsure", 500, "{}")] {
+        let st = funded(&format!("app-{name}"));
+        let (n, _) = node(status, body);
+        let r = tachys(&["wallet", "send", "--state", &st, "--to", &payee, "--nanoerg", "1000000000", "--node", &n, "--broadcast", "--json"]);
+        made.push((name, r.code, r.json()));
+    }
+    let st = dir("app-sealed");
+    assert_eq!(with(&["wallet", "new", "--state", &st, "--json"], Some("one password"), "").code, 0);
+    let r = with(&["wallet", "mnemonic", "--state", &st, "--json"], Some("another"), "");
+    made.push(("bad-password", r.code, r.json()));
+    for (name, code, answer) in made {
+        let file = format!("{}/../../vectors/app/{name}.json", env!("CARGO_MANIFEST_DIR"));
+        let kept: Value = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| panic!("{file} is missing or not JSON; the core answers:\n{}", serde_json::json!({ "code": code, "answer": answer })));
+        assert_eq!(kept["code"], code, "{name}: the exit code");
+        assert_eq!(shape(&kept["answer"]), shape(&answer), "{name}: the core answers\n{answer}\nand vectors/app/{name}.json, which the app is tested on, holds\n{}", kept["answer"]);
+    }
+}

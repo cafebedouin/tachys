@@ -921,3 +921,117 @@ measured, not whose coins they were.
     (`concurrent_readers_over_budget_*`) fail on a loaded machine and pass alone. **Run:** a first run on mainnet after
     these changes (6,165 headers, 1.80 MB, 19 s). **Not run:** the rig after the second round's changes; the phone after
     either round.
+
+60. **Tokens in the payments log that cannot be read stopped nothing; the oldest Rust and the app are built in CI
+    (2026-11-23).** (1) The daily limit is counted from `payments.log`, and a line of it that cannot be read is a
+    refusal: so the policy says, and so it was for the time and the nanoERG of an entry. Not for its tokens: an amount
+    that was not a whole number counted as nothing, an entry with no id was counted under no token, and `tokens` that
+    was not a list was passed over, so a damaged entry made the day's total for a token smaller than it was and a
+    payment over the daily limit for that token could pass. Found by reading, not by a payment that got through: the
+    wallet writes these lines itself, and no log it wrote is known to have held one. Now `tokens` that is there and is
+    not a list, or an entry of it without a text `id` and a whole `amount`, is a line that cannot be read, and nothing
+    is signed (ERG alone included) until the owner has looked at the log. An entry with no `tokens`, or `null`, counts
+    for none, as before. (2) The crates say `rust-version = "1.89"` and the README says "1.89 or newer"; CI built
+    with 1.98.1 only. A second job checks the three crates with 1.89. (3) CI never built the app. A third job runs
+    `./gradlew assembleDebug`, without the core in it. (4) The Linux program of v0.0.1 was built on the maintainer's
+    machine, and its checksum said only that a download was what had been uploaded. A tag now starts a workflow
+    (`.github/workflows/release.yml`, `build-linux.sh`) that runs the wallet's tests, builds the program from the
+    tagged commit, refuses a tag that is not the program's version or a checkpoint a week old, attests the program to
+    the commit and workflow, and opens a draft release; the APKs are still built and signed by the maintainer, whose
+    key stays off GitHub, and the maintainer publishes the draft (`docs/maintaining.md`). The version is 0.0.2. **Tests:**
+    `a_log_whose_tokens_cannot_be_read_stops_payments_and_is_not_a_day_with_none_spent`. 990 in the workspace, all
+    passing in one run of three; in the other two a third of the vendored codec's timing tests,
+    `read_frame_body_steady_slow_sender_survives_many_deadlines`, failed (once beside the two `concurrent_readers_over_budget_*`
+    while other builds ran, once on an idle machine), before and apart from this change: alone it passed four times
+    of four. Clippy clean. **Run:** `cargo +1.89 check
+    --locked -p tachys -p tachys-verify -p tachys-net --all-targets` on the build machine: clean;
+    `./gradlew --offline assembleDebug` there (JDK 21): both APKs built. `./build-linux.sh` there: 11,382,936 bytes, asks for glibc 2.34, no build-machine path. **Not run:** the release
+    workflow (it runs first on the tag for v0.0.2: the attestation and the draft release are untried until then);
+    either new job on GitHub (the
+    runner must fetch the SDK platform the app compiles against; if it cannot, the job fails and says so); the app
+    itself, which this does not change.
+
+61. **`wallet send` and the sync split into their steps; the app held to the core's answers; fuzz targets
+    (2026-11-23).** Three things the roadmap listed as owed, none of which changes what the wallet does. (1)
+    `cmd_send` was 360 lines and `cmd_sync` 370, each one function with everything in scope. They are now 55 and 105,
+    and their steps are functions: for a payment, what is asked for (`wanted`), one builder for each kind
+    (`payment_built`, `babel_paid_built`, `consolidation_built`, `burn_built`, `offer_built`), the coin of a
+    payment given up (`with_a_released_coin`), what the transaction takes out of the wallet (`leaves_wallet`: the
+    numbers the spending policy is held to, now a function of the transaction alone, with nothing of the command line
+    or the wallet file in it) and what is done with the signature (`hand_over`); for a sync, `take_from_pools`,
+    `listed_at`, `proof_from`, `settle_sent`, `settle_held` and `settle_boxes`. The lines were moved as they were, by
+    a script working from line numbers, and changed only where a value that had been owned is now borrowed; the order
+    of every step, refusal and write is the one before. One thing moved in time: the lists of void and undone boxes
+    are taken out of the wallet before the wallet's own payments are settled instead of after, and nothing between
+    reads them. (2) The app read the core's JSON in the middle of its one source file, and nothing but a phone showed
+    a field renamed. What it decides a payment's outcome, a tip, a restore, a derived address and a wrong password on
+    is now in `Answers.kt`, with nothing of Android in it, and tested on the build machine against six answers kept in
+    `vectors/app/`; the core's tests make each of those answers again and fail if its fields or their types differ. (3)
+    Four fuzz targets guided by coverage (`fuzz/`, `docs/maintaining.md`), which finding 57 listed as not run: box
+    proofs through the wallet's own reader with no `catch_unwind`, peer messages, the signing library's decoders, and
+    a pushed header with its proof of work. (4) `refresh-anchors.sh` does the first step of a release: for each network
+    it takes the header a day of blocks below the lowest height its nodes give, and writes it only if two nodes give
+    the same id and the same header (or, for a network with one node to ask, as testnet has, only when told to). It
+    commits nothing. **Tests:** `what_leaves_the_wallet_is_what_its_boxes_put_in_less_what_comes_back`,
+    `only_the_offer_box_a_token_fee_puts_back_is_not_a_payee` (both on `leaves_wallet` directly, with no wallet and
+    no node), `the_answers_the_app_reads_keep_the_fields_and_types_of_the_ones_it_is_tested_on`, and the app's eight
+    in `AnswersTest.kt`. The 150 tests the three crates had before pass unchanged over the split code.
+    Clippy clean; `cargo +1.89 check` clean. **Run:** `./gradlew testDebugUnitTest assembleDebug`: 8 of 8, both APKs
+    built. Each fuzz target for 100 s from its seed on the build machine (box proofs 7.0 million runs, peer messages
+    4.0 million, signed bytes 1.6 million, headers 0.5 million): no panic, and no proof accepted that says other than
+    the honest one. On the rig, one recipe at a time with nothing else running (`runs/2026-11-23-rig-after-split.txt`):
+    light-wallet, light-overlay and offline-payee PASS; store-forward FAIL and then PASS, the failure being the
+    recipe's own (it looked for "(added)" in the last of several tries, when the box had been added on an earlier one
+    and was proven on the last: it now looks for "proven unspent"); dishonest-payer INCONCLUSIVE twice, because the
+    nodes did not reorganise when joined again, which the roadmap names as the rig's fault: its part 1 ran through and
+    its part 2 says nothing either way. `./refresh-anchors.sh --check`: both mainnet nodes gave the same id at height 1922241 and headers that differ only
+    in `size` (220 and 221: each node's own count, no part of the header), which the script then learned to leave out
+    of the comparison; testnet's one node gave a header and the script refused to write on one source. **Not run:**
+    `refresh-anchors.sh` writing anything, or its comparison after that change (the first node stopped taking
+    connections), and so not the tests over a new checkpoint: the vectors in `vectors/` sit just above the present
+    one, and a checkpoint above them may want them refreshed (`docs/maintaining.md`); a reorganisation over the split
+    code (`undone`), for that reason;
+    a payment on mainnet or testnet with it; the app on a phone with `Answers.kt` (it compiles and its tests pass; no screen was looked at); the fuzz
+    targets for longer than that, in CI, or in the phone build; a fuzz target for the JSON of REST answers (those are
+    read in the middle of the requests that fetch them); the app's reading of a sync, a receipt, an offer list and
+    the wallet file, which is still in `MainActivity.kt` and untested.
+
+## 62. Six tests leaned on which header the release checkpoint was
+
+The first refresh by `./refresh-anchors.sh` (mainnet, 1,914,880 to 1,922,384; both nodes agreed, so the comparison
+finding 61 left unrun has now run and written) made six tests fail. None was a fault of the wallet; each had taken
+something from the checkpoint header that a new header does not have.
+
+- **A nonce mined for that header** (`tests.rs` `a_header_with_a_table_index_of_0_is_judged_not_a_panic`, and
+  `tachys-verify/tests/pow.rs`, which would have failed next, with the hit the reference node computed for it; and
+  `witness.rs` W5, whose three nonces are for headers made from it). The old header is now kept as
+  `vectors/header-1914880.json` and these tests read that, so the nonces, and the reference node's hit, stay good.
+- **A box id that moves with the checkpoint's height** (`wallet.rs`
+  `a_payment_after_one_given_up_spends_one_of_its_coins`, `witness.rs` W2). Both say "box selection alone takes the
+  big box"; the selector takes the greatest id first, and the small box (created a hundred blocks below the
+  checkpoint) had the smaller id only by chance. The big box is now one whose id is the greater.
+- **The checkpoint being an epoch's last block** (`forged_chain.rs`, two tests): 1,914,880 is 14960 * 128 and
+  1,922,384 is not, and the forged chains halve their difficulty at the block after the checkpoint, which the rule
+  allows only at an epoch's first. The tests' made-up checkpoint is now put on such a height. The wallet itself
+  does not ask this of a checkpoint (testnet's, 642,400, is not one either).
+
+**Tests:** none new; the six changed as above. **Run:** `cargo test --workspace --no-fail-fast` over the new
+mainnet checkpoint: 993 passed, 0 failed; clippy clean; `tachys version`: checkpoint at height 1922384, 1 day old.
+`tachys tips` on mainnet from an empty state directory: agreed with 8 peers on a tip at 1,923,113, linked to the new
+checkpoint by 719 headers.
+
+Testnet has one well-known node, and the script as finding 61 left it would write its header only on that node's
+word. It now also asks each network's explorer (`api.ergoplatform.com`, `api-testnet.ergoplatform.com`) for the id
+at the height and counts one that gives the same id as a source: the id is the hash of the header, which a new test
+holds both checkpoint files to (`the_id_each_release_checkpoint_gives_is_the_hash_of_its_header`). An explorer that
+does not answer is not counted; one with another id stops the refresh. `./refresh-anchors.sh testnet` (one network
+only, also new) then wrote testnet's checkpoint at 659,184 (from 642,400), the node and the explorer agreeing.
+Whether the node and the explorer are run apart from each other is not known to us: [UNVERIFIED].
+**Run:** `cargo test --workspace --no-fail-fast` over both new checkpoints: the tachys crates all pass (the new test
+among them); in the vendored codec one or two of its timing tests (`concurrent_readers_over_budget_*`,
+`read_frame_body_steady_slow_sender_survives_many_deadlines`) failed on each of three runs, on a machine whose load
+average was 9 to 11 from other work (they have failed so before, and passed on a quiet machine; they read no
+checkpoint). Clippy clean. `tachys tips --network testnet` from an empty state directory: agreed with 2 peers on a
+tip at 661,154, linked to the new checkpoint by 1960 headers.
+**Not run:** a second mainnet refresh (`--check` showed three sources agreeing at 1,922,393; nothing was written),
+which is what would show that no mainnet test leans on the header any more.

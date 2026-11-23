@@ -30,6 +30,14 @@ use crate::network::{Net, net, MAINNET, TESTNET};
 use crate::util::arg;
 
 
+/// The readers of bytes a node or a peer chooses, as the fuzz targets in `fuzz/` call them. Built only with
+/// `--cfg fuzzing`, which `cargo fuzz` sets: no other build has this module.
+#[cfg(fuzzing)]
+pub mod fuzzing {
+    /// A box proof walked and then verified, with no `catch_unwind`: a panic is a bound the walk missed.
+    pub fn box_proof(root: &[u8], proof: &[u8], keys: &[[u8; 32]]) -> Option<Vec<Option<Vec<u8>>>> { crate::proofs::lookup_unguarded(root, proof, keys) }
+}
+
 /// How a call ended and what it wrote. With `--json` among its arguments, `out` is the one JSON object.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Answer {

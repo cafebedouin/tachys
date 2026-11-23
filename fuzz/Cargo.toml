@@ -1,0 +1,51 @@
+[package]
+name = "tachys-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "CC0-1.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tachys = { path = "../crates/tachys-cli" }
+tachys-verify = { path = "../crates/tachys-verify" }
+ergo-p2p = { path = "../vendor/arkadianet-codec/ergo-p2p" }
+ergo-lib = { git = "https://github.com/ergoplatform/sigma-rust", rev = "688511dff3e3436dfdd6bd368e3eeef6f67d59e9", default-features = false, features = ["std", "json"] }
+ergotree-ir = { git = "https://github.com/ergoplatform/sigma-rust", rev = "688511dff3e3436dfdd6bd368e3eeef6f67d59e9" }
+ergo-chain-types = { git = "https://github.com/ergoplatform/sigma-rust", rev = "688511dff3e3436dfdd6bd368e3eeef6f67d59e9" }
+sigma-ser = { git = "https://github.com/ergoplatform/sigma-rust", rev = "688511dff3e3436dfdd6bd368e3eeef6f67d59e9" }
+
+# A workspace of its own: `cargo test --workspace` in the repository neither builds nor needs this (it wants a nightly
+# toolchain and cargo-fuzz).
+[workspace]
+
+[[bin]]
+name = "box_proof"
+path = "fuzz_targets/box_proof.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "peer_message"
+path = "fuzz_targets/peer_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "signed_bytes"
+path = "fuzz_targets/signed_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "header"
+path = "fuzz_targets/header.rs"
+test = false
+doc = false
+bench = false

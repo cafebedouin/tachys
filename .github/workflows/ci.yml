@@ -32,3 +32,27 @@ jobs:
           age=$(cargo run --locked -q -p tachys -- version --json | sed -n 's/.*"checkpoint_age_days":\([0-9]*\).*/\1/p')
           echo "checkpoint is $age days old"; test "$age" -lt 45
       - run: cargo install cargo-audit --locked && cargo audit
+
+  # the oldest Rust the crates say they build with (`rust-version`, and the README's "1.89 or newer")
+  oldest-rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked -p tachys -p tachys-verify -p tachys-net --all-targets
+
+  # the app must compile and pack, and read the core's answers as its tests say; without the core in it (android/build-core.sh)
+  app:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      # what the app makes of the core's answers, on the answers kept in vectors/app/ (which the core's tests hold it to)
+      - run: ./gradlew testDebugUnitTest assembleDebug
+        working-directory: android

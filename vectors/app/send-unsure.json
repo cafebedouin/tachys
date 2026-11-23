@@ -1,0 +1,25 @@
+{
+ "answer": {
+  "change": [
+   "8f7225c28d172fb45764fa9530036cb42acf50690f7e53670a7992474b05229d"
+  ],
+  "command": "wallet send",
+  "error": "send: the node did not answer (http://127.0.0.1:52879 answered 500). The payment may have gone out: it is kept as waiting, its coins are not counted, and the next sync settles it (sent again if it did not arrive; back in the wallet if it is not in a block after ten). Do not pay again until then",
+  "exit": 1,
+  "fee_nanoerg": 1100000,
+  "leaves_wallet_nanoerg": 1001100000,
+  "ok": false,
+  "outcome_unknown": true,
+  "payees": [
+   "9fwAsEewLQ9EogJyX3tJRrBx6rxNoW2bUQAjcmQfUHayQaHRriS"
+  ],
+  "receipt": [
+   "4d14c0bf0597629f5ec5a03e9f006dcf3c1c4c9d421618bf4b6e9b77ca6d7b62"
+  ],
+  "signed": true,
+  "tokens_out": {},
+  "tx": "31778ffbd149e1666349465ba08b40183ed74c5f03550d5c406ccee4f3af154e",
+  "v": 1
+ },
+ "code": 1
+}

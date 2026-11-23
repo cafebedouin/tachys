@@ -1,6 +1,6 @@
 [package]
 name = "tachys"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 # File::lock (the payments log) is in the standard library from 1.89
 rust-version = "1.89"
@@ -42,3 +42,7 @@ bs58 = { version = "0.5", features = ["check"] }
 # the peer protocol's codec, for tests that stand in for a node on this machine
 ergo-p2p = { path = "../../vendor/arkadianet-codec/ergo-p2p" }
 ergo-primitives = { path = "../../vendor/arkadianet-codec/ergo-primitives" }
+
+# `fuzzing` is the cfg `cargo fuzz` builds with (src/lib.rs, `fuzzing`); it is not a feature of this crate
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }

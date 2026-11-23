@@ -11,10 +11,13 @@ in a report or anywhere else. A wallet file can hold the seed phrase in plain te
 commit, the network, the command you ran, its JSON answer and exit code.
 
 What is supported: the newest commit on the main branch, built from source, and the newest release on this
-repository's Releases page. A release carries the Linux program, two APKs and `SHA256SUMS`, built by the
-maintainer on their own machine: there is no reproducible build and no build attestation yet, so the checksums
-show that a download is what was uploaded here, not what source it came from. The APKs are signed with the
-project's key; its certificate's SHA-256 is
+repository's Releases page. A release carries the Linux program, two APKs and `SHA256SUMS`. From v0.0.2 on the
+Linux program is built by this repository's release workflow from the tagged commit, and attested to it:
+`gh attestation verify FILE -R cafebedouin/tachys` shows which commit and workflow made a download (that is
+GitHub's word for its own runner, and not a reproducible build). The APKs are built by the maintainer on their own
+machine, with no attestation: for them, and for everything in v0.0.1, the checksums show that a download is what
+was uploaded here, not what source it came from. The APKs are signed with the project's key; its certificate's
+SHA-256 is
 
     6501129cab8edd4a7ea74a693ba77c16e1b1799ff966c191d794c3719d20ff7b
 

@@ -1,0 +1,416 @@
+The five rig recipes over the split wallet code (finding 61), release build of the working tree at 0.0.2, 2026-11-23.
+peeryard rig.sh, ergo-6.0.8.jar and rig/out/ergo-6.0.8-boxproof.jar. One recipe at a time, nothing else running on the
+machine. Box and transaction ids cut short, addresses left out, scratch paths replaced.
+
+light-wallet, light-overlay, offline-payee: PASS. store-forward: FAIL on the first run, on the recipe's own check (it
+looked for "(added)" in the last of several tries, and the box had been added on an earlier one, when it was only seen;
+the box was proven and every later step went through); PASS on the second, with the check on "proven unspent".
+dishonest-payer: INCONCLUSIVE twice: part 1 ran through; in part 2 the nodes did not reorganise after being joined
+again ("A kept its branch"), which is the rig's fault the roadmap names, and the harness counts nothing of such a run.
+
+==== light-wallet
+[rig] scratch: <scratch>/light-wallet
+[rig] chain preset current: blockInterval=2s minerRewardDelay=10
+[rig] genesis state digest for minerRewardDelay=10 derived from a probe start: c01a142d004a917b…
+[rig] java: openjdk version "21.0.13.1" 2026-11-17 (java, opts: -Xmx512m)
+[rig] effective configuration: <scratch>/light-wallet/out/effective.json ({"chain":"current","nodes":["A:ergo-6.0.8-boxproof.jar","B:ergo-6.0.8.jar"],"links":1})
+[rig] launched A (ns=ns_A ip=100.64.0.1 p2p=9021 rest=9052 kind=jvm jar=ergo-6.0.8-boxproof.jar pid=1591632)
+[rig] A pid=1591632 cpus_applied=0-11 gc=G1GC
+[rig] launched B (ns=ns_B ip=100.64.0.2 p2p=9021 rest=9052 kind=jvm jar=ergo-6.0.8.jar pid=1591696)
+[rig] B pid=1591696 cpus_applied=0-11 gc=G1GC
+[rig] A REST up
+[rig] B REST up
+[rig] bring-up: every link connected
+[rig] === handing off to hook: <bin>/tachys/rig/light-wallet.sh ===
+[tachys] waiting for A to reach height 20 and B to follow
+[tachys] A.h=21 B.h=17 SAME@17
+[tachys] checkpoint height 9, header version 3, peers 100.64.0.1:9021 100.64.0.2:9021 
+[tachys] 1. tip sync
+neighbour cost: 3 connections, 9 messages sent, 1.7 connection-seconds held (failures included), 3503 B received, 1.4 s wall
+  link from 100.64.0.1:9021: 2 header(s), 1374 B, 264 ms
+linked: 2 header(s) from height 9 up to the agreed chain, each with work above the floor and a step the difficulty rule allows (1374 B, 268 ms)
+verdict: Agreed
+tip: height 21 id ef91dd8eb1f174ef.. (4 s old)
+state root: 91e6607b3b27de2043408b373652f7c69386a9764683250e9d45d0e5c3b0b3e006
+[tachys] 2. payment from A's wallet, accepted by receipt over the peer protocol
+  tachys address: <address>
+  A paid 0.5 ERG, tx 57afde201ec84ad2..
+  fee script taken from the node's payment: 1005040004000e3510020414... (208 hex chars)
+  receipt (box id): 9fb27fa8e02ffbb8..
+    9fb27fa8e02ffbb8..  500000000 nanoERG, proven unspent at 27, confirmations 1 (added)
+  address <address>
+  balance 0.500000000 ERG in 1 boxes, proven at height 27
+  cost: 1 requests, 36 B sent, 366 B received
+[tachys] 3. the same request to the unpatched release node B
+  proof from p2p://100.64.0.2:9021: no box proof in time (does the peer carry the patch?)
+  NOT PROVEN by any node given
+[tachys] 4. how B treated the peer that sent the unknown message
+  B blacklisted peers: {"addresses":[]}
+  B log lines mentioning the message, a penalty or a ban:
+  after:   100.64.0.2:9021        ergoref 6.0.8 answered after 1756 ms, 443 B, 2 headers (2 pass), tip 28, announced 10 ids
+[tachys] 5. tachys pays 0.1 ERG back to A and finds its change
+  balance 0.500000000 ERG in 1 boxes, proven at height 33
+  cost: 2 requests, 36 B sent, 633 B received
+  note: height 33 is above the tip the peers agree on (32); the headers between came from this node alone
+  signed: tx d922797c7bfd79c9.. (1477 B as JSON), 1 inputs, 3 outputs
+  receipt for the payee (box ids to hand over): 629d9604bab7bf69..
+  change we will look for ourselves: 785835cfc9d4c477..
+  broadcast via http://127.0.0.1:9052: accepted, "d922797c7bfd79c9.."
+  payment d922797c7bfd79c9..: confirmed at height 41 or before
+    785835cfc9d4c477..  398900000 nanoERG, proven unspent at 41, confirmations 1 (added)
+  address <address>
+  balance 0.398900000 ERG in 1 boxes, proven at height 41
+  cost: 1 requests, 132 B sent, 948 B received
+[tachys] verdict: PASS
+[rig] HEALTH A ok launches=1 exits=0 oom=0 jvm_fatal=0 restart_lines=0
+[rig] HEALTH B ok launches=1 exits=0 oom=0 jvm_fatal=0 restart_lines=0
+[rig] HEALTH: OK nodes=2
+[rig] COSTS no recovery events
+[rig] === hook done (verdict: PASS) ===
+[rig] all nodes stopped
+
+==== light-overlay
+[rig] scratch: <scratch>/light-overlay
+[rig] chain preset current: blockInterval=2s minerRewardDelay=10
+[rig] genesis state digest for minerRewardDelay=10 derived from a probe start: c01a142d004a917b…
+[rig] java: openjdk version "21.0.13.1" 2026-11-17 (java, opts: -Xmx512m)
+[rig] effective configuration: <scratch>/light-overlay/out/effective.json ({"chain":"current","nodes":["A:ergo-6.0.8.jar","T1:ergo-6.0.8.jar","T2:ergo-6.0.8.jar"],"links":2})
+[rig] launched A (ns=ns_A ip=100.64.0.1 p2p=9021 rest=9052 kind=jvm jar=ergo-6.0.8.jar pid=1595130)
+[rig] A pid=1595130 cpus_applied=0-11 gc=G1GC
+[rig] A REST up
+[rig] bring-up: every link connected
+[rig] === handing off to hook: <bin>/tachys/rig/light-overlay.sh ===
+[overlay] A at height 20; A is 10.9.20.1 to T1; T1 is 10.9.21.1 to T2
+[overlay] 0. control: T2 has no route to the full node
+    10.9.20.1:9021         -- connect: Network is unreachable (os error 101) (held 0 ms)
+  no peer pushed a usable tip
+  verdict: NOT TRUSTED (no tip heard)
+[overlay] 1. T1 syncs from the full node
+  linked: 2 header(s) from height 8 up to the agreed chain, each with work above the floor and a step the difficulty rule allows (1862 B, 258 ms)
+  verdict: Agreed
+  tip: height 20 id 60c3cd1b13deca17.. (5 s old)
+  state root: f5dc6d55595e58ec9cf3b6481d71b5b76aafe956aa5b9b24f0fa872b838ecbfb06
+[overlay] 2. T1 serves; T2 syncs from T1 only
+  neighbour cost: 1 connections, 0 messages sent, 0.3 connection-seconds held (failures included), 2876 B received, 0.3 s wall
+    link from 10.9.21.1:9030: 2 header(s), 3794 B, 253 ms
+  linked: 2 header(s) from height 8 up to the agreed chain, each with work above the floor and a step the difficulty rule allows (3794 B, 256 ms)
+  verdict: Agreed
+  tip: height 20 id 60c3cd1b13deca17.. (10 s old)
+  state root: f5dc6d55595e58ec9cf3b6481d71b5b76aafe956aa5b9b24f0fa872b838ecbfb06
+  T2's tip equals T1's: 20 60c3cd1b13deca17..
+  and the full node has that header at that height: yes
+  T1: tachys serve (devnet): 13 headers 8..20 on 10.9.21.1:9030 for 12 s
+  T1: served: 2 connections, 2 sync pushes, 1 header requests (2 headers), 0 parcels taken, 0 proofs relayed, 0 reloads, 6670 B sent
+[overlay] 3. control: T1 serves a chain with one broken header; T2 must refuse it
+  tip at height 20 (difficulty 1) not agreed on: Short { have: 6, want: 10 }
+  
+  1 peers pushed a tip; 0 network groups have reached the agreed tip; off-chain: []
+  neighbour cost: 2 connections, 4 messages sent, 0.5 connection-seconds held (failures included), 6820 B received, 0.5 s wall
+  verdict: NOT TRUSTED (height 20: Short { have: 6, want: 10 })
+  T1: serving a TAMPERED chain (control): header at height 14 has a flipped nonce
+  T1: tachys serve (devnet): 13 headers 8..20 on 10.9.21.1:9030 for 12 s
+  T1: served: 2 connections, 2 sync pushes, 4 header requests (4 headers), 0 parcels taken, 0 proofs relayed, 0 reloads, 6820 B sent
+[overlay] 4. a serving wallet that keeps syncing serves a tip that moves
+  T2 saw height 20 from T1, then height 37 after T1 had synced three more times (node is at 39)
+[overlay] verdict: PASS
+[rig] HEALTH A ok launches=1 exits=0 oom=0 jvm_fatal=0 restart_lines=0
+[rig] HEALTH: OK nodes=1
+[rig] COSTS no recovery events
+[rig] === hook done (verdict: PASS) ===
+[rig] all nodes stopped
+
+==== offline-payee
+[rig] scratch: <scratch>/offline-payee
+[rig] chain preset current: blockInterval=2s minerRewardDelay=10
+[rig] genesis state digest for minerRewardDelay=10 derived from a probe start: c01a142d004a917b…
+[rig] java: openjdk version "21.0.13.1" 2026-11-17 (java, opts: -Xmx512m)
+[rig] effective configuration: <scratch>/offline-payee/out/effective.json ({"chain":"current","nodes":["A:ergo-6.0.8-boxproof.jar","T1:ergo-6.0.8-boxproof.jar","T2:ergo-6.0.8-boxproof.jar","T3:ergo-6.0.8-boxproof.jar"],"links":3})
+[rig] launched A (ns=ns_A ip=100.64.0.1 p2p=9021 rest=9052 kind=jvm jar=ergo-6.0.8-boxproof.jar pid=1598192)
+[rig] A pid=1598192 cpus_applied=0-11 gc=G1GC
+[rig] A REST up
+[rig] bring-up: every link connected
+[rig] === handing off to hook: <bin>/tachys/rig/offline-payee.sh ===
+[op] 1. the payer wallet is funded and proves its box (online, from the node)
+  payer: balance 0.500000000 ERG in 1 boxes, proven at height 27
+[op] 2. the relaying wallet syncs and serves, with proof relay on
+[op] 3. the payee has no route to the node; it syncs from the relaying wallet and makes an address
+  payee -> node directly: verdict: NOT TRUSTED (no tip heard)
+  verdict: Agreed
+  tip: height 28 id 333e1552f5dd8ecf.. (8 s old)
+[op] 4. the payer pays the payee 0.1 ERG, submitting over the peer protocol, and gives it the receipt
+  receipt: e1644d326ba72256..
+    a7a868526a62243e.. delivered on request (2 messages sent, 1064 ms held)
+  outbox done: 1 submitted, 0 refused
+  the receipt box is on chain
+[op] 5. the payee checks the receipt through the relaying wallet
+  node is 5 block(s) past the agreed tip; fetched those headers by id over the peer protocol (linked, work-checked)
+    e1644d326ba72256..  100000000 nanoERG, seen unspent at 33, above the tip the peers agree on (28): one source, confirmations 0 (added)
+  address <address>
+  balance 0.100000000 ERG in 1 boxes, proven at height 33
+  cost: 6 requests, 36 B sent, 11666 B received
+  note: height 33 is above the tip the peers agree on (28); the headers between came from this node alone
+[op] 6. control: a made-up receipt asked through the relay is proven absent
+  node is 1 block(s) past the agreed tip; fetched those headers by id over the peer protocol (linked, work-checked)
+    0000000000000000..  ABSENT at height 34: not accepted
+  address <address>
+  relay: tachys serve (devnet): 20 headers 9..28 on 10.9.22.1:9030 for 150 s
+  relaying wallet stopped: 0 listener(s) left on its port
+[op] 7. control: a serving wallet without relay on gives the payee nothing
+  proof from p2p://10.9.22.1:9030: no box proof in time (does the peer carry the patch?)
+  NOT PROVEN by any node given
+  no-relay: tachys serve (devnet): 20 headers 9..28 on 10.9.22.1:9030 for 14 s
+  no-relay: served: 1 connections, 1 sync pushes, 0 header requests (0 headers), 0 parcels taken, 0 proofs relayed, 0 reloads, 4416 B sent
+[op] verdict: PASS
+[rig] HEALTH A ok launches=1 exits=0 oom=0 jvm_fatal=0 restart_lines=0
+[rig] HEALTH: OK nodes=1
+[rig] COSTS no recovery events
+[rig] === hook done (verdict: PASS) ===
+[rig] all nodes stopped
+
+==== store-forward, first run
+[rig] scratch: <scratch>/store-forward
+[rig] chain preset current: blockInterval=2s minerRewardDelay=10
+[rig] genesis state digest for minerRewardDelay=10 derived from a probe start: c01a142d004a917b…
+[rig] java: openjdk version "21.0.13.1" 2026-11-17 (java, opts: -Xmx512m)
+[rig] effective configuration: <scratch>/store-forward/out/effective.json ({"chain":"current","nodes":["A:ergo-6.0.8-boxproof.jar","T1:ergo-6.0.8-boxproof.jar","T2:ergo-6.0.8-boxproof.jar"],"links":3})
+[rig] launched A (ns=ns_A ip=100.64.0.1 p2p=9021 rest=9052 kind=jvm jar=ergo-6.0.8-boxproof.jar pid=1600805)
+[rig] A pid=1600805 cpus_applied=0-11 gc=G1GC
+[rig] A REST up
+[rig] bring-up: every link connected
+[rig] === handing off to hook: <bin>/tachys/rig/store-forward.sh ===
+[sf] 1. online: the payer wallet is created, paid by the node's wallet, and proves its box
+  balance 0.500000000 ERG in 1 boxes, proven at height 34
+  cost: 1 requests, 36 B sent, 366 B received
+[sf] FAIL: payer could not prove its funding box
+[sf] 2. the payer loses its connection to the node
+[rig] partition A<->T2 (100% loss)
+  payer -> node: verdict: NOT TRUSTED (no tip heard)
+[sf] 3. offline, the payer signs 0.1 ERG to the node's address and writes a parcel
+  signed: tx 14afe7c2665b2f46.. (1477 B as JSON), 1 inputs, 3 outputs
+  receipt for the payee (box ids to hand over): a493d55a0146ed44..
+  change we will look for ourselves: 807d739604948a6e..
+  parcel written to <scratch>/store-forward/tachys/parcel.json (291 B of transaction); hand it to any wallet that can reach the network
+[sf] 4. the carrier wallet syncs, serves, and takes the parcel from the payer
+  handed to 10.9.21.1:9030: it acknowledged tx 14afe7c2665b2f46.. (2250 B)
+  carrier: tachys serve (devnet): 10 headers 27..36 on 10.9.21.1:9030 for 10 s
+  carrier: served: 1 connections, 1 sync pushes, 0 header requests (0 headers), 1 parcels taken, 0 proofs relayed, 0 reloads, 2216 B sent
+[sf] 4b. controls: a carrier must refuse bad parcels before anything reaches the node
+  handed to 10.9.21.1:9030: it acknowledged tx 14afe7c2665b2f46.. (675 B)
+  [badproof] outbox: 1 payment(s) to submit to 10.9.20.1:9021
+  [badproof]   14afe7c2665b2f46.. REFUSED before submission: spending proof or balance check failed: ReducedToFalse(0, VerificationResult { result: false, cost: 0, diag: ReductionDiagnosticInfo { env: Env { store: {} }, pretty_printed_expr: None } }); dropped
+  [badproof] outbox done: 0 submitted, 1 refused
+  handed to 10.9.21.1:9030: it acknowledged tx da93db84470e7314.. (675 B)
+  [badinput] outbox: 1 payment(s) to submit to 10.9.20.1:9021
+  [badinput]   da93db84470e7314.. REFUSED before submission: input 20b27024e151c049 is not an unspent box at height 47; dropped
+  [badinput] outbox done: 0 submitted, 1 refused
+  node mempool holds the payment: no
+[sf] 5. the carrier submits what it carries to the node over the peer protocol
+  outbox: 1 payment(s) to submit to 10.9.20.1:9021
+    14afe7c2665b2f46.. checked: inputs proven unspent at height 48, spending proofs verify
+    14afe7c2665b2f46.. delivered on request (2 messages sent, 1064 ms held)
+  outbox done: 1 submitted, 0 refused
+[sf] 6. the payment confirms
+  node's wallet sees tx 14afe7c2665b2f46.. with 2 confirmation(s)
+[sf] 6b. control: the same parcel handed over again after it confirmed is refused as already on chain
+  handed to 10.9.21.1:9030: it acknowledged tx 14afe7c2665b2f46.. (2250 B)
+  [replay] outbox: 1 payment(s) to submit to 10.9.20.1:9021
+  [replay] node is 1 block(s) past the agreed tip; fetched those headers by id over the peer protocol (linked, work-checked)
+  [replay]   14afe7c2665b2f46.. could not be checked: already on chain (an output exists at height 56); kept
+  [replay] outbox done: 0 submitted, 0 refused
+[sf] 7. the payer reconnects and finds its change without asking for it by address
+[rig] heal A<->T2
+  payment 14afe7c2665b2f46..: confirmed at height 57 or before
+    807d739604948a6e..  398900000 nanoERG, proven unspent at 57, confirmations 1 (added)
+  address <address>
+  balance 0.398900000 ERG in 1 boxes, proven at height 57
+  cost: 1 requests, 132 B sent, 1184 B received
+[sf] verdict: FAIL
+[rig] HEALTH A ok launches=1 exits=0 oom=0 jvm_fatal=0 restart_lines=0
+[rig] HEALTH: OK nodes=1
+[rig] CAUSE NODE_DOWN: T1[down] headers=-:- full=-:- peers=- mining=-; T2[down] headers=-:- full=-:- peers=- mining=-
+[rig] COSTS heal A-T2: censored endpoint_down
+[rig] === hook done (verdict: FAIL) ===
+[rig] all nodes stopped
+
+==== store-forward, second run
+[rig] scratch: <scratch>/store-forward
+[rig] chain preset current: blockInterval=2s minerRewardDelay=10
+[rig] genesis state digest for minerRewardDelay=10 derived from a probe start: c01a142d004a917b…
+[rig] java: openjdk version "21.0.13.1" 2026-11-17 (java, opts: -Xmx512m)
+[rig] effective configuration: <scratch>/store-forward/out/effective.json ({"chain":"current","nodes":["A:ergo-6.0.8-boxproof.jar","T1:ergo-6.0.8-boxproof.jar","T2:ergo-6.0.8-boxproof.jar"],"links":3})
+[rig] launched A (ns=ns_A ip=100.64.0.1 p2p=9021 rest=9052 kind=jvm jar=ergo-6.0.8-boxproof.jar pid=1624604)
+[rig] A pid=1624604 cpus_applied=0-11 gc=G1GC
+[rig] A REST up
+[rig] bring-up: every link connected
+[rig] === handing off to hook: <bin>/tachys/rig/store-forward.sh ===
+[sf] 1. online: the payer wallet is created, paid by the node's wallet, and proves its box
+  balance 0.500000000 ERG in 1 boxes, proven at height 28
+  cost: 1 requests, 36 B sent, 400 B received
+[sf] 2. the payer loses its connection to the node
+[rig] partition A<->T2 (100% loss)
+  payer -> node: verdict: NOT TRUSTED (no tip heard)
+[sf] 3. offline, the payer signs 0.1 ERG to the node's address and writes a parcel
+  signed: tx 5f46a0213bdae8ed.. (1477 B as JSON), 1 inputs, 3 outputs
+  receipt for the payee (box ids to hand over): bc6953ffd1420cb8..
+  change we will look for ourselves: e4e1b73c897b9046..
+  parcel written to <scratch>/store-forward/tachys/parcel.json (291 B of transaction); hand it to any wallet that can reach the network
+[sf] 4. the carrier wallet syncs, serves, and takes the parcel from the payer
+  handed to 10.9.21.1:9030: it acknowledged tx 5f46a0213bdae8ed.. (2250 B)
+  carrier: tachys serve (devnet): 10 headers 21..30 on 10.9.21.1:9030 for 10 s
+  carrier: served: 1 connections, 1 sync pushes, 0 header requests (0 headers), 1 parcels taken, 0 proofs relayed, 0 reloads, 2216 B sent
+[sf] 4b. controls: a carrier must refuse bad parcels before anything reaches the node
+  handed to 10.9.21.1:9030: it acknowledged tx 5f46a0213bdae8ed.. (675 B)
+  [badproof] outbox: 1 payment(s) to submit to 10.9.20.1:9021
+  [badproof]   5f46a0213bdae8ed.. REFUSED before submission: spending proof or balance check failed: ReducedToFalse(0, VerificationResult { result: false, cost: 0, diag: ReductionDiagnosticInfo { env: Env { store: {} }, pretty_printed_expr: None } }); dropped
+  [badproof] outbox done: 0 submitted, 1 refused
+  handed to 10.9.21.1:9030: it acknowledged tx 7b96c93ae9459239.. (675 B)
+  [badinput] outbox: 1 payment(s) to submit to 10.9.20.1:9021
+  [badinput] node is 1 block(s) past the agreed tip; fetched those headers by id over the peer protocol (linked, work-checked)
+  [badinput]   7b96c93ae9459239.. could not be checked: input a6d4eb8b19cffbac is not an unspent box at height 41; kept
+  [badinput] outbox done: 0 submitted, 0 refused
+  [badinput] outbox: 1 payment(s) to submit to 10.9.20.1:9021
+  [badinput]   7b96c93ae9459239.. REFUSED before submission: input a6d4eb8b19cffbac is not an unspent box at height 43; dropped
+  [badinput] outbox done: 0 submitted, 1 refused
+  node mempool holds the payment: no
+[sf] 5. the carrier submits what it carries to the node over the peer protocol
+  outbox: 1 payment(s) to submit to 10.9.20.1:9021
+    5f46a0213bdae8ed.. checked: inputs proven unspent at height 44, spending proofs verify
+    5f46a0213bdae8ed.. delivered on request (2 messages sent, 1065 ms held)
+  outbox done: 1 submitted, 0 refused
+[sf] 6. the payment confirms
+  node's wallet sees tx 5f46a0213bdae8ed.. with 1 confirmation(s)
+[sf] 6b. control: the same parcel handed over again after it confirmed is refused as already on chain
+  handed to 10.9.21.1:9030: it acknowledged tx 5f46a0213bdae8ed.. (2250 B)
+  [replay] outbox: 1 payment(s) to submit to 10.9.20.1:9021
+  [replay] node is 1 block(s) past the agreed tip; fetched those headers by id over the peer protocol (linked, work-checked)
+  [replay]   5f46a0213bdae8ed.. could not be checked: already on chain (an output exists at height 51); kept
+  [replay] outbox done: 0 submitted, 0 refused
+[sf] 7. the payer reconnects and finds its change without asking for it by address
+[rig] heal A<->T2
+  payment 5f46a0213bdae8ed..: confirmed at height 52 or before
+    e4e1b73c897b9046..  398900000 nanoERG, proven unspent at 52, confirmations 1 (added)
+  address <address>
+  balance 0.398900000 ERG in 1 boxes, proven at height 52
+  cost: 1 requests, 132 B sent, 1147 B received
+[sf] verdict: PASS
+[rig] HEALTH A ok launches=1 exits=0 oom=0 jvm_fatal=0 restart_lines=0
+[rig] HEALTH: OK nodes=1
+[rig] COSTS heal A-T2: censored endpoint_down
+[rig] === hook done (verdict: PASS) ===
+[rig] all nodes stopped
+
+==== dishonest-payer, second run
+[rig] scratch: <scratch>/dishonest-payer
+[rig] chain preset current: blockInterval=2s minerRewardDelay=10
+[rig] genesis state digest for minerRewardDelay=10 derived from a probe start: c01a142d004a917b…
+[rig] java: openjdk version "21.0.13.1" 2026-11-17 (java, opts: -Xmx512m)
+[rig] effective configuration: <scratch>/dishonest-payer/out/effective.json ({"chain":"current","nodes":["A:ergo-6.0.8-boxproof.jar","B:ergo-6.0.8-boxproof.jar","T1:ergo-6.0.8-boxproof.jar","T2:ergo-6.0.8-boxproof.jar"],"links":3})
+[rig] launched A (ns=ns_A ip=100.64.0.1 p2p=9021 rest=9052 kind=jvm jar=ergo-6.0.8-boxproof.jar pid=1627970)
+[rig] A pid=1627970 cpus_applied=0-11 gc=G1GC
+[rig] launched B (ns=ns_B ip=100.64.0.2 p2p=9021 rest=9052 kind=jvm jar=ergo-6.0.8-boxproof.jar pid=1628034)
+[rig] B pid=1628034 cpus_applied=0-11 gc=G1GC
+[rig] A REST up
+[rig] B REST up
+[rig] bring-up: every link connected
+[rig] === handing off to hook: <bin>/tachys/rig/dishonest-payer.sh ===
+[dp] 0. setup: a payee and a payer; the fee output's script from the payment that funds the payer
+  payee <address>
+[dp] 1. part 1: the payer proves its box; a second copy of its wallet does too, through B
+  payer: {"checked":[{"state":"proven","confirmations":1,"height":33}]}
+  copy:  {"checked":[{"state":"proven","confirmations":1,"height":29}]}
+[dp] 2. the payer signs 0.1 ERG to the payee offline and hands over the signed payment; the payee keeps it
+  receipt 6762407408f641a5..
+  payee: {"ok":true,"promised":["6762407408f641a5.."],"nanoerg":100000000}
+[dp] 3. the copy spends the same box first: 0.2 ERG to A's address, through B
+  B said "c75e979e0d3cf389.."
+  A: the payer's box is spent
+[dp] 4. the payee asks about its receipt (what accept and wait --receipt read)
+  payee: {"checked":[{"state":"expected","confirmations":null,"height":75}]}
+  [observe] receipt state: expected
+[dp] 5. the payee tries to submit the payment it holds, and syncs
+  outbox: outbox: 1 payment(s) to submit to 10.9.21.1:9021
+  outbox: node is 1 block(s) past the agreed tip; fetched those headers by id over the peer protocol (linked, work-checked)
+  outbox:   cd0f36dc0878cf1f.. could not be checked: input 6cd9715c8b8cf880 is not an unspent box at height 77; kept
+  outbox: outbox done: 0 submitted, 0 refused
+  payee dir: <scratch>/dishonest-payer/tachys/payee/outbox:
+  payee dir: cd0f36dc0878cf1f...json
+  status:   6762407408f641a5..  expected from our own payment, not on chain yet at 78
+  status:   6cd9715c8b8cf880..  ABSENT at height 78: not accepted
+  status: address <address>
+  status: balance 0.000000000 ERG in 0 boxes, proven at height 78
+  status: cost: 1 requests, 68 B sent, 720 B received
+  [observe] receipt state after the payee's own attempt: expected
+[dp] 6. part 2: a fresh payer and a copy of it, funded
+  payer: {"checked":[{"state":"proven","confirmations":1,"height":90}]}
+  copy:  {"checked":[{"state":"proven","confirmations":0,"height":86}]}
+[dp] 7. A and B are cut apart; the payer pays the payee 0.1 ERG through A
+[rig] relink: link A<->T1 not connected; re-dialled T1 from A
+[rig] relink: link B<->T2 not connected; re-dialled T2 from B
+[rig] relink: link A<->T1 not connected; re-dialled T1 from A
+[rig] relink: link B<->T2 not connected; re-dialled T2 from B
+[rig] relink: link A<->T1 not connected; re-dialled T1 from A
+[rig] relink: link B<->T2 not connected; re-dialled T2 from B
+[rig] relink: link A<->T1 not connected; re-dialled T1 from A
+[rig] relink: link B<->T2 not connected; re-dialled T2 from B
+[rig] relink: link A<->T1 not connected; re-dialled T1 from A
+[rig] relink: link B<->T2 not connected; re-dialled T2 from B
+[rig] relink: a link of A B is still not connected after the re-dials
+  before the split: A 240, B 235, SAME@235:4f786256b36
+[rig] partition A<->B (100% loss) (split for the reorganisation)
+  receipt a4b74819380c8847..; A said "e491a5c743202799.."
+  A: the receipt box is on chain by height 243
+  payee: {"checked":[{"state":"proven","confirmations":1,"height":293}]}
+  [observe] accept would answer accepted: proven with 1 confirmation(s)
+[dp] 8. A stops mining; the copy spends the same box through B, which mines a longer branch
+[mine] stop_mining(A)
+[rig] launched A (ns=ns_A ip=100.64.0.1 p2p=9021 rest=9052 kind=jvm jar=ergo-6.0.8-boxproof.jar pid=1638863)
+[rig] A pid=1638863 cpus_applied=0-11 gc=G1GC
+[rig] A REST up
+[rig] relaunch A: stop 0.5s, full height 293 before the stop, 293 after the reload
+[mine] start_mining(B poll=2s)
+[rig] launched B (ns=ns_B ip=100.64.0.2 p2p=9021 rest=9052 kind=jvm jar=ergo-6.0.8-boxproof.jar pid=1639208)
+[rig] B pid=1639208 cpus_applied=0-11 gc=G1GC
+[rig] B REST up
+[rig] relaunch B: stop 0.5s, full height 235 before the stop, 235 after the reload
+  B said "64cfa25f9afac6f1.."
+  heights: A 293, B 357
+[dp] 9. A and B are joined again; A takes B's longer chain
+[rig] heal A<->B (rejoin)
+[rig] relink: link A<->T1 not connected; re-dialled T1 from A
+[rig] relink: link B<->T2 not connected; re-dialled T2 from B
+[rig] relink: link A<->T1 not connected; re-dialled T1 from A
+[rig] relink: link B<->T2 not connected; re-dialled T2 from B
+[rig] relink: link A<->T1 not connected; re-dialled T1 from A
+[rig] relink: link B<->T2 not connected; re-dialled T2 from B
+[rig] relink: link A<->T1 not connected; re-dialled T1 from A
+[rig] relink: link B<->T2 not connected; re-dialled T2 from B
+[rig] relink: link A<->T1 not connected; re-dialled T1 from A
+[rig] relink: link B<->T2 not connected; re-dialled T2 from B
+[rig] relink: link A<->T1 not connected; re-dialled T1 from A
+[rig] relink: link B<->T2 not connected; re-dialled T2 from B
+[rig] relink: link A<->T1 not connected; re-dialled T1 from A
+[rig] relink: link B<->T2 not connected; re-dialled T2 from B
+[rig] relink: link A<->T1 not connected; re-dialled T1 from A
+[rig] relink: link B<->T2 not connected; re-dialled T2 from B
+[rig] relink: a link of A B is still not connected after the re-dials
+  DIFF@293:A=05f5e4827ef3062e..:B=683806c205fbcf20..; A: the receipt box is still unspent; the payer's box is spent
+[rig] HARNESS-FAIL the reorganisation did not happen: A kept its branch
+[dp] 10. the payee asks about the receipt it had accepted
+  payee: {"checked":[{"state":"proven","confirmations":1,"height":293}]}
+  [observe] receipt state after the reorganisation: proven (undone if the block it was confirmed under is within the payee's stored headers, spent if deeper)
+  status:   a4b74819380c8847..  100000000 nanoERG, proven unspent at 293, confirmations 1
+  status:   6762407408f641a5..  expected from our own payment, not on chain yet at 293
+  status:   6cd9715c8b8cf880..  ABSENT at height 293: not accepted
+  status: address <address>
+  status: balance 0.100000000 ERG in 1 boxes, proven at height 293
+  status: cost: 1 requests, 100 B sent, 1210 B received
+[dp] verdict: INCONCLUSIVE
+[rig] HEALTH A ok launches=2 exits=0 oom=0 jvm_fatal=0 restart_lines=0
+[rig] HEALTH B ok launches=2 exits=0 oom=0 jvm_fatal=0 restart_lines=0
+[rig] HEALTH: OK nodes=2
+[rig] the harness failed 1 time(s); verdict INCONCLUSIVE -> INCONCLUSIVE; any PASS line above does not count
+[rig] CAUSE (hook) HARNESS: the reorganisation did not happen: A kept its branch
+[rig] CAUSE NODE_DOWN: T1[down] headers=-:- full=-:- peers=- mining=-; T2[down] headers=-:- full=-:- peers=- mining=-
+[rig] COSTS relaunch A (mining=false poll=cfg): censored next_event; relaunch B (mining=true poll=2s): censored next_event; heal A-B (rejoin): censored never_agreed
+[rig] === hook done (verdict: INCONCLUSIVE) ===
+[rig] all nodes stopped

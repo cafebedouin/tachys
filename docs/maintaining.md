@@ -15,10 +15,11 @@ call this one. Written for one person.
    sixty), more on testnet (3.7 MB at seven days). The floor's halving makes an old checkpoint weaker, and the
    download makes it dearer to start from: a release should carry one a few days old. Nothing breaks when a
    checkpoint is old: `tachys version` and every `tips` answer say its age (`checkpoint_age_days`), and `tips` warns
-   past sixty days. **A build is good for sixty days from its checkpoint; thirty is better.** To refresh: take a header at least a day behind the tip from a node you run or trust
+   past sixty days. **A build is good for sixty days from its checkpoint; thirty is better.** To refresh: `./refresh-anchors.sh` does what follows for both networks and leaves the commit to you; by hand, take a header at least a day behind the tip from a node you run or trust
    (`GET /blocks/at/HEIGHT`, then `GET /blocks/ID/header`), check its id on a second source, and replace the file
-   with that JSON. `cargo test --workspace` must still pass (the test vectors are above the old checkpoint; if the
-   new one is above them, the vectors need refreshing too: `crates/tachys-verify/tests/`).
+   with that JSON. `cargo test --workspace` must still pass. No test leans on which header the
+   checkpoint is (finding 62: the tests that needed one fixed header read `vectors/header-1914880.json`), so a
+   failure after a refresh is to be read, not expected.
 2. **The seed lists** (`seeds-mainnet.txt`, `seeds-testnet.txt`, and the copies the app ships in
    `android/app/src/main/assets/`, which must be identical: CI compares them). Only the first sixteen to
    twenty-four lines are tried. Put peers that answer at the top; `tachys sync --save DIR` shows who does.
@@ -46,8 +47,28 @@ call this one. Written for one person.
   hand (`./gradlew assembleRelease -PtachysIdSuffix=.test` installs a copy beside the real one).
 - **The launcher icons** are generated from `img/tachys-logo.jpg` by `android/make-icons.py` and checked in.
 
+## Fuzzing
+
+`fuzz/` is a crate of its own (not in the workspace: it wants a nightly toolchain and `cargo install cargo-fuzz`). Its
+four targets take the bytes a node or a peer chooses: `box_proof` (the wallet's own reader of a box proof, with no
+`catch_unwind`, held to what the honest proof says), `peer_message` (the vendored codec's decoders), `signed_bytes`
+(the signing library's transaction, box and signing-request decoders) and `header` (a pushed header and its proof of
+work). From the repository's root:
+
+```
+cd fuzz && cargo +nightly fuzz run box_proof corpus/box_proof seeds/box_proof -- -max_total_time=600
+```
+
+`seeds/` is tracked (an honest input for each target); `corpus/` and `artifacts/` are not. A crash is written to
+`fuzz/artifacts/TARGET/`: it is a finding, and its input becomes a test. Run them before a release and after moving
+sigma-rust or the codec.
+
 ## Changing what programs rely on
 
+- **The answers the app reads** are kept in `vectors/app/`, and held from both sides: the core's tests make each
+  again and fail if a field of one is renamed, retyped or gone (`crates/tachys-cli/tests/cli.rs`), and the app's
+  tests read them as the app does (`android/app/src/test`, `./gradlew testDebugUnitTest`). If the core's test fails on
+  a change that is meant, it prints the new answer: put it in the file, and make the app's tests pass on it.
 - **JSON answers** carry `v` (now 1). Adding a field is free. Renaming, retyping or removing one, or changing what
   a `code` means, is a new `v`: say so in a finding, change `out::V`, and keep the test that holds the agent
   answers' field names (`crates/tachys-cli/tests/cli.rs`) in step.
@@ -60,13 +81,37 @@ call this one. Written for one person.
 
 ## Releasing
 
-A release is a tag on a commit whose tests pass, with a checkpoint under a week old. It carries, built from that
-commit: the two APKs (`android/build-core.sh`, then `./gradlew assembleRelease` with the release key; the key and
-its password are the maintainer's and are nowhere in the repository: whoever loses the key can no longer update
-an installed app), the Linux x86_64 program (`cargo build --release --locked -p tachys` with the path remapping
-`android/build-core.sh` uses, stripped; it needs glibc 2.34 or newer), and `SHA256SUMS` over all of them. Check
-that `strings` finds no build-machine path in any of them. Tag the publication `v0.0.1`; tag again at each checkpoint refresh. What changed is the findings
-added to `docs/research/findings.md` since the last tag.
+A release is made once a month, and no oftener by plan: a tag on a commit whose tests pass, with a checkpoint
+refreshed for it (under a week old). A build is good for sixty days from its checkpoint, so a month between releases
+leaves a month in hand; CI's weekly run fails once the checkpoint on the main branch is 45 days old.
+What changed is the findings added to `docs/research/findings.md` since the last tag.
+
+1. Refresh the checkpoint (`./refresh-anchors.sh`, which fetches, compares its sources (each network's well-known nodes, and its
+   explorer for the id; two that agree are needed) and writes the two files, and commits nothing; `--check` writes
+   nothing, and `mainnet` or `testnet` does one network: read what it says and `git diff anchors/`; the rules are above), set the version (`crates/*/Cargo.toml`, the three alike, then any `cargo` command
+   to bring `Cargo.lock` along; `versionCode` and `versionName` in `android/app/build.gradle.kts`), commit, push,
+   and wait for CI.
+2. Tag that commit `vX.Y.Z` and push the tag. `.github/workflows/release.yml` then runs the wallet's tests, builds
+   the Linux x86_64 program from the tagged commit (`build-linux.sh`: the path remapping `android/build-core.sh`
+   uses, stripped, no build-machine path left in it), refuses if the tag is not the version the program says or the
+   checkpoint is a week old, attests the program to that commit and workflow, and opens a **draft** release with the
+   program and `SHA256SUMS`. Nothing is public yet.
+3. Build the two APKs on your own machine (`android/build-core.sh`, then `./gradlew assembleRelease` with the
+   release key; the key and its password are the maintainer's and are nowhere in the repository or on GitHub:
+   whoever loses the key can no longer update an installed app). Name them
+   `tachys-X.Y.Z-android-arm64-v8a.apk` and `tachys-X.Y.Z-android-armeabi-v7a.apk`, and add them to the draft:
+
+   ```
+   gh release download vX.Y.Z -p SHA256SUMS
+   sha256sum tachys-X.Y.Z-android-*.apk >> SHA256SUMS
+   gh release upload vX.Y.Z tachys-X.Y.Z-android-*.apk SHA256SUMS --clobber
+   ```
+
+4. Read the draft's notes, check `gh attestation verify tachys-X.Y.Z-linux-x86_64 -R OWNER/REPO` on the program
+   downloaded from it, then publish: `gh release edit vX.Y.Z --draft=false`.
+
+`./build-linux.sh` builds the same program on any Linux machine (into `target/dist/`); it is not expected to be
+the same bytes as the workflow's.
 
 ## What comes in from outside
 

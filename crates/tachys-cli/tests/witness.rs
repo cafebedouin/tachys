@@ -99,9 +99,11 @@ fn filler(tag: u32) -> Vec<u8> { tag.to_be_bytes().iter().copied().cycle().take(
 fn template() -> Header { serde_json::from_str(include_str!("../../../anchors/mainnet.json")).unwrap() }
 /// The compact form of a difficulty, checked to read back as that difficulty.
 fn bits(d: u64) -> u32 { let n = encode_compact_bits(&BigInt::from(d)) as u32; assert_eq!(decode_compact_bits(n), BigInt::from(d), "compact form of {d}"); n }
-/// The mainnet checkpoint header with these fields changed, read back from its bytes (so its id is its own).
+/// A real mainnet header (the one at 1,914,880, kept in vectors/: not the release checkpoint, so that a new checkpoint
+/// changes none of the headers made here and W5's nonces stay good) with these fields changed, read back from its
+/// bytes (so its id is its own).
 fn make(height: u32, parent: BlockId, ts: u64, n_bits: u32, root: &[u8], nonce: u64) -> Header {
-    let mut h = template();
+    let mut h: Header = serde_json::from_str(include_str!("../../../vectors/header-1914880.json")).unwrap();
     h.height = height; h.parent_id = parent; h.timestamp = ts; h.n_bits = n_bits;
     h.state_root = ADDigest::from(<[u8; 33]>::try_from(root).expect("a state root is 33 bytes"));
     h.autolykos_solution.nonce = nonce.to_be_bytes().to_vec();
@@ -227,7 +229,8 @@ fn w2_a_given_up_payment_still_pins_its_coins_after_more_than_twenty_later_payme
     let (me, payee) = (address(0), address(1));
     // the two boxes of `wallet.rs`'s own test of this rule: box selection alone takes the big one and leaves the small
     let (small_id, small) = ergo_box(10 * ERG, &me, cp.height - 100, 0);
-    let (big_id, big) = ergo_box(50 * ERG, &me, 1, 1);
+    // (selection takes the greatest id first, and the small box's id moves with the release checkpoint)
+    let (big_id, big) = (1u16..).map(|i| ergo_box(50 * ERG, &me, 1, i)).find(|b| b.0 > small_id).unwrap();
     // two payments waiting, each of whose first output (paid to someone else) is on chain: both settle as confirmed
     let paid: Vec<(String, Vec<u8>)> = (0..2).map(|i| ergo_box(ERG, &payee, 1, 10 + i)).collect();
     let state: Vec<Vec<u8>> = vec![small.clone(), big.clone(), paid[0].1.clone(), paid[1].1.clone()];

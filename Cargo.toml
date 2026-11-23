@@ -8,6 +8,8 @@ members = [
     "vendor/arkadianet-codec/ergo-ser",
     "vendor/arkadianet-codec/ergo-p2p",
 ]
+# the fuzz targets are a workspace of their own (fuzz/Cargo.toml): nightly and cargo-fuzz, which nothing else here needs
+exclude = ["fuzz"]
 
 # Inherited by the vendored codec crates (see vendor/arkadianet-codec/NOTICE.md).
 [workspace.package]

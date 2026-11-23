@@ -14,8 +14,8 @@ android {
         targetSdk = 37
         // -PtachysIdSuffix=.test builds a copy that installs beside the real app, with its own wallets: for trying a build on a phone that is in use
         providers.gradleProperty("tachysIdSuffix").orNull?.let { applicationIdSuffix = it }
-        versionCode = 1
-        versionName = "0.0.1-spike"
+        versionCode = 2
+        versionName = "0.0.2-spike"
     }
     // The release key lives outside the repository. Name it in ~/.gradle/gradle.properties:
     //   tachysStoreFile=/path/to/tachys-release.jks   tachysStorePassword=…   tachysKeyAlias=tachys   tachysKeyPassword=…
@@ -50,6 +50,9 @@ dependencies {
     implementation("androidx.compose.material:material")
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("com.google.zxing:core:3.5.4") // QR reading; QR drawing comes from the Rust core
+    // the tests of what the app makes of the core's answers (src/test), run on the build machine: ./gradlew testDebugUnitTest
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303") // a phone has its own; the build machine's Android stub has none that works
 }
 
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }

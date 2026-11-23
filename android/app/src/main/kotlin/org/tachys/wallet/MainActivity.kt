@@ -77,12 +77,6 @@ class TokenLine(val id: String, val name: String, val decimals: Int, val raw: Lo
 }
 /** One box a wallet tracks: its id, nanoERG, how many kinds of token, and the blocks it was last proven and first confirmed at. */
 class BoxLine(val id: String, val nano: Long, val tokens: Int, val provenAt: Int, val confirmedAt: Int)
-/** The core's answer to a `--json` command. `ok`: it ended with success and its object, in the layout this app reads, says so. */
-class Reply(val code: Int, val json: JSONObject?, val text: String) {
-    val ok get() = code == 0 && json != null && json.optBoolean("ok") && json.optInt("v") == 1
-    /** Why it failed, in the core's words. */
-    val error get() = json?.optString("error")?.takeIf { it.isNotEmpty() } ?: text.lines().lastOrNull { it.isNotBlank() } ?: "no answer"
-}
 /** The layout of `wallet.json` this app reads (the core's `walletfile.rs`). */
 const val WALLET_FILE_VERSION = 1
 class WalletView(val name: String, val address: String, val erg: String, val boxes: Int, val tokens: List<TokenLine>,
@@ -242,8 +236,7 @@ class Core(private val ctx: Context) {
         val reader = Thread { try { said.append(p.errorStream.bufferedReader().readText()) } catch (e: java.io.IOException) { } }.also { it.start() }
         try { p.outputStream.use { o -> input.forEach { o.write((it + "\n").toByteArray()) } } } catch (e: java.io.IOException) { /* the core ended without reading it */ }
         val out = p.inputStream.bufferedReader().readText(); val code = p.waitFor(); reader.join()
-        val json = try { out.lines().lastOrNull { it.startsWith("{") }?.let { JSONObject(it) } } catch (e: Exception) { null }
-        Reply(code, json, said.lines().filterNot { it.startsWith("WARNING: linker") }.joinToString("\n").trim())
+        reply(code, out, said.toString())
     } catch (e: Exception) { Reply(-1, null, "error: ${e.message}") }
     /** What the core printed and the code it ended with (-1 if it could not be run at all). */
     private fun execCode(input: List<String>, vararg args: String): Pair<Int, String> = try {
@@ -266,7 +259,7 @@ class Core(private val ctx: Context) {
     }
     // words of letters only, in any of the languages the core takes (Japanese phrases are spaced with U+3000); the core's refusals all carry punctuation
     /** Why the core did not do what was asked, in its words; the lost-key case is recognised by a field of its answer, not by those words. */
-    private fun failed(a: Reply): String = if (a.json?.optBoolean("bad_password") == true) LOST else a.error
+    private fun failed(a: Reply): String = if (a.badPassword) LOST else a.error
 
     fun hasWallet() = dirs().isNotEmpty()
     /** Each of these answers `OK`, or the reason it did not happen. */
@@ -291,32 +284,32 @@ class Core(private val ctx: Context) {
         // the core checks the words and the phrase's checksum: a slip would otherwise open an empty wallet at another address
         val derived = ask(listOf(line), "wallet", "derive", "--mnemonic-file", "-")
         if (!derived.ok) return derived.error.removePrefix("seed phrase not accepted: ").replaceFirstChar { c -> c.uppercase() } + "."
-        val address = derived.json?.optString("address")?.takeIf { it.isNotEmpty() } ?: return "could not derive a key from that phrase"
+        val address = derivedAddress(derived) ?: return "could not derive a key from that phrase"
         val same = views().firstOrNull { it.address == address }
         // a full wallet of this phrase that can no longer open its own phrase (the phone's key went) is put back by the phrase
-        val closed = same != null && !same.readOnly && sealedAsk(pass, "wallet", "mnemonic", "--state", path(same.dir)).json?.optBoolean("bad_password") == true
+        val closed = same != null && !same.readOnly && sealedAsk(pass, "wallet", "mnemonic", "--state", path(same.dir)).badPassword
         if (same != null && !same.readOnly && !closed) return "that wallet is already on this phone (${same.name})"
         val d = same?.dir ?: fresh()
         if (same == null) seedChain(d)
         // the wallet file is written first and its boxes looked for after (by the next sync); `restored` says the file is there
         val a = ask(listOf(pass, line), "wallet", "restore", "--state", path(d), "--mnemonic-file", "-", "--embed", "--name", name.ifBlank { "Wallet" }, *(if (closed) arrayOf("--reseal") else arrayOf()), "--pass-stdin")
-        val done = a.json?.optString("restored")?.isNotEmpty() == true
+        val done = restored(a)
         if (done) sel = d else if (same == null) File(path(d)).deleteRecursively()
         return if (done) OK else failed(a)
     }
     fun rename(name: String) = run("wallet", "name", "--state", state, "--name", name.ifBlank { "Wallet" })
     fun addAddress(pass: String) = sealed(pass, "wallet", "address", "--state", state, "--add")
     /** The extended public key, or "! " and the reason there is none. */
-    fun pubkey(pass: String): String = sealedAsk(pass, "wallet", "pubkey", "--state", state).let { a -> a.json?.optString("base58")?.takeIf { a.ok && it.isNotEmpty() } ?: ("! " + failed(a)) }
+    fun pubkey(pass: String): String = sealedAsk(pass, "wallet", "pubkey", "--state", state).let { a -> textOf(a, "base58") ?: ("! " + failed(a)) }
     /** The seed phrase, or "! " and the reason it cannot be shown. */
-    fun mnemonic(pass: String): String = sealedAsk(pass, "wallet", "mnemonic", "--state", state).let { a -> a.json?.optString("mnemonic")?.takeIf { a.ok && it.isNotEmpty() } ?: ("! " + failed(a)) }
+    fun mnemonic(pass: String): String = sealedAsk(pass, "wallet", "mnemonic", "--state", state).let { a -> textOf(a, "mnemonic") ?: ("! " + failed(a)) }
     fun remove() { val d = sel; File(path(d)).deleteRecursively(); prefs.edit().remove(payKey(d)).apply() }
     @Synchronized fun tips(): Boolean {
         File(chain).mkdirs()
         // agreed: the core ended with success (it exits 1 when no tip is agreed on, or the chain could not be saved) and its answer says so
         val a = if (testnet) ask(listOf(), "tips", "--peers", "2", "--tries", "8", "--quorum", "2", "--state", chain, "--seeds", seeds())
             else ask(listOf(), "tips", "--peers", "4", "--tries", "24", "--state", chain, "--seeds", seeds())
-        val ok = a.ok && a.json?.optString("verdict") == "agreed"
+        val ok = tipAgreed(a)
         // the nodes are found once here, against the chain just agreed on, and the list goes to every wallet with the chain
         if (ok && node == "auto") run("nodes", "--state", chain)
         if (ok) dirs().forEach { seedChain(it) }
@@ -357,18 +350,7 @@ class Core(private val ctx: Context) {
      * sent it and did not answer: it may have gone, it is kept as waiting, and it must not be paid again on a guess) or
      * "refused"; with `tx`, `receipt`, `change`, `fee_token_units` (-1: the fee was paid in ERG), `tx_bytes` and `error`.
      */
-    private fun sent(a: Reply): String {
-        val j = a.json
-        val state = when {
-            j?.optBoolean("outcome_unknown") == true -> "unsure"
-            a.ok && j?.optBoolean("signed") == true && (j.optJSONObject("broadcast")?.optBoolean("accepted") == true || j.optString("sent_via").isNotEmpty()) -> "sent"
-            a.ok && j?.optBoolean("signed") == true && j.optString("parcel").isNotEmpty() -> "queued"
-            else -> "refused"
-        }
-        return JSONObject().put("state", state).put("tx", j?.optString("tx") ?: "").put("receipt", j?.optJSONArray("receipt")?.optString(0) ?: "")
-            .put("change", j?.optJSONArray("change")?.optString(0) ?: "").put("fee_token_units", j?.optLong("fee_token_units", -1L) ?: -1L)
-            .put("tx_bytes", j?.optString("tx_bytes") ?: "").put("error", if (state == "sent" || state == "queued") "" else failed(a).removePrefix("send: ")).toString()
-    }
+    private fun sent(a: Reply): String = sentAnswer(a, failed(a).removePrefix("send: ")).toString()
     /** Keep a payer's signed transaction and expect the boxes that pay this wallet. */
     /** The core's answer as JSON text: `promised` (the box ids that pay this wallet), `nanoerg`, `tokens`; or `error`. */
     fun promise(txHex: String): String = ask(listOf(), "wallet", "promise", "--state", state, "--tx", txHex).let { a -> if (a.ok) a.json.toString() else JSONObject().put("error", a.error).toString() }

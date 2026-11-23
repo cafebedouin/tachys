@@ -26,6 +26,7 @@ what stands between it and real funds is listed in `docs/roadmap.md`. Review is 
 ```
 cargo build --release -p tachys          # Rust 1.89 or newer; the program is target/release/tachys
 # or take the built program for Linux x86_64 from the repository's releases, and check it against SHA256SUMS
+# (from v0.0.2 on it is built by the release workflow: `gh attestation verify FILE -R cafebedouin/tachys`)
 
 tachys recipes                           # everything below as one JSON object (about 4 KB): read it once
 tachys setup   --state DIR               # make a wallet, or find the one there; gives the address to be paid at
@@ -68,8 +69,9 @@ signed offline and sent later, signing requests from other sites, all on the sam
 Note 2 from 2012; the core is 2.7 MB and starts in 16 ms there. `docs/android.md` says what has been tried
 on a phone and what has not: the released build was tried by hand on the Note 2 by the maintainer, and on no
 other phone. A release carries an APK for each kind of phone, signed with the project's key (`SECURITY.md` gives
-its fingerprint), and the Linux program; the checksums are beside them. They are the maintainer's builds, not
-reproducible ones: building your own is as good, and for money, better.
+its fingerprint), and the Linux program; the checksums are beside them. The APKs are the maintainer's builds; the
+Linux program, from v0.0.2 on, is built by the release workflow from the tagged commit and attested to it. None is
+a reproducible build: building your own is as good, and for money, better.
 
 ## The payments it was designed around
 
@@ -135,7 +137,7 @@ Two things it lays groundwork for (`docs/roadmap.md`):
 ## Build and test
 
 ```
-cargo test --workspace                   # about 900 tests, some 840 of them the vendored codec's own; no network
+cargo test --workspace                   # about 1000 tests, some 840 of them the vendored codec's own; no network
 cargo run --release -p tachys -- tips --state state        # learn the tip from mainnet peers
 ```
 
@@ -150,8 +152,10 @@ route. `.github/workflows/ci.yml` runs the tests and clippy.
 | `crates/tachys-net` | the smallest peer client that will do: handshake, hear a tip, fetch headers by id, serve |
 | `android/` | the phone app |
 | `rig/`, `node-patches/` | test recipes; the prototype node change for box proofs over the peer protocol |
+| `fuzz/` | fuzz targets for the bytes nodes and peers choose (`cargo +nightly fuzz run box_proof`; `docs/maintaining.md`) |
+| `build-linux.sh`, `refresh-anchors.sh` | build the Linux program a release carries, as the release workflow does; fetch and cross-check a new checkpoint |
 | `vendor/arkadianet-codec/` | a copied peer-protocol codec (see its NOTICE.md) |
-| `anchors/`, `seeds-*.txt`, `vectors/` | the release checkpoint; peers to try first; proofs and headers the tests read |
+| `anchors/`, `seeds-*.txt`, `vectors/` | the release checkpoint; peers to try first; proofs and headers the tests read, and (`vectors/app/`) the core's answers the app is tested on |
 | `docs/` | `agents.md`, `json.md`, `design.md`, `android.md`, `good-neighbour.md`, `roadmap.md`, `maintaining.md` |
 | `docs/research/` | the findings log (what was tried, measured and changed, in order) and the run logs it cites |
 

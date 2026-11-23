@@ -1,0 +1,59 @@
+name: release
+# A tag `vX.Y.Z` builds the Linux program from that commit, attests where it came from, and opens a DRAFT release
+# holding it and SHA256SUMS. The APKs are not built here: they are signed with the project's key, which never
+# leaves the maintainer's machine. The maintainer adds them and publishes the draft (docs/maintaining.md).
+on:
+  push:
+    tags: ["v[0-9]*"]
+
+permissions:
+  contents: write       # to open the draft release
+  id-token: write       # to sign the attestation as this workflow
+  attestations: write
+
+jobs:
+  linux:
+    # the oldest runner there is, so the program asks for no newer a glibc than it must (the script prints which)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+      # the wallet's own tests; the vendored codec's are CI's, and three of them fail by the clock on a busy machine
+      - run: cargo test --locked -p tachys -p tachys-verify -p tachys-net
+      - run: ./build-linux.sh
+      # the tag must be the version the program says it is, and a release carries a checkpoint under a week old
+      - id: built
+        run: |
+          said=$(target/dist/tachys-*-linux-x86_64 version --json 2>/dev/null)
+          version=$(echo "$said" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+          age=$(echo "$said" | sed -n 's/.*"checkpoint_age_days":\([0-9]*\).*/\1/p')
+          height=$(echo "$said" | sed -n 's/.*"checkpoint_height":\([0-9]*\).*/\1/p')
+          echo "tag $GITHUB_REF_NAME, program $version, checkpoint at $height, $age days old"
+          test "v$version" = "$GITHUB_REF_NAME"
+          test "$age" -lt 7
+          glibc=$(objdump -T target/dist/tachys-$version-linux-x86_64 | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1 | cut -d_ -f2)
+          { echo "version=$version"; echo "height=$height"; echo "glibc=$glibc"; } >> "$GITHUB_OUTPUT"
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: target/dist/tachys-${{ steps.built.outputs.version }}-linux-x86_64
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.built.outputs.version }}
+          HEIGHT: ${{ steps.built.outputs.height }}
+          GLIBC: ${{ steps.built.outputs.glibc }}
+        run: |
+          cat > notes.md <<NOTES
+          **Experimental**: mainnet is real money; use \`--network testnet\`, or amounts you can afford to lose.
+
+          - \`tachys-$VERSION-linux-x86_64\`: the command-line program for Linux on x86_64 (needs glibc $GLIBC or newer). Built by this repository's release workflow from the tagged commit, not on the maintainer's machine: \`gh attestation verify tachys-$VERSION-linux-x86_64 -R $GITHUB_REPOSITORY\` checks that.
+          - \`tachys-$VERSION-android-arm64-v8a.apk\`, \`tachys-$VERSION-android-armeabi-v7a.apk\`: the phone app, built and signed by the maintainer with the project's key (\`SECURITY.md\` gives its fingerprint).
+          - \`SHA256SUMS\`: check what you downloaded with \`sha256sum -c SHA256SUMS\`.
+
+          The checkpoint in this build is from block $HEIGHT; a build is good for about sixty days from its checkpoint (\`tachys version\` says how old it is).
+
+          What changed: the findings added to \`docs/research/findings.md\` since the last tag.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" --draft --prerelease --verify-tag --title "tachys $VERSION (experimental)" --notes-file notes.md \
+            "target/dist/tachys-$VERSION-linux-x86_64" target/dist/SHA256SUMS

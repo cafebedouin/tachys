@@ -62,9 +62,14 @@ pub fn check(policy: &serde_json::Value, log: &str, ask: &Ask, now_s: u64) -> Re
         // an amount that is there and is not a whole number is a line that cannot be read, not a payment of nothing
         // (the second line a signature writes, with the transaction id, carries no amount and counts for nothing)
         today = today.saturating_add(match e.get("nanoerg") { None => 0, Some(n) => n.as_u64().ok_or("the payments log has an entry whose amount cannot be read; the daily limit cannot be checked")? });
-        for t in e["tokens"].as_array().into_iter().flatten() {
-            let n = tokens_today.entry(t["id"].as_str().unwrap_or("").to_string()).or_default();
-            *n = n.saturating_add(t["amount"].as_u64().unwrap_or(0));
+        // as for nanoERG: tokens that are there and cannot be read (not a list, an entry with no id or no whole amount)
+        // are a line that cannot be read, not a payment of no tokens
+        const UNREAD: &str = "the payments log has an entry whose tokens cannot be read; the daily limit cannot be checked";
+        let listed = match e.get("tokens") { None | Some(serde_json::Value::Null) => &[][..], Some(serde_json::Value::Array(a)) => a.as_slice(), Some(_) => return Err(UNREAD.into()) };
+        for t in listed {
+            let (Some(id), Some(amount)) = (t["id"].as_str(), t["amount"].as_u64()) else { return Err(UNREAD.into()) };
+            let n = tokens_today.entry(id.to_string()).or_default();
+            *n = n.saturating_add(amount);
         }
     }
     if ask.nano > per_payment { return Err(format!("over the per-payment limit: {} nanoERG would leave the wallet (fee included), {per_payment} allowed", ask.nano)) }
@@ -179,6 +184,28 @@ mod tests {
         // sums that would wrap are held at the top, not wrapped round to nothing
         let huge = line(10, u64::MAX) + &line(20, u64::MAX);
         assert!(check(&p, &huge, &ask(1), NOW).unwrap_err().contains("daily"));
+    }
+
+    #[test]
+    fn a_log_whose_tokens_cannot_be_read_stops_payments_and_is_not_a_day_with_none_spent() {
+        let mut p = policy();
+        p["allow_tokens"] = serde_json::json!(true);
+        p["token_limits"] = serde_json::json!({ T: { "per_payment": 500, "per_day": 800 } });
+        let mut a = ask(2_100_000); a.tokens.insert(T.into(), 400);
+        let entry = |tokens: serde_json::Value| format!("{}\n", serde_json::json!({ "at": NOW - 60, "nanoerg": 2_100_000, "tokens": tokens }));
+        // 700 of the day's 800 left an hour ago: 400 more is over. Read as nothing, that entry would let them through
+        assert!(check(&p, &entry(serde_json::json!([{ "id": T, "amount": 700 }])), &a, NOW).unwrap_err().contains("daily limit for token"));
+        for unread in [serde_json::json!([{ "id": T, "amount": "700" }]), serde_json::json!([{ "id": T, "amount": -1 }]), serde_json::json!([{ "id": T }]),
+            serde_json::json!([{ "amount": 700 }]), serde_json::json!([700]), serde_json::json!("700"), serde_json::json!({ T: 700 })] {
+            let e = check(&p, &entry(unread.clone()), &a, NOW).unwrap_err();
+            assert!(e.contains("tokens cannot be read"), "{unread}: {e}");
+            // and it stops a payment of ERG alone as well: the line is one that cannot be read
+            assert!(check(&p, &entry(unread.clone()), &ask(1_000_000), NOW).unwrap_err().contains("tokens cannot be read"), "{unread}");
+        }
+        // an entry with no tokens, or the transaction-id line a signature adds, still counts for none
+        assert!(check(&p, &entry(serde_json::json!([])), &a, NOW).is_ok());
+        assert!(check(&p, &entry(serde_json::Value::Null), &a, NOW).is_ok());
+        assert!(check(&p, &format!("{}\n", serde_json::json!({ "at": NOW - 60, "nanoerg": 0, "signed": "tx", "receipt": "box" })), &a, NOW).is_ok());
     }
 
     #[test]

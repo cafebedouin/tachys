@@ -1,16 +1,31 @@
 //! tachys wallet: keys, addresses, the boxes this wallet tracks, signing and sending.
 
 use std::str::FromStr;
-
+use ergo_chain_types::PreHeader;
 use ergo_chain_types::Header;
+use ergo_lib::chain::ergo_box::box_builder::ErgoBoxCandidateBuilder;
+use ergo_lib::chain::ergo_state_context::ErgoStateContext;
+use ergo_lib::chain::parameters::Parameters;
+use ergo_lib::chain::transaction::unsigned::UnsignedTransaction;
+use ergo_lib::chain::transaction::Transaction;
+use ergo_lib::wallet::box_selector::{BoxSelection, BoxSelector, ErgoBoxAssetsData, SimpleBoxSelector};
 use ergo_lib::wallet::derivation_path::DerivationPath;
 use ergo_lib::wallet::ext_secret_key::ExtSecretKey;
 use ergo_lib::wallet::mnemonic::Mnemonic;
 use ergo_lib::wallet::mnemonic_generator::{Language, MnemonicGenerator};
 use ergo_lib::wallet::secret_key::SecretKey;
+use ergo_lib::wallet::signing::TransactionContext;
+use ergo_lib::wallet::tx_builder::TxBuilder;
+use ergo_lib::wallet::Wallet;
 use ergotree_ir::chain::address::{Address, AddressEncoder, NetworkPrefix};
+use ergotree_ir::chain::context_extension::ContextExtension;
+use ergotree_ir::chain::ergo_box::box_value::BoxValue;
+use ergotree_ir::chain::ergo_box::NonMandatoryRegisterId::{R4, R5, R6};
+use ergotree_ir::chain::ergo_box::{BoxId, BoxTokens, ErgoBoxCandidate};
+use ergotree_ir::chain::token::{Token, TokenAmount, TokenId};
 use ergotree_ir::chain::ergo_box::ErgoBox;
 use ergotree_ir::ergo_tree::ErgoTree;
+use ergotree_ir::mir::constant::{Constant, TryExtractInto};
 use ergotree_ir::serialization::SigmaSerializable;
 
 use crate::chain::{agreed_height, chain_bytes, load_chain};
@@ -18,7 +33,7 @@ use crate::network::{net, private_net};
 use crate::out::{Ended, Fail};
 use crate::policy;
 use crate::walletfile::{Asset, Done, Pending, TrackedBox, WalletFile};
-use crate::proofs::{extend_chain, prove_any, prove_any_agreed, prove_included, prove_p2p, prove_reading, send_tx, NotSent, RestCost};
+use crate::proofs::{extend_chain, prove_any, prove_any_agreed, prove_included, prove_p2p, prove_reading, send_tx, NotSent, Proven, RestCost};
 use crate::seal::{open_phrase, phrase_problem, seal_phrase};
 use crate::util::{arg, clip, hex, http, one_line, private_dir, stdin_line, unhex, write_private, write_whole};
 
@@ -607,29 +622,62 @@ fn cmd_request(c: &Ctx, o: Open) -> Ended {
     match unsure { Some(e) => Err(e.into()), None => Ok(()) }
 }
 
-/// wallet send | consolidate | burn | babel-offer | babel-list: build a transaction from the wallet's boxes, sign it,
-/// and send it or write it out. A refusal is handed back, not printed: nothing here stops the process.
-fn cmd_send(c: &Ctx, o: Open) -> Ended {
-    let Ctx { args, state, node, chain, enc, .. } = c;
+/// What a payment is to do, read from the command line, and what the wallet has to do it with: all that the builders
+/// below work from. Reading it asks no node anything.
+struct Wanted<'a> {
+    c: &'a Ctx<'a>,
+    /// the wallet's boxes confirmed under a tip the peers agreed on: the only ones a payment spends
+    inputs: Vec<ErgoBox>,
+    addr: Address,
+    my_tree: ErgoTree,
+    /// to the first payee (or, for an offer, into it); `more` are the further payees of `--pay`
+    amount: u64,
+    fee: u64,
+    /// the payees and the fee together
+    need_total: u64,
+    v_out: BoxValue,
+    v_fee: BoxValue,
+    v_need: BoxValue,
+    height: u32,
+    token_hex: String,
+    token_amount: u64,
+    mint_name: String,
+    mint_decimals: usize,
+    payee_tree: ErgoTree,
+    more: Vec<(ErgoTree, u64)>,
+    pay_token: Option<Token>,
+    /// every token the first payee is paid: `--token` and each `--also-token`
+    want_tokens: Vec<Token>,
+    /// the token the fee is paid in (`--babel`), and the most of it the fee may cost
+    babel_token: String,
+    babel_max: u64,
+}
+
+/// What a builder made of it: the boxes spent and the boxes made, and what the rest of `cmd_send` must know of them.
+struct Built {
+    selection: BoxSelection<ErgoBox>,
+    outs: Vec<ErgoBoxCandidate>,
+    /// the scripts paid as payees: boxes under them are the receipt
+    payee_trees: Vec<ErgoTree>,
+    /// scripts paid that are neither a payee's, ours nor the fee's (a Babel offer)
+    other_trees: Vec<ErgoTree>,
+    burn: Vec<Token>,
+    /// what a Babel offer spent is told: where its recreated box sits among the outputs
+    extension: Option<(BoxId, ContextExtension)>,
+}
+
+/// Reads what the command line asks for and gathers the boxes that may be spent. What cannot be a payment is refused
+/// here, before anything is built.
+fn wanted<'a>(c: &'a Ctx<'a>, w: &WalletFile, addr: &Address, my_tree: &ErgoTree) -> Result<Wanted<'a>, Fail> {
+    let Ctx { args, chain, enc, .. } = c;
     let sub = c.sub;
-    let Open { mut w, phrase, no_phrase, locked, bad_password, addr, my_tree, n_addr, my_trees, .. } = o;
-    use ergo_lib::chain::ergo_box::box_builder::ErgoBoxCandidateBuilder;
-    use ergo_lib::chain::ergo_state_context::ErgoStateContext;
-    use ergo_lib::chain::parameters::Parameters;
-    use ergo_lib::wallet::box_selector::{BoxSelector, SimpleBoxSelector};
-    use ergo_lib::wallet::signing::TransactionContext;
-    use ergo_lib::wallet::tx_builder::TxBuilder;
-    use ergo_lib::wallet::Wallet;
-    use ergo_chain_types::PreHeader;
-    use ergotree_ir::chain::ergo_box::box_value::BoxValue;
-    use ergotree_ir::chain::token::{Token, TokenAmount, TokenId};
     let token_hex: String = arg(args, "--token", String::new())?;
     let token_amount: u64 = arg(args, "--token-amount", 0)?;
     let mint_name: String = arg(args, "--mint", String::new())?;
     let mint_decimals: usize = arg(args, "--decimals", 0)?;
     // minting pays the new token to ourselves; a token payment carries the minimum ERG a box needs
     let to_self = !mint_name.is_empty() || sub != "send";
-    let to: String = if to_self { enc.address_to_str(&addr) } else { arg(args, "--to", String::new())? };
+    let to: String = if to_self { enc.address_to_str(addr) } else { arg(args, "--to", String::new())? };
     // `--pay` and `--also-token` are read below as the word after each; one given last has none, and is misuse, as an
     // option without its value is everywhere (`util::try_arg`), not a payee or token quietly left out
     if let Some(last) = args.last().filter(|a| *a == "--pay" || *a == "--also-token") { return Err(crate::out::Fail::new(2, format!("{last} needs a value"))) }
@@ -669,254 +717,266 @@ fn cmd_send(c: &Ctx, o: Open) -> Ended {
     }).collect::<Result<_, String>>()? };
     let want_tokens: Vec<Token> = pay_token.iter().cloned().chain(also).collect();
     { let mut seen = std::collections::BTreeSet::new(); if !want_tokens.iter().all(|t| seen.insert(String::from(t.token_id))) { return Err("the same token is named twice".into()) } }
-    let mut payee_trees = vec![payee_tree.clone()];
-    let mut burn: Vec<Token> = vec![];
-    // Fees in a token (EIP-31, "Babel fees"). Someone locks ERG in a box under a public contract with a price;
-    // anyone may take ERG from it by putting at least (ERG taken / price) of the token back into the same box.
-    use ergotree_ir::chain::ergo_box::NonMandatoryRegisterId::{R4, R5, R6};
-    use ergotree_ir::mir::constant::{Constant, TryExtractInto};
-    let babel_tree = |token: &str| unhex(&babel_hex(token)).and_then(|b| ergotree_ir::ergo_tree::ErgoTree::sigma_parse_bytes(&b).ok());
-    let price_of = |b: &ErgoBox| -> i64 { b.additional_registers.get_constant(R5).ok().flatten().and_then(|c| c.try_extract_into::<i64>().ok()).unwrap_or(0) };
-    // The node lists the offers; each one is then proven unspent under the agreed tip (a proof only above it, against
-    // a block one node has shown, is not used) and checked to sit under the Babel contract for this token, so a node
-    // can hide an offer but cannot invent one.
-    let babel_offers = |token: &str| -> Vec<ErgoBox> {
-        let Some(tree) = babel_tree(token) else { return vec![] };
-        let n = crate::nodes::each(node).into_iter().find(|n| !n.starts_with("p2p://")).unwrap_or_default();
-        let Ok(r) = http().post(&format!("{n}/blockchain/box/unspent/byErgoTree?offset=0&limit=50")).set("Content-Type", "application/json").send_string(&format!("\"{}\"", babel_hex(token))) else { return vec![] };
-        let ids: Vec<String> = serde_json::from_str::<serde_json::Value>(&r.into_string().unwrap_or_default()).ok().and_then(|v| v.as_array().map(|x| x.iter().filter_map(|b| b["boxId"].as_str().map(String::from)).collect())).unwrap_or_default();
-        if ids.is_empty() { return vec![] }
-        let mut cost = RestCost::default();
-        match prove_any_agreed(node, chain, agreed_height(state), &ids, &mut cost) {
-            Ok((_, found)) => found.into_iter().flatten().filter_map(|b| ErgoBox::sigma_parse_bytes(&b).ok()).filter(|b| b.ergo_tree == tree && price_of(b) > 0).collect(),
-            Err(e) => { complain!("offer lookup: {e}"); vec![] }
-        }
-    };
     let babel_token: String = arg(args, "--babel", String::new())?;
     // the most token units the fee may cost: what the person was shown, so that is the most that is signed
     let babel_max: u64 = arg(args, "--babel-max", 0)?;
-    let mut other_trees: Vec<ergotree_ir::ergo_tree::ErgoTree> = vec![];
-    let mut extension: Option<(ergotree_ir::chain::ergo_box::BoxId, ergotree_ir::chain::context_extension::ContextExtension)> = None;
-    if sub == "babel-list" {
-        if token_hex.len() != 64 || node.is_empty() { return Err("babel-list needs --token ID and --node".into()) }
-        let offers = babel_offers(&token_hex);
-        crate::out::set("offers", serde_json::json!([]));
-        if offers.is_empty() { say!("no proven offers for that token"); }
-        for b in &offers { crate::out::push("offers", serde_json::json!({ "box": String::from(b.box_id()), "available_nanoerg": b.value.as_u64().saturating_sub(1_000_000), "nanoerg_per_unit": price_of(b) })); say!("offer {}  {} nanoERG available at {} nanoERG per token unit", String::from(b.box_id()), b.value.as_u64().saturating_sub(1_000_000), price_of(b)); }
-        return Ok(());
+    Ok(Wanted { c, inputs, addr: addr.clone(), my_tree: my_tree.clone(), amount, fee, need_total, v_out, v_fee, v_need, height, token_hex, token_amount, mint_name, mint_decimals,
+        payee_tree, more, pay_token, want_tokens, babel_token, babel_max })
+}
+
+    // Fees in a token (EIP-31, "Babel fees"). Someone locks ERG in a box under a public contract with a price;
+    // anyone may take ERG from it by putting at least (ERG taken / price) of the token back into the same box.
+fn babel_tree(token: &str) -> Option<ErgoTree> { unhex(&babel_hex(token)).and_then(|b| ErgoTree::sigma_parse_bytes(&b).ok()) }
+/// The price an offer asks: nanoERG for one unit of the token.
+fn babel_price(b: &ErgoBox) -> i64 { b.additional_registers.get_constant(R5).ok().flatten().and_then(|c| c.try_extract_into::<i64>().ok()).unwrap_or(0) }
+    // The node lists the offers; each one is then proven unspent under the agreed tip (a proof only above it, against
+    // a block one node has shown, is not used) and checked to sit under the Babel contract for this token, so a node
+    // can hide an offer but cannot invent one.
+fn proven_babel_offers(c: &Ctx, token: &str) -> Vec<ErgoBox> {
+    let Ctx { node, chain, state, .. } = c;
+    let price_of = babel_price;
+    let Some(tree) = babel_tree(token) else { return vec![] };
+    let n = crate::nodes::each(node).into_iter().find(|n| !n.starts_with("p2p://")).unwrap_or_default();
+    let Ok(r) = http().post(&format!("{n}/blockchain/box/unspent/byErgoTree?offset=0&limit=50")).set("Content-Type", "application/json").send_string(&format!("\"{}\"", babel_hex(token))) else { return vec![] };
+    let ids: Vec<String> = serde_json::from_str::<serde_json::Value>(&r.into_string().unwrap_or_default()).ok().and_then(|v| v.as_array().map(|x| x.iter().filter_map(|b| b["boxId"].as_str().map(String::from)).collect())).unwrap_or_default();
+    if ids.is_empty() { return vec![] }
+    let mut cost = RestCost::default();
+    match prove_any_agreed(node, chain, agreed_height(state), &ids, &mut cost) {
+        Ok((_, found)) => found.into_iter().flatten().filter_map(|b| ErgoBox::sigma_parse_bytes(&b).ok()).filter(|b| b.ergo_tree == tree && price_of(b) > 0).collect(),
+        Err(e) => { complain!("offer lookup: {e}"); vec![] }
     }
-    let (selection, outs) = if sub == "babel-offer" {
-        // put ERG up for others to take in exchange for a token, at our price (nanoERG per smallest token unit)
-        let price: i64 = arg(args, "--price", 0)?;
-        let Some(tree) = babel_tree(&token_hex) else { return Err("babel-offer needs --token ID".into()) };
-        let Address::P2Pk(pk) = addr.clone() else { return Err("wallet address is not a plain key".into()) };
-        if price <= 0 || amount < 2_000_000 { return Err("babel-offer needs --price above zero and --nanoerg of at least 2000000".into()) }
-        let selection = match SimpleBoxSelector::new().select(inputs.clone(), v_need, &[]) { Ok(s) => s, Err(e) => return Err(format!("box selection: {e:?}").into()) };
-        let mut ob = ErgoBoxCandidateBuilder::new(v_out, tree.clone(), height);
-        ob.set_register_value(R4, Constant::from(pk)); ob.set_register_value(R5, Constant::from(price));
-        other_trees.push(tree);
-        say!("offering {} nanoERG for token {} at {} nanoERG per token unit", amount, token_hex, price);
-        (selection, vec![match ob.build() { Ok(o) => o, Err(e) => return Err(format!("output: {e:?}").into()) }])
-    } else if sub == "send" && !babel_token.is_empty() && mint_name.is_empty() {
-        use ergo_lib::wallet::box_selector::{BoxSelection, ErgoBoxAssetsData};
-        use ergotree_ir::chain::ergo_box::BoxTokens;
-        let Some(tree) = babel_tree(&babel_token) else { return Err("--babel wants the 64-hex id of the token to pay the fee in".into()) };
-        if node.is_empty() { return Err("--babel needs --node to find offers".into()) }
-        if babel_max == 0 { return Err("--babel needs --babel-max RAW: the most token units the fee may cost. `wallet babel-list` shows the offers and their prices".into()) }
-        // every box of ours goes in; the change box holds whatever is left
-        let mine: Vec<ErgoBox> = inputs.iter().take(40).cloned().collect();
-        let my_erg: u64 = mine.iter().map(|b| *b.value.as_u64()).sum();
-        let mut left: std::collections::BTreeMap<String, u64> = Default::default();
-        for t in mine.iter().flat_map(|b| b.tokens.iter().flat_map(|ts| ts.iter())) { *left.entry(String::from(t.token_id)).or_default() += *t.amount.as_u64(); }
-        // what the payment needs in ERG: the payees, the fee, and the least a change box may hold
-        let need = need_total.checked_add(1_000_000).ok_or("the amounts add up to more than can exist")?;
-        if my_erg >= need { return Err("this wallet has enough ERG for the fee; send without --babel".into()) }
-        let short = need - my_erg;
-        for t in &want_tokens { let have = left.entry(String::from(t.token_id)).or_default(); if *have < *t.amount.as_u64() { return Err("not enough of a token being sent".into()) } *have -= *t.amount.as_u64(); }
-        // the best offer: the one that asks the fewest tokens and can still hold a box's minimum afterwards
-        let offers = babel_offers(&babel_token);
-        let have_fee_token = *left.get(&babel_token).unwrap_or(&0);
-        let cost_in = |b: &ErgoBox| -> u64 { let p = price_of(b) as u64; short.div_ceil(p) };
-        let Some(offer) = offers.iter().filter(|b| *b.value.as_u64() >= short + 1_000_000 && cost_in(b) <= have_fee_token).min_by_key(|b| cost_in(b)) else {
-            return Err(format!("no proven offer covers {short} nanoERG for the tokens this wallet has ({} offers seen, {have_fee_token} token units available)", offers.len()).into())
-        };
-        let paid = cost_in(offer);
-        // The node lists the offers, so it can leave the good ones out. Nothing is signed above what was agreed to.
-        if paid > babel_max { return Err(format!("the fee would cost {paid} token units at the best offer the node lists now, more than the {babel_max} allowed; nothing was signed. Look the price up again").into()) }
-        *left.entry(babel_token.clone()).or_default() -= paid;
-        crate::out::set("fee_token", &babel_token); crate::out::set("fee_token_units", paid);
-        say!("fee in tokens: taking {short} nanoERG from offer {} at {} nanoERG per unit, paying {paid} token units", String::from(offer.box_id()), price_of(offer));
-        // the offer box, recreated with less ERG and more tokens; the contract checks this output
-        let Ok(v_back) = BoxValue::try_from(*offer.value.as_u64() - short) else { return Err("offer value".into()) };
-        let mut bb = ErgoBoxCandidateBuilder::new(v_back, tree.clone(), height);
-        let held: Vec<Token> = offer.tokens.iter().flat_map(|ts| ts.iter().cloned()).collect();
-        let before = held.first().map(|t| *t.amount.as_u64()).unwrap_or(0);
-        let (Some(fee_id), Ok(amt)) = (ergo_chain_types::Digest32::try_from(babel_token.clone()).ok().map(TokenId::from), TokenAmount::try_from(before + paid)) else { return Err("fee token".into()) };
-        bb.add_token(Token { token_id: fee_id, amount: amt });
-        for t in held.iter().skip(1) { bb.add_token(*t); }
-        let (Ok(Some(r4)), Ok(Some(r5))) = (offer.additional_registers.get_constant(R4), offer.additional_registers.get_constant(R5)) else { return Err("offer registers".into()) };
-        let id_bytes: Vec<u8> = ergo_chain_types::Digest32::from(offer.box_id()).0.to_vec();
-        bb.set_register_value(R4, r4); bb.set_register_value(R5, r5); bb.set_register_value(R6, Constant::from(id_bytes));
-        let mut ob = ErgoBoxCandidateBuilder::new(v_out, payee_tree.clone(), height);
-        for t in &want_tokens { ob.add_token(*t); }
-        let mut outs = vec![match ob.build() { Ok(o) => o, Err(e) => return Err(format!("output: {e:?}").into()) }];
-        for (t, value) in &more {
-            let Ok(v) = BoxValue::try_from(*value) else { return Err("--pay amount out of range".into()) };
-            outs.push(match ErgoBoxCandidateBuilder::new(v, t.clone(), height).build() { Ok(o) => o, Err(e) => return Err(format!("output: {e:?}").into()) });
-            payee_trees.push(t.clone());
-        }
-        outs.push(match bb.build() { Ok(o) => o, Err(e) => return Err(format!("offer output: {e:?}").into()) });
-        // the contract is told where its recreated box sits among the outputs
-        let mut ext = ergotree_ir::chain::context_extension::ContextExtension::empty();
-        ext.values.insert(0, Constant::from((outs.len() - 1) as i32));
-        extension = Some((offer.box_id(), ext));
-        other_trees.push(tree);
-        let change_tokens: Vec<Token> = left.iter().filter(|(_, a)| **a > 0).filter_map(|(id, a)| Some(Token { token_id: TokenId::from(ergo_chain_types::Digest32::try_from(id.clone()).ok()?), amount: TokenAmount::try_from(*a).ok()? })).collect();
-        let Ok(v_change) = BoxValue::try_from(1_000_000u64) else { return Err("value".into()) };
-        let change = ErgoBoxAssetsData { value: v_change, tokens: BoxTokens::from_vec(change_tokens).ok() };
-        let mut all = mine.clone(); all.push(offer.clone());
-        let Ok(bx) = all.try_into() else { return Err("box list".into()) };
-        (BoxSelection { boxes: bx, change_boxes: vec![change] }, outs)
-    } else if sub == "consolidate" {
-        // every tracked box (up to 60) into one box back to ourselves: fewer boxes means smaller proofs later
-        use ergo_lib::wallet::box_selector::BoxSelection;
-        let boxes: Vec<ErgoBox> = inputs.iter().take(60).cloned().collect();
-        if boxes.len() < 2 { return Err("nothing to consolidate: fewer than two boxes".into()) }
-        let total: u64 = boxes.iter().map(|b| *b.value.as_u64()).sum();
-        let mut sums: Vec<(TokenId, u64)> = vec![];
-        for t in boxes.iter().flat_map(|b| b.tokens.iter().flat_map(|ts| ts.iter())) {
-            match sums.iter_mut().find(|x| x.0 == t.token_id) { Some(x) => x.1 += *t.amount.as_u64(), None => sums.push((t.token_id, *t.amount.as_u64())) }
-        }
-        let Ok(v) = BoxValue::try_from(total.saturating_sub(fee)) else { return Err("not enough ERG to pay the fee".into()) };
-        let mut ob = ErgoBoxCandidateBuilder::new(v, my_tree.clone(), height);
-        for (id, amt) in &sums { if let Ok(a) = TokenAmount::try_from(*amt) { ob.add_token(Token { token_id: *id, amount: a }); } }
-        let out = match ob.build() { Ok(o) => o, Err(e) => return Err(format!("output: {e:?}").into()) };
-        let Ok(bx) = boxes.clone().try_into() else { return Err("box list".into()) };
-        say!("consolidating {} boxes ({} token kinds) into one", boxes.len(), sums.len());
-        (BoxSelection { boxes: bx, change_boxes: vec![] }, vec![out])
-    } else if sub == "burn" {
-        // destroy some of a token: it is selected as an input and appears in no output, which needs an explicit permit
-        let Some(t) = pay_token else { return Err("burn needs --token ID and --token-amount RAW".into()) };
-        let Ok(need) = BoxValue::try_from(1_000_000 + fee) else { return Err("fee out of range".into()) };
-        let sel = match SimpleBoxSelector::new().select(inputs.clone(), need, &[t]) { Ok(x) => x, Err(e) => return Err(format!("box selection: {e:?}").into()) };
-        let Ok(v) = BoxValue::try_from(1_000_000u64) else { return Err("value".into()) };
-        let out = match ErgoBoxCandidateBuilder::new(v, my_tree.clone(), height).build() { Ok(o) => o, Err(e) => return Err(format!("output: {e:?}").into()) };
-        say!("burning {} units of token {}", token_amount, token_hex);
-        burn.push(t);
-        (sel, vec![out])
-    } else {
-        let selection = match SimpleBoxSelector::new().select(inputs.clone(), v_need, &want_tokens) { Ok(s) => s, Err(e) => return Err(format!("box selection: {e:?}").into()) };
-        let mut ob = ErgoBoxCandidateBuilder::new(v_out, payee_tree.clone(), height);
-        for t in &want_tokens { ob.add_token(*t); }
-        if !mint_name.is_empty() {
-            // a new token's id is the id of the first box the transaction spends; its name and decimals go in the box's registers
-            let Ok(amt) = TokenAmount::try_from(token_amount) else { return Err("--mint needs --token-amount above zero".into()) };
-            let id = TokenId::from(selection.boxes.first().box_id());
-            ob.mint_token(Token { token_id: id, amount: amt }, mint_name.clone(), String::new(), mint_decimals);
-            say!("minting {} units of '{}' ({} decimals), token id {}", token_amount, mint_name, mint_decimals, String::from(id));
-        }
-        let mut outs = vec![match ob.build() { Ok(o) => o, Err(e) => return Err(format!("output: {e:?}").into()) }];
-        for (tree, value) in &more {
-            let Ok(v) = BoxValue::try_from(*value) else { return Err("--pay amount out of range".into()) };
-            outs.push(match ErgoBoxCandidateBuilder::new(v, tree.clone(), height).build() { Ok(o) => o, Err(e) => return Err(format!("output: {e:?}").into()) });
-            payee_trees.push(tree.clone());
-        }
-        (selection, outs)
+}
+
+/// wallet babel-list: the offers a node lists for a token, each proven.
+fn babel_list(s: &Wanted) -> Ended {
+    let (token_hex, node, price_of) = (&s.token_hex, &s.c.node, babel_price);
+    let babel_offers = |token: &str| proven_babel_offers(s.c, token);
+    if token_hex.len() != 64 || node.is_empty() { return Err("babel-list needs --token ID and --node".into()) }
+    let offers = babel_offers(token_hex);
+    crate::out::set("offers", serde_json::json!([]));
+    if offers.is_empty() { say!("no proven offers for that token"); }
+    for b in &offers { crate::out::push("offers", serde_json::json!({ "box": String::from(b.box_id()), "available_nanoerg": b.value.as_u64().saturating_sub(1_000_000), "nanoerg_per_unit": price_of(b) })); say!("offer {}  {} nanoERG available at {} nanoERG per token unit", String::from(b.box_id()), b.value.as_u64().saturating_sub(1_000_000), price_of(b)); }
+    Ok(())
+}
+
+/// wallet babel-offer: ERG put up for others to take in exchange for a token.
+fn offer_built(s: &Wanted) -> Result<Built, Fail> {
+    let (args, token_hex, addr, inputs) = (s.c.args, &s.token_hex, &s.addr, &s.inputs);
+    let (amount, v_out, v_need, height) = (s.amount, s.v_out, s.v_need, s.height);
+    let mut other_trees = vec![];
+    // put ERG up for others to take in exchange for a token, at our price (nanoERG per smallest token unit)
+    let price: i64 = arg(args, "--price", 0)?;
+    let Some(tree) = babel_tree(token_hex) else { return Err("babel-offer needs --token ID".into()) };
+    let Address::P2Pk(pk) = addr.clone() else { return Err("wallet address is not a plain key".into()) };
+    if price <= 0 || amount < 2_000_000 { return Err("babel-offer needs --price above zero and --nanoerg of at least 2000000".into()) }
+    let selection = match SimpleBoxSelector::new().select(inputs.clone(), v_need, &[]) { Ok(s) => s, Err(e) => return Err(format!("box selection: {e:?}").into()) };
+    let mut ob = ErgoBoxCandidateBuilder::new(v_out, tree.clone(), height);
+    ob.set_register_value(R4, Constant::from(pk)); ob.set_register_value(R5, Constant::from(price));
+    other_trees.push(tree);
+    say!("offering {} nanoERG for token {} at {} nanoERG per token unit", amount, token_hex, price);
+    let (selection, outs) = (selection, vec![match ob.build() { Ok(o) => o, Err(e) => return Err(format!("output: {e:?}").into()) }]);
+    Ok(Built { selection, outs, payee_trees: vec![s.payee_tree.clone()], other_trees, burn: vec![], extension: None })
+}
+
+/// wallet send --babel: a payment whose fee is paid in a token, with ERG taken from someone's offer.
+fn babel_paid_built(s: &Wanted) -> Result<Built, Fail> {
+    let (node, inputs, want_tokens, more, babel_token, payee_tree) = (&s.c.node, &s.inputs, s.want_tokens.clone(), s.more.clone(), s.babel_token.clone(), &s.payee_tree);
+    let (need_total, babel_max, v_out, height) = (s.need_total, s.babel_max, s.v_out, s.height);
+    let (mut payee_trees, mut other_trees) = (vec![payee_tree.clone()], vec![]);
+    let price_of = babel_price;
+    let babel_offers = |token: &str| proven_babel_offers(s.c, token);
+    let extension;
+    let Some(tree) = babel_tree(&babel_token) else { return Err("--babel wants the 64-hex id of the token to pay the fee in".into()) };
+    if node.is_empty() { return Err("--babel needs --node to find offers".into()) }
+    if babel_max == 0 { return Err("--babel needs --babel-max RAW: the most token units the fee may cost. `wallet babel-list` shows the offers and their prices".into()) }
+    // every box of ours goes in; the change box holds whatever is left
+    let mine: Vec<ErgoBox> = inputs.iter().take(40).cloned().collect();
+    let my_erg: u64 = mine.iter().map(|b| *b.value.as_u64()).sum();
+    let mut left: std::collections::BTreeMap<String, u64> = Default::default();
+    for t in mine.iter().flat_map(|b| b.tokens.iter().flat_map(|ts| ts.iter())) { *left.entry(String::from(t.token_id)).or_default() += *t.amount.as_u64(); }
+    // what the payment needs in ERG: the payees, the fee, and the least a change box may hold
+    let need = need_total.checked_add(1_000_000).ok_or("the amounts add up to more than can exist")?;
+    if my_erg >= need { return Err("this wallet has enough ERG for the fee; send without --babel".into()) }
+    let short = need - my_erg;
+    for t in &want_tokens { let have = left.entry(String::from(t.token_id)).or_default(); if *have < *t.amount.as_u64() { return Err("not enough of a token being sent".into()) } *have -= *t.amount.as_u64(); }
+    // the best offer: the one that asks the fewest tokens and can still hold a box's minimum afterwards
+    let offers = babel_offers(&babel_token);
+    let have_fee_token = *left.get(&babel_token).unwrap_or(&0);
+    let cost_in = |b: &ErgoBox| -> u64 { let p = price_of(b) as u64; short.div_ceil(p) };
+    let Some(offer) = offers.iter().filter(|b| *b.value.as_u64() >= short + 1_000_000 && cost_in(b) <= have_fee_token).min_by_key(|b| cost_in(b)) else {
+        return Err(format!("no proven offer covers {short} nanoERG for the tokens this wallet has ({} offers seen, {have_fee_token} token units available)", offers.len()).into())
     };
-    // A payment given up as "not included" is still a valid transaction: a node may yet hold it, and so may a payee
-    // handed it offline. The coins it spends count as this wallet's again, so the next payment could be made from
-    // other boxes and both could confirm. So the next payment always spends one of those coins: then only one of the
-    // two can ever be in the chain. (Its value comes straight back as change.)
-    let selection = {
-        use ergo_lib::wallet::box_selector::{BoxSelection, ErgoBoxAssetsData};
-        let released: Vec<String> = w.done.iter().filter(|d| d.result == "not included").flat_map(|d| d.inputs.iter().cloned()).collect();
-        let is_released = |b: &ErgoBox| released.contains(&String::from(b.box_id()));
-        match inputs.iter().find(|b| is_released(b)) {
-            Some(extra) if !selection.boxes.iter().any(is_released) => {
-                let mut boxes = selection.boxes.as_vec().clone(); boxes.push(extra.clone());
-                let mut change = selection.change_boxes.clone();
-                change.push(ErgoBoxAssetsData { value: extra.value, tokens: extra.tokens.clone() });
-                BoxSelection { boxes: boxes.try_into().map_err(|_| "box list".to_string())?, change_boxes: change }
-            }
-            _ => selection,
-        }
-    };
-    let mut tb = TxBuilder::new(selection.clone(), outs, height, v_fee, addr.clone());
-    if !burn.is_empty() { tb.set_token_burn_permit(burn.clone()); }
-    if let Some((id, ext)) = extension.clone() { tb.set_context_extension(id, ext); }
-    let unsigned = match tb.build() { Ok(t) => t, Err(e) => return Err(format!("build: {e:?}").into()) };
-    // The library pays the fee to mainnet's fee script. A network with another reward delay has
-    // another script; swap it in on the one output that is neither the payment nor our change.
-    let unsigned = if net().fee_tree.is_empty() { unsigned } else {
-        use ergotree_ir::ergo_tree::ErgoTree;
-        let Some(ft) = unhex(net().fee_tree).and_then(|b| ErgoTree::sigma_parse_bytes(&b).ok()) else { return Err("net file fee_tree is not a script".into()) };
-        let outs: Vec<_> = unsigned.output_candidates.iter().cloned().map(|mut c| { if !payee_trees.contains(&c.ergo_tree) && !my_trees.contains(&c.ergo_tree) && !other_trees.contains(&c.ergo_tree) { c.ergo_tree = ft.clone(); } c }).collect();
-        match ergo_lib::chain::transaction::unsigned::UnsignedTransaction::new_from_vec(unsigned.inputs.as_vec().clone(), unsigned.data_inputs.as_ref().map(|d| d.as_vec().clone()).unwrap_or_default(), outs) { Ok(t) => t, Err(e) => return Err(format!("fee script swap: {e:?}").into()) }
-    };
-    let headers: [Header; 10] = match chain[..10].to_vec().try_into() { Ok(h) => h, Err(_) => return Err("header context".into()) };
-    let ctx = ErgoStateContext::new(PreHeader::from(headers[0].clone()), headers, Parameters::default());
-    let spent: Vec<ErgoBox> = selection.boxes.as_vec().clone();
-    // What this transaction takes out of the wallet, read off the transaction itself: what its own boxes put in,
-    // less what comes back to its own addresses. A spending policy, if the wallet has one, is applied to this.
-    let ask = {
-        let fee_tree = fee_tree_hex();
-        let (mut nano_in, mut nano_back) = (0u64, 0u64);
-        let (mut tok_in, mut tok_back): (std::collections::BTreeMap<String, u64>, std::collections::BTreeMap<String, u64>) = Default::default();
-        for b in spent.iter().filter(|b| my_trees.contains(&b.ergo_tree)) {
-            nano_in = nano_in.saturating_add(*b.value.as_u64());
-            for t in b.tokens.iter().flat_map(|ts| ts.iter()) { let n = tok_in.entry(String::from(t.token_id)).or_default(); *n = n.saturating_add(*t.amount.as_u64()); }
-        }
-        // A Babel fee recreates the offer box it takes ERG from, under the offer's own script: the fee's counterpart, as
-        // the miner's fee output is, not a payee the owner chose. Only that box: the output the contract is told it
-        // is, under the script of the offer spent, with no more ERG than the offer had (it takes none of ours). Any
-        // other output to that script is a payee. The tokens it is paid still count as leaving the wallet.
-        let offer_back: Option<(usize, &ErgoBox)> = extension.as_ref().and_then(|(id, ext)| {
-            let at = ext.values.get(&0)?.clone().try_extract_into::<i32>().ok()?;
-            Some((usize::try_from(at).ok()?, spent.iter().find(|b| b.box_id() == *id)?))
-        });
-        let mut payees: Vec<String> = vec![];
-        for (i, o) in unsigned.output_candidates.iter().enumerate() {
-            if offer_back.is_some_and(|(at, offer)| at == i && o.ergo_tree == offer.ergo_tree && o.value.as_u64() <= offer.value.as_u64()) { continue }
-            if my_trees.contains(&o.ergo_tree) {
-                nano_back = nano_back.saturating_add(*o.value.as_u64());
-                for t in o.tokens.iter().flat_map(|ts| ts.iter()) { let n = tok_back.entry(String::from(t.token_id)).or_default(); *n = n.saturating_add(*t.amount.as_u64()); }
-            } else {
-                let tree_hex = o.ergo_tree.sigma_serialize_bytes().map(|b| hex(&b)).unwrap_or_default();
-                if tree_hex == fee_tree { continue }
-                let a = Address::recreate_from_ergo_tree(&o.ergo_tree).map(|a| enc.address_to_str(&a)).unwrap_or_else(|_| format!("script {}", clip(&tree_hex, 40)));
-                if !payees.contains(&a) { payees.push(a); }
-            }
-        }
-        let tokens = tok_in.into_iter().filter_map(|(id, n)| { let left = n.saturating_sub(*tok_back.get(&id).unwrap_or(&0)); (left > 0).then_some((id, left)) }).collect();
-        policy::Ask { nano: nano_in.saturating_sub(nano_back), tokens, payees, purpose: arg(args, "--purpose", String::new())?, what: sub.to_string() }
-    };
-    let tc = match TransactionContext::new(unsigned, spent.clone(), vec![]) { Ok(t) => t, Err(e) => return Err(format!("context: {e:?}").into()) };
-    if args.iter().any(|a| a == "--request-out") {
-        // not signed: written as a signing request (ErgoPay, static form) for a wallet to show, sign and send
-        use base64::Engine;
-        let reduced = match ergo_lib::chain::transaction::reduced::reduce_tx(tc.clone(), &ctx) { Ok(r) => r, Err(e) => return Err(format!("reduce: {e:?}").into()) };
-        let bytes = match reduced.sigma_serialize_bytes() { Ok(b) => b, Err(e) => return Err(format!("serialize: {e:?}").into()) };
-        crate::out::set("request", format!("ergopay:{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes))); crate::out::set("signed", false);
-        say!("ergopay:{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes));
-        return Ok(());
+    let paid = cost_in(offer);
+    // The node lists the offers, so it can leave the good ones out. Nothing is signed above what was agreed to.
+    if paid > babel_max { return Err(format!("the fee would cost {paid} token units at the best offer the node lists now, more than the {babel_max} allowed; nothing was signed. Look the price up again").into()) }
+    *left.entry(babel_token.clone()).or_default() -= paid;
+    crate::out::set("fee_token", &babel_token); crate::out::set("fee_token_units", paid);
+    say!("fee in tokens: taking {short} nanoERG from offer {} at {} nanoERG per unit, paying {paid} token units", String::from(offer.box_id()), price_of(offer));
+    // the offer box, recreated with less ERG and more tokens; the contract checks this output
+    let Ok(v_back) = BoxValue::try_from(*offer.value.as_u64() - short) else { return Err("offer value".into()) };
+    let mut bb = ErgoBoxCandidateBuilder::new(v_back, tree.clone(), height);
+    let held: Vec<Token> = offer.tokens.iter().flat_map(|ts| ts.iter().cloned()).collect();
+    let before = held.first().map(|t| *t.amount.as_u64()).unwrap_or(0);
+    let (Some(fee_id), Ok(amt)) = (ergo_chain_types::Digest32::try_from(babel_token.clone()).ok().map(TokenId::from), TokenAmount::try_from(before + paid)) else { return Err("fee token".into()) };
+    bb.add_token(Token { token_id: fee_id, amount: amt });
+    for t in held.iter().skip(1) { bb.add_token(*t); }
+    let (Ok(Some(r4)), Ok(Some(r5))) = (offer.additional_registers.get_constant(R4), offer.additional_registers.get_constant(R5)) else { return Err("offer registers".into()) };
+    let id_bytes: Vec<u8> = ergo_chain_types::Digest32::from(offer.box_id()).0.to_vec();
+    bb.set_register_value(R4, r4); bb.set_register_value(R5, r5); bb.set_register_value(R6, Constant::from(id_bytes));
+    let mut ob = ErgoBoxCandidateBuilder::new(v_out, payee_tree.clone(), height);
+    for t in &want_tokens { ob.add_token(*t); }
+    let mut outs = vec![match ob.build() { Ok(o) => o, Err(e) => return Err(format!("output: {e:?}").into()) }];
+    for (t, value) in &more {
+        let Ok(v) = BoxValue::try_from(*value) else { return Err("--pay amount out of range".into()) };
+        outs.push(match ErgoBoxCandidateBuilder::new(v, t.clone(), height).build() { Ok(o) => o, Err(e) => return Err(format!("output: {e:?}").into()) });
+        payee_trees.push(t.clone());
     }
-    // what the payment does, read off the transaction as built: the same numbers the spending policy is held to
-    crate::out::set("leaves_wallet_nanoerg", ask.nano); crate::out::set("tokens_out", &ask.tokens); crate::out::set("payees", &ask.payees); crate::out::set("fee_nanoerg", fee); crate::out::set("signed", false);
-    if args.iter().any(|a| a == "--dry-run") {
-        // a wallet with no phrase at all (read-only) could never sign this, nor one given a wrong password: a dry run that
-        // says yes would mislead
-        if phrase.is_none() && (!locked || bad_password) { return Err(no_phrase.into()) }
-        // built and checked against the policy, as a real payment is; nothing is signed, written or counted
-        if let Err(e) = policy::reserve(state, &ask, true) { return Err(format!("the spending policy does not allow it: {e}").into()) }
-        say!("dry run: {} nanoERG would leave this wallet (fee {fee} included), to {}; nothing signed", ask.nano, if ask.payees.is_empty() { "itself".to_string() } else { ask.payees.join(", ") });
-        return Ok(());
+    outs.push(match bb.build() { Ok(o) => o, Err(e) => return Err(format!("offer output: {e:?}").into()) });
+    // the contract is told where its recreated box sits among the outputs
+    let mut ext = ergotree_ir::chain::context_extension::ContextExtension::empty();
+    ext.values.insert(0, Constant::from((outs.len() - 1) as i32));
+    extension = Some((offer.box_id(), ext));
+    other_trees.push(tree);
+    let change_tokens: Vec<Token> = left.iter().filter(|(_, a)| **a > 0).filter_map(|(id, a)| Some(Token { token_id: TokenId::from(ergo_chain_types::Digest32::try_from(id.clone()).ok()?), amount: TokenAmount::try_from(*a).ok()? })).collect();
+    let Ok(v_change) = BoxValue::try_from(1_000_000u64) else { return Err("value".into()) };
+    let change = ErgoBoxAssetsData { value: v_change, tokens: BoxTokens::from_vec(change_tokens).ok() };
+    let mut all = mine.clone(); all.push(offer.clone());
+    let Ok(bx) = all.try_into() else { return Err("box list".into()) };
+    let (selection, outs) = (BoxSelection { boxes: bx, change_boxes: vec![change] }, outs);
+    Ok(Built { selection, outs, payee_trees, other_trees, burn: vec![], extension })
+}
+
+/// wallet consolidate: every tracked box into one, back to ourselves.
+fn consolidation_built(s: &Wanted) -> Result<Built, Fail> {
+    let (inputs, my_tree, fee, height) = (&s.inputs, &s.my_tree, s.fee, s.height);
+    // every tracked box (up to 60) into one box back to ourselves: fewer boxes means smaller proofs later
+    let boxes: Vec<ErgoBox> = inputs.iter().take(60).cloned().collect();
+    if boxes.len() < 2 { return Err("nothing to consolidate: fewer than two boxes".into()) }
+    let total: u64 = boxes.iter().map(|b| *b.value.as_u64()).sum();
+    let mut sums: Vec<(TokenId, u64)> = vec![];
+    for t in boxes.iter().flat_map(|b| b.tokens.iter().flat_map(|ts| ts.iter())) {
+        match sums.iter_mut().find(|x| x.0 == t.token_id) { Some(x) => x.1 += *t.amount.as_u64(), None => sums.push((t.token_id, *t.amount.as_u64())) }
     }
-    let Some(p) = phrase.as_deref() else { return Err(no_phrase.into()) };
-    let secrets = secrets(p, n_addr);
-    if secrets.is_empty() { return Err("derivation".into()) }
-    // written to the payments log before the signature is made, so it counts whether or not the payment goes through
-    if let Err(e) = policy::reserve(state, &ask, false) { return Err(format!("the spending policy does not allow it: {e}").into()) }
-    let signed = match Wallet::from_secrets(secrets).sign_transaction(tc, &ctx, None) { Ok(t) => t, Err(e) => return Err(format!("sign: {e:?}").into()) };
+    let Ok(v) = BoxValue::try_from(total.saturating_sub(fee)) else { return Err("not enough ERG to pay the fee".into()) };
+    let mut ob = ErgoBoxCandidateBuilder::new(v, my_tree.clone(), height);
+    for (id, amt) in &sums { if let Ok(a) = TokenAmount::try_from(*amt) { ob.add_token(Token { token_id: *id, amount: a }); } }
+    let out = match ob.build() { Ok(o) => o, Err(e) => return Err(format!("output: {e:?}").into()) };
+    let Ok(bx) = boxes.clone().try_into() else { return Err("box list".into()) };
+    say!("consolidating {} boxes ({} token kinds) into one", boxes.len(), sums.len());
+    let (selection, outs) = (BoxSelection { boxes: bx, change_boxes: vec![] }, vec![out]);
+    Ok(Built { selection, outs, payee_trees: vec![s.payee_tree.clone()], other_trees: vec![], burn: vec![], extension: None })
+}
+
+/// wallet burn: some of a token destroyed.
+fn burn_built(s: &Wanted) -> Result<Built, Fail> {
+    let (inputs, my_tree, token_hex, pay_token) = (&s.inputs, &s.my_tree, &s.token_hex, s.pay_token);
+    let (fee, height, token_amount) = (s.fee, s.height, s.token_amount);
+    let mut burn = vec![];
+    // destroy some of a token: it is selected as an input and appears in no output, which needs an explicit permit
+    let Some(t) = pay_token else { return Err("burn needs --token ID and --token-amount RAW".into()) };
+    let Ok(need) = BoxValue::try_from(1_000_000 + fee) else { return Err("fee out of range".into()) };
+    let sel = match SimpleBoxSelector::new().select(inputs.clone(), need, &[t]) { Ok(x) => x, Err(e) => return Err(format!("box selection: {e:?}").into()) };
+    let Ok(v) = BoxValue::try_from(1_000_000u64) else { return Err("value".into()) };
+    let out = match ErgoBoxCandidateBuilder::new(v, my_tree.clone(), height).build() { Ok(o) => o, Err(e) => return Err(format!("output: {e:?}").into()) };
+    say!("burning {} units of token {}", token_amount, token_hex);
+    burn.push(t);
+    let (selection, outs) = (sel, vec![out]);
+    Ok(Built { selection, outs, payee_trees: vec![s.payee_tree.clone()], other_trees: vec![], burn, extension: None })
+}
+
+/// wallet send: a payment to one payee or several, of ERG and tokens; or a new token minted to ourselves.
+fn payment_built(s: &Wanted) -> Result<Built, Fail> {
+    let (inputs, want_tokens, more, payee_tree, mint_name) = (&s.inputs, s.want_tokens.clone(), s.more.clone(), &s.payee_tree, &s.mint_name);
+    let (v_need, v_out, height, token_amount, mint_decimals) = (s.v_need, s.v_out, s.height, s.token_amount, s.mint_decimals);
+    let mut payee_trees = vec![payee_tree.clone()];
+    let selection = match SimpleBoxSelector::new().select(inputs.clone(), v_need, &want_tokens) { Ok(s) => s, Err(e) => return Err(format!("box selection: {e:?}").into()) };
+    let mut ob = ErgoBoxCandidateBuilder::new(v_out, payee_tree.clone(), height);
+    for t in &want_tokens { ob.add_token(*t); }
+    if !mint_name.is_empty() {
+        // a new token's id is the id of the first box the transaction spends; its name and decimals go in the box's registers
+        let Ok(amt) = TokenAmount::try_from(token_amount) else { return Err("--mint needs --token-amount above zero".into()) };
+        let id = TokenId::from(selection.boxes.first().box_id());
+        ob.mint_token(Token { token_id: id, amount: amt }, mint_name.clone(), String::new(), mint_decimals);
+        say!("minting {} units of '{}' ({} decimals), token id {}", token_amount, mint_name, mint_decimals, String::from(id));
+    }
+    let mut outs = vec![match ob.build() { Ok(o) => o, Err(e) => return Err(format!("output: {e:?}").into()) }];
+    for (tree, value) in &more {
+        let Ok(v) = BoxValue::try_from(*value) else { return Err("--pay amount out of range".into()) };
+        outs.push(match ErgoBoxCandidateBuilder::new(v, tree.clone(), height).build() { Ok(o) => o, Err(e) => return Err(format!("output: {e:?}").into()) });
+        payee_trees.push(tree.clone());
+    }
+    let (selection, outs) = (selection, outs);
+    Ok(Built { selection, outs, payee_trees, other_trees: vec![], burn: vec![], extension: None })
+}
+
+/// A payment given up as "not included" is still a valid transaction: a node may yet hold it, and so may a payee
+/// handed it offline. The coins it spends count as this wallet's again, so the next payment could be made from
+/// other boxes and both could confirm. So the next payment always spends one of those coins: then only one of the
+/// two can ever be in the chain. (Its value comes straight back as change.)
+fn with_a_released_coin(selection: BoxSelection<ErgoBox>, inputs: &[ErgoBox], done: &[Done]) -> Result<BoxSelection<ErgoBox>, Fail> {
+    let released: Vec<String> = done.iter().filter(|d| d.result == "not included").flat_map(|d| d.inputs.iter().cloned()).collect();
+    let is_released = |b: &ErgoBox| released.contains(&String::from(b.box_id()));
+    Ok(match inputs.iter().find(|b| is_released(b)) {
+        Some(extra) if !selection.boxes.iter().any(is_released) => {
+            let mut boxes = selection.boxes.as_vec().clone(); boxes.push(extra.clone());
+            let mut change = selection.change_boxes.clone();
+            change.push(ErgoBoxAssetsData { value: extra.value, tokens: extra.tokens.clone() });
+            BoxSelection { boxes: boxes.try_into().map_err(|_| "box list".to_string())?, change_boxes: change }
+        }
+        _ => selection,
+    })
+}
+
+/// The library pays the fee to mainnet's fee script. A network with another reward delay has
+/// another script; swap it in on the one output that is neither the payment nor our change.
+fn with_fee_script(unsigned: UnsignedTransaction, payee_trees: &[ErgoTree], my_trees: &[ErgoTree], other_trees: &[ErgoTree]) -> Result<UnsignedTransaction, Fail> {
+    if net().fee_tree.is_empty() { return Ok(unsigned) }
+    let Some(ft) = unhex(net().fee_tree).and_then(|b| ErgoTree::sigma_parse_bytes(&b).ok()) else { return Err("net file fee_tree is not a script".into()) };
+    let outs: Vec<_> = unsigned.output_candidates.iter().cloned().map(|mut c| { if !payee_trees.contains(&c.ergo_tree) && !my_trees.contains(&c.ergo_tree) && !other_trees.contains(&c.ergo_tree) { c.ergo_tree = ft.clone(); } c }).collect();
+    match UnsignedTransaction::new_from_vec(unsigned.inputs.as_vec().clone(), unsigned.data_inputs.as_ref().map(|d| d.as_vec().clone()).unwrap_or_default(), outs) { Ok(t) => Ok(t), Err(e) => Err(format!("fee script swap: {e:?}").into()) }
+}
+
+/// What this transaction takes out of the wallet, read off the transaction itself: what its own boxes put in,
+/// less what comes back to its own addresses. A spending policy, if the wallet has one, is applied to this.
+/// Handed back: the nanoERG that leaves (the network fee is in it), the token units that leave by token id, and the
+/// address of every output that is neither the wallet's own nor a fee. Nothing is read but the transaction.
+fn leaves_wallet(spent: &[ErgoBox], outputs: &[ErgoBoxCandidate], my_trees: &[ErgoTree], extension: Option<&(BoxId, ContextExtension)>, enc: &AddressEncoder) -> (u64, std::collections::BTreeMap<String, u64>, Vec<String>) {
+    let fee_tree = fee_tree_hex();
+    let (mut nano_in, mut nano_back) = (0u64, 0u64);
+    let (mut tok_in, mut tok_back): (std::collections::BTreeMap<String, u64>, std::collections::BTreeMap<String, u64>) = Default::default();
+    for b in spent.iter().filter(|b| my_trees.contains(&b.ergo_tree)) {
+        nano_in = nano_in.saturating_add(*b.value.as_u64());
+        for t in b.tokens.iter().flat_map(|ts| ts.iter()) { let n = tok_in.entry(String::from(t.token_id)).or_default(); *n = n.saturating_add(*t.amount.as_u64()); }
+    }
+    // A Babel fee recreates the offer box it takes ERG from, under the offer's own script: the fee's counterpart, as
+    // the miner's fee output is, not a payee the owner chose. Only that box: the output the contract is told it
+    // is, under the script of the offer spent, with no more ERG than the offer had (it takes none of ours). Any
+    // other output to that script is a payee. The tokens it is paid still count as leaving the wallet.
+    let offer_back: Option<(usize, &ErgoBox)> = extension.and_then(|(id, ext)| {
+        let at = ext.values.get(&0)?.clone().try_extract_into::<i32>().ok()?;
+        Some((usize::try_from(at).ok()?, spent.iter().find(|b| b.box_id() == *id)?))
+    });
+    let mut payees: Vec<String> = vec![];
+    for (i, o) in outputs.iter().enumerate() {
+        if offer_back.is_some_and(|(at, offer)| at == i && o.ergo_tree == offer.ergo_tree && o.value.as_u64() <= offer.value.as_u64()) { continue }
+        if my_trees.contains(&o.ergo_tree) {
+            nano_back = nano_back.saturating_add(*o.value.as_u64());
+            for t in o.tokens.iter().flat_map(|ts| ts.iter()) { let n = tok_back.entry(String::from(t.token_id)).or_default(); *n = n.saturating_add(*t.amount.as_u64()); }
+        } else {
+            let tree_hex = o.ergo_tree.sigma_serialize_bytes().map(|b| hex(&b)).unwrap_or_default();
+            if tree_hex == fee_tree { continue }
+            let a = Address::recreate_from_ergo_tree(&o.ergo_tree).map(|a| enc.address_to_str(&a)).unwrap_or_else(|_| format!("script {}", clip(&tree_hex, 40)));
+            if !payees.contains(&a) { payees.push(a); }
+        }
+    }
+    let tokens = tok_in.into_iter().filter_map(|(id, n)| { let left = n.saturating_sub(*tok_back.get(&id).unwrap_or(&0)); (left > 0).then_some((id, left)) }).collect();
+    (nano_in.saturating_sub(nano_back), tokens, payees)
+}
+
+/// A payment signed: say what it is, keep it, and hand it on as asked: written as a parcel for someone to carry
+/// (`--parcel-out`), sent to a node (`--broadcast`), or left in the state directory.
+fn hand_over(c: &Ctx, mut w: WalletFile, signed: Transaction, spent: Vec<ErgoBox>, payee_trees: &[ErgoTree], my_trees: &[ErgoTree]) -> Ended {
+    let Ctx { args, state, node, .. } = c;
     let json = serde_json::to_string(&signed).unwrap_or_default();
     let bx = |b: &ErgoBox| String::from(b.box_id());
     let payee_ids: Vec<String> = signed.outputs.iter().filter(|o| payee_trees.contains(&o.ergo_tree)).map(bx).collect();
@@ -970,135 +1030,164 @@ fn cmd_send(c: &Ctx, o: Open) -> Ended {
     Ok(())
 }
 
-/// wallet receive | status, and the second half of restore: prove the wallet's boxes against the agreed chain and
-/// say what became of the payments it sent.
-fn cmd_sync(c: &Ctx, o: Open) -> Ended {
-    let Ctx { args, state, node, chain, enc, .. } = c;
+/// wallet send | consolidate | burn | babel-offer | babel-list: what is asked for is read (`wanted`), the transaction
+/// that does it is built (one builder for each), what it takes out of the wallet is read off it and held to the
+/// spending policy (`leaves_wallet`), and only then is it signed and handed on (`hand_over`).
+fn cmd_send(c: &Ctx, o: Open) -> Ended {
+    let Ctx { args, state, chain, enc, .. } = c;
     let sub = c.sub;
-    let Open { mut w, addr, scanning, my_trees, addr_strs, .. } = o;
-    if node.is_empty() || chain.is_empty() { return Err(crate::out::Fail::new(2, "usage: tachys wallet receive|status|restore --state DIR --node URL[,URL...] [--ids ID,...] [--reconcile] [--mnemonic-file FILE]  (run `tachys tips --state DIR` first)".to_string())) }
-    let nodes: Vec<String> = crate::nodes::each(node);
-    let mut cost = RestCost::default();
-    let mut tracked: Vec<String> = w.boxes.keys().cloned().collect();
-    let mut ids: Vec<String> = match sub {
-        "receive" => arg(args, "--ids", String::new())?.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
-        "status" | "restore" | "watch" => {
-            // boxes we created ourselves (change from our own payments) are looked for without asking anyone
-            let mut v = tracked.clone();
-            v.extend(w.expect.iter().cloned());
-            // boxes undone by a reorganisation are asked about until they are back (or seen no more for long: the last 64)
-            v.extend(w.undone.iter().filter(|u| !v.contains(u)).cloned().collect::<Vec<_>>());
-            v
-        }
-        _ => { return Err(crate::out::Fail::new(2, "usage: tachys wallet new|restore|receive|status|send ...".to_string())) }
+    let Open { w, phrase, no_phrase, locked, bad_password, addr, my_tree, n_addr, my_trees, .. } = o;
+    let s = wanted(c, &w, &addr, &my_tree)?;
+    if sub == "babel-list" { return babel_list(&s) }
+    let Built { selection, outs, payee_trees, other_trees, burn, extension } = match sub {
+        "babel-offer" => offer_built(&s)?,
+        "send" if !s.babel_token.is_empty() && s.mint_name.is_empty() => babel_paid_built(&s)?,
+        "consolidate" => consolidation_built(&s)?,
+        "burn" => burn_built(&s)?,
+        _ => payment_built(&s)?,
     };
-    // every box a waiting payment creates is asked about too: any one of them existing shows it is in the chain
-    for p in &w.pending { for (id, _) in outputs_of(p, &my_trees) { if !ids.contains(&id) { ids.push(id); } } }
-    // `--pools`: a box asked about that this wallet neither has nor expects may be paid by a payment not yet in a block.
-    // If a node holds that payment in its pool it is fetched (`pending_payment`: it is the payment that makes that box,
-    // as far as its body goes; a payment's id does not cover its signatures). It is held as if the payer had handed it
-    // over (`hold`) only if every coin it spends is proven unspent against the agreed chain and its spending proofs
-    // verify against them: then it is a payment that can be made, and from then on its coins are proven with the box.
-    if sub == "receive" && args.iter().any(|a| a == "--pools") {
-        // a payment of this wallet's own, still waiting, is not someone else's to hold
-        let own: Vec<String> = w.pending.iter().flat_map(|p| outputs_of(p, &my_trees)).map(|x| x.0).collect();
-        let own_tx: Vec<String> = w.pending.iter().map(|p| p.tx.clone()).collect();
-        for id in ids.clone() {
-            if w.boxes.contains_key(&id) || w.expect.contains(&id) || w.void.contains(&id) || own.contains(&id) { continue }
-            let (found, answered) = pending_payment(&nodes, &id);
-            // a node showed such a payment, held or not: then nobody can say there is none
-            let offered = found.is_some();
-            let mut held = false;
-            if let Some(tx) = found.filter(|t| !own_tx.contains(&String::from(t.id()))) {
-                let coins: Vec<String> = tx.inputs.iter().map(|i| String::from(i.box_id)).collect();
-                let reads: Vec<String> = tx.data_inputs.as_ref().map(|d| d.iter().map(|i| String::from(i.box_id)).collect()).unwrap_or_default();
-                let all: Vec<String> = coins.iter().chain(reads.iter()).cloned().collect();
-                let mut seen_at = 0u64;
-                let checked = prove_any_agreed(node, chain, agreed_height(state), &all, &mut cost).map_err(|e| format!("its coins could not be proven ({e})")).and_then(|(h, f)| {
-                    seen_at = h as u64;
-                    let parse = |v: &[Option<Vec<u8>>]| v.iter().map(|b| b.as_ref().ok_or("a coin it spends is not an unspent box (spent, or made by a payment not yet in a block)".to_string()).and_then(|b| ErgoBox::sigma_parse_bytes(b).map_err(|e| format!("box decode: {e:?}")))).collect::<Result<Vec<_>, String>>();
-                    let (fi, fd) = f.split_at(coins.len());
-                    crate::proofs::verifies(&tx, parse(fi)?, parse(fd)?, chain)
-                });
-                match checked.and_then(|_| tx.sigma_serialize_bytes().map(|b| hex(&b)).map_err(|e| format!("{e:?}"))).and_then(|hexs| hold(state, &mut w, &my_trees, &hexs, &coins, seen_at)) {
-                    Ok(_) => { held = true; say!("  {id}  a node holds the payment that makes it, not yet in a block; its coins are unspent and its signatures verify: taken and held") }
-                    Err(why) => say!("  {id}  a node holds a payment that makes it, but it is not held: {why}"),
-                }
+    let selection = with_a_released_coin(selection, &s.inputs, &w.done)?;
+    let (height, v_fee, fee) = (s.height, s.v_fee, s.fee);
+    let mut tb = TxBuilder::new(selection.clone(), outs, height, v_fee, addr.clone());
+    if !burn.is_empty() { tb.set_token_burn_permit(burn.clone()); }
+    if let Some((id, ext)) = extension.clone() { tb.set_context_extension(id, ext); }
+    let unsigned = match tb.build() { Ok(t) => t, Err(e) => return Err(format!("build: {e:?}").into()) };
+    let unsigned = with_fee_script(unsigned, &payee_trees, &my_trees, &other_trees)?;
+    let headers: [Header; 10] = match chain[..10].to_vec().try_into() { Ok(h) => h, Err(_) => return Err("header context".into()) };
+    let ctx = ErgoStateContext::new(PreHeader::from(headers[0].clone()), headers, Parameters::default());
+    let spent: Vec<ErgoBox> = selection.boxes.as_vec().clone();
+    // a spending policy, if the wallet has one, is applied to this
+    let (nano, tokens, payees) = leaves_wallet(&spent, unsigned.output_candidates.as_vec(), &my_trees, extension.as_ref(), enc);
+    let ask = policy::Ask { nano, tokens, payees, purpose: arg(args, "--purpose", String::new())?, what: sub.to_string() };
+    let tc = match TransactionContext::new(unsigned, spent.clone(), vec![]) { Ok(t) => t, Err(e) => return Err(format!("context: {e:?}").into()) };
+    if args.iter().any(|a| a == "--request-out") {
+        // not signed: written as a signing request (ErgoPay, static form) for a wallet to show, sign and send
+        use base64::Engine;
+        let reduced = match ergo_lib::chain::transaction::reduced::reduce_tx(tc.clone(), &ctx) { Ok(r) => r, Err(e) => return Err(format!("reduce: {e:?}").into()) };
+        let bytes = match reduced.sigma_serialize_bytes() { Ok(b) => b, Err(e) => return Err(format!("serialize: {e:?}").into()) };
+        crate::out::set("request", format!("ergopay:{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes))); crate::out::set("signed", false);
+        say!("ergopay:{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes));
+        return Ok(());
+    }
+    // what the payment does, read off the transaction as built: the same numbers the spending policy is held to
+    crate::out::set("leaves_wallet_nanoerg", ask.nano); crate::out::set("tokens_out", &ask.tokens); crate::out::set("payees", &ask.payees); crate::out::set("fee_nanoerg", fee); crate::out::set("signed", false);
+    if args.iter().any(|a| a == "--dry-run") {
+        // a wallet with no phrase at all (read-only) could never sign this, nor one given a wrong password: a dry run that
+        // says yes would mislead
+        if phrase.is_none() && (!locked || bad_password) { return Err(no_phrase.into()) }
+        // built and checked against the policy, as a real payment is; nothing is signed, written or counted
+        if let Err(e) = policy::reserve(state, &ask, true) { return Err(format!("the spending policy does not allow it: {e}").into()) }
+        say!("dry run: {} nanoERG would leave this wallet (fee {fee} included), to {}; nothing signed", ask.nano, if ask.payees.is_empty() { "itself".to_string() } else { ask.payees.join(", ") });
+        return Ok(());
+    }
+    let Some(p) = phrase.as_deref() else { return Err(no_phrase.into()) };
+    let secrets = secrets(p, n_addr);
+    if secrets.is_empty() { return Err("derivation".into()) }
+    // written to the payments log before the signature is made, so it counts whether or not the payment goes through
+    if let Err(e) = policy::reserve(state, &ask, false) { return Err(format!("the spending policy does not allow it: {e}").into()) }
+    let signed = match Wallet::from_secrets(secrets).sign_transaction(tc, &ctx, None) { Ok(t) => t, Err(e) => return Err(format!("sign: {e:?}").into()) };
+    hand_over(c, w, signed, spent, &payee_trees, &my_trees)
+}
+
+/// One proof, and what it was asked: the boxes asked about and, for each, its bytes if it is unspent at `height`.
+/// `settled`: the proof is at or below the tip the peers agreed on (`agreed`), so it can take away as well as add.
+#[derive(Clone, Copy)]
+struct Shown<'a> { ids: &'a [String], found: &'a [Option<Vec<u8>>], height: u32, agreed: u32, settled: bool, chain: &'a [Header] }
+
+/// What a sync changes as it reads a proof: the boxes expected, the boxes that can never be, and the boxes undone.
+struct Books { expect: Vec<String>, void: Vec<String>, undone: Vec<String> }
+
+/// What settling the wallet's own payments leaves for the boxes to be read by.
+struct Sent {
+    /// boxes that payments of this wallet, waiting or settled, spend
+    spent_by_us: Vec<String>,
+    /// boxes a payment still waiting spends: not this wallet's to count or spend again
+    held: Vec<String>,
+    /// boxes a payment of this wallet spent or made: nothing to say of them on a sync
+    quiet: Vec<String>,
+    /// a payment's outcome was unclear: the nodes are to be asked again what the addresses hold
+    refresh: bool,
+}
+
+/// `wallet receive --pools`: a box asked about that this wallet neither has nor expects may be paid by a payment not yet in a block.
+/// If a node holds that payment in its pool it is fetched (`pending_payment`: it is the payment that makes that box,
+/// as far as its body goes; a payment's id does not cover its signatures). It is held as if the payer had handed it
+/// over (`hold`) only if every coin it spends is proven unspent against the agreed chain and its spending proofs
+/// verify against them: then it is a payment that can be made, and from then on its coins are proven with the box.
+fn take_from_pools(c: &Ctx, w: &mut WalletFile, my_trees: &[ErgoTree], nodes: &[String], ids: &[String], cost: &mut RestCost) {
+    let Ctx { state, node, chain, .. } = c;
+    // a payment of this wallet's own, still waiting, is not someone else's to hold
+    let own: Vec<String> = w.pending.iter().flat_map(|p| outputs_of(p, my_trees)).map(|x| x.0).collect();
+    let own_tx: Vec<String> = w.pending.iter().map(|p| p.tx.clone()).collect();
+    for id in ids {
+        if w.boxes.contains_key(id) || w.expect.contains(id) || w.void.contains(id) || own.contains(id) { continue }
+        let (found, answered) = pending_payment(nodes, id);
+        // a node showed such a payment, held or not: then nobody can say there is none
+        let offered = found.is_some();
+        let mut held = false;
+        if let Some(tx) = found.filter(|t| !own_tx.contains(&String::from(t.id()))) {
+            let coins: Vec<String> = tx.inputs.iter().map(|i| String::from(i.box_id)).collect();
+            let reads: Vec<String> = tx.data_inputs.as_ref().map(|d| d.iter().map(|i| String::from(i.box_id)).collect()).unwrap_or_default();
+            let all: Vec<String> = coins.iter().chain(reads.iter()).cloned().collect();
+            let mut seen_at = 0u64;
+            let checked = prove_any_agreed(node, chain, agreed_height(state), &all, cost).map_err(|e| format!("its coins could not be proven ({e})")).and_then(|(h, f)| {
+                seen_at = h as u64;
+                let parse = |v: &[Option<Vec<u8>>]| v.iter().map(|b| b.as_ref().ok_or("a coin it spends is not an unspent box (spent, or made by a payment not yet in a block)".to_string()).and_then(|b| ErgoBox::sigma_parse_bytes(b).map_err(|e| format!("box decode: {e:?}")))).collect::<Result<Vec<_>, String>>();
+                let (fi, fd) = f.split_at(coins.len());
+                crate::proofs::verifies(&tx, parse(fi)?, parse(fd)?, chain)
+            });
+            match checked.and_then(|_| tx.sigma_serialize_bytes().map(|b| hex(&b)).map_err(|e| format!("{e:?}"))).and_then(|hexs| hold(state, w, my_trees, &hexs, &coins, seen_at)) {
+                Ok(_) => { held = true; say!("  {id}  a node holds the payment that makes it, not yet in a block; its coins are unspent and its signatures verify: taken and held") }
+                Err(why) => say!("  {id}  a node holds a payment that makes it, but it is not held: {why}"),
             }
-            crate::out::push("pools", serde_json::json!({ "id": id, "answered": answered, "offered": offered, "held": held }));
         }
+        crate::out::push("pools", serde_json::json!({ "id": id, "answered": answered, "offered": offered, "held": held }));
     }
-    // payments still waiting, and ones given up on (they may yet be included): the boxes they spend and one they create.
-    // On every sync, `receive` too: each such payment is settled by this proof, and a coin of it not asked about would
-    // read as gone
-    let watched = w.pending.iter().map(|p| (&p.inputs, &p.watch)).chain(w.done.iter().filter(|d| d.result == "not included").map(|d| (&d.inputs, &d.watch)));
-    for id in watched.flat_map(|(inputs, watch)| inputs.iter().chain(std::iter::once(watch))) { if !id.is_empty() && !ids.contains(id) { ids.push(id.clone()); } }
-    // payments this wallet holds that someone else made to it (`wallet promise`, or fetched from a node's pool with
-    // `--pools`): the boxes each promises and the coins it spends are asked about too, so that one whose coin is gone
-    // is known to be dead (void) and not waited for
-    let promises = held_promises(state, &w);
-    // the boxes promised by a payment held with its coins proven unspent and its signatures verified when it was taken
-    // (`--pools`); one handed over (`wallet promise`) was checked for nothing, and a file from before says nothing
-    let proven_held: Vec<String> = promises.iter().filter(|p| p.1["proven"] == true).flat_map(|p| p.3.iter().cloned()).collect();
-    for (_, _, inputs, outs) in &promises { for id in inputs.iter().chain(outs.iter()) { if !ids.contains(id) { ids.push(id.clone()); } } }
-    // `refresh`: an earlier sync saw the sign of another wallet of this phrase at work (a box gone that no payment of
-    // ours spent, or a payment whose outcome the proof could not tell), so the nodes are asked again what the addresses hold
-    let reconcile = sub == "restore" || (sub == "status" && (args.iter().any(|a| a == "--reconcile") || w.refresh));
-    if reconcile && w.refresh && !args.iter().any(|a| a == "--reconcile") { say!("looking again for this wallet's boxes: something else has spent or moved its coins since the last sync"); }
-    let mut all_listed = reconcile;
-    let mut any_listed = false;
-    if reconcile {
-        // Ask every node given what it lists for the address, and take the union: a node can hide a
-        // box but cannot invent one, because everything listed is proven below like a receipt.
-        for a in addr_strs.clone() { for n in &nodes {
-            let (mut listed, mut offset) = (vec![], 0usize);
-            loop {
-                cost.requests += 1; cost.sent += a.len();
-                let Ok(r) = http().post(&format!("{n}/blockchain/box/unspent/byAddress?offset={offset}&limit=200")).set("Content-Type", "application/json").send_string(&a) else { say!("reconcile: {n} did not answer"); all_listed = false; break };
-                let text = r.into_string().unwrap_or_default();
-                cost.received += text.len();
-                any_listed = true;
-                let page: Vec<String> = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|v| v.as_array().map(|x| x.iter().filter_map(|b| b["boxId"].as_str().map(String::from)).collect())).unwrap_or_default();
-                let n_page = page.len();
-                listed.extend(page);
-                if n_page < 200 { break }
-                // a node that lists more than this is not followed further, and what it listed is not taken for everything
-                if offset >= 1800 { say!("reconcile: {n} lists more than {} boxes for one address; only those are looked at", offset + 200); all_listed = false; break }
-                offset += 200;
-            }
-            let fresh: Vec<String> = listed.iter().filter(|i| !ids.contains(i)).cloned().collect();
-            say!("reconcile: {n} lists {} unspent boxes, {} not yet tracked", listed.len(), fresh.len());
-            ids.extend(fresh);
-        } }
-    }
-    crate::out::set("listed_by_all", reconcile.then_some(all_listed));
-    // nothing known and nobody to ask is not "a balance of nothing"
-    if ids.is_empty() && reconcile && !any_listed { return Err("no node answered what this wallet's addresses hold".into()) }
-    if ids.is_empty() {
-        // a restored wallet that every node says is empty at all twenty addresses keeps the first
-        if scanning && all_listed {
-            w.scan_addresses = false;
-            let keep = (w.addresses.unwrap_or(1) as usize).clamp(1, addr_strs.len());
-            w.addresses = Some(keep as u64); w.address_list = Some(addr_strs.iter().take(keep).cloned().collect());
-            c.save(&w)?;
+}
+
+/// Asks every node what it lists for each address, and adds what is not yet asked about: a node can hide a box
+/// but cannot invent one, because everything listed is proven like a receipt. Handed back: whether every node
+/// answered in full for every address, and whether any answered at all.
+fn listed_at(nodes: &[String], addr_strs: &[String], ids: &mut Vec<String>, cost: &mut RestCost) -> (bool, bool) {
+    let (mut all_listed, mut any_listed) = (true, false);
+    for a in addr_strs { for n in nodes {
+        let (mut listed, mut offset) = (vec![], 0usize);
+        loop {
+            cost.requests += 1; cost.sent += a.len();
+            let Ok(r) = http().post(&format!("{n}/blockchain/box/unspent/byAddress?offset={offset}&limit=200")).set("Content-Type", "application/json").send_string(a) else { say!("reconcile: {n} did not answer"); all_listed = false; break };
+            let text = r.into_string().unwrap_or_default();
+            cost.received += text.len();
+            any_listed = true;
+            let page: Vec<String> = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|v| v.as_array().map(|x| x.iter().filter_map(|b| b["boxId"].as_str().map(String::from)).collect())).unwrap_or_default();
+            let n_page = page.len();
+            listed.extend(page);
+            if n_page < 200 { break }
+            // a node that lists more than this is not followed further, and what it listed is not taken for everything
+            if offset >= 1800 { say!("reconcile: {n} lists more than {} boxes for one address; only those are looked at", offset + 200); all_listed = false; break }
+            offset += 200;
         }
-        crate::out::set("address", enc.address_to_str(&addr)); crate::out::set("addresses", &addr_strs); crate::out::set("nanoerg", 0); crate::out::set("boxes", 0); crate::out::set("tokens", serde_json::json!([])); say!("address {}\nno boxes tracked; balance 0 ERG", enc.address_to_str(&addr)); return Ok(())
-    }
+        let fresh: Vec<String> = listed.iter().filter(|i| !ids.contains(i)).cloned().collect();
+        say!("reconcile: {n} lists {} unspent boxes, {} not yet tracked", listed.len(), fresh.len());
+        ids.extend(fresh);
+    } }
+    (all_listed, any_listed)
+}
+
+/// The first proof a node gives of the boxes asked about, against the stored chain or a few work-checked headers
+/// the node adds to it. Those headers are kept for the next proof; what the peers agreed on is not touched.
+fn proof_from(nodes: &[String], state: &str, chain: &mut Vec<Header>, agreed: u32, ids: &[String], cost: &mut RestCost) -> Option<Proven> {
     let mut proven = None;
-    let mut chain = chain.clone();
-    // the tip the peers agreed on: a proof at or below it settles (below); one above it is only seen
-    let agreed = agreed_height(state);
-    for n in &nodes {
+    for n in nodes {
         if let Some(peer) = n.strip_prefix("p2p://") {
-            match prove_p2p(peer, &mut chain, &ids, &mut cost) { Ok(x) => { proven = Some(x); break } Err(e) => { say!("proof from {n}: {e}"); continue } }
+            match prove_p2p(peer, chain, ids, cost) { Ok(x) => { proven = Some(x); break } Err(e) => { say!("proof from {n}: {e}"); continue } }
         }
-        match prove_reading(n, &chain, Some(agreed), &ids, &mut cost) {
+        match prove_reading(n, chain, Some(agreed), ids, cost) {
             Ok(x) => { proven = Some(x); break }
             Err(e) => {
-                let added = extend_chain(n, &mut chain, 3, &mut cost);
+                let added = extend_chain(n, chain, 3, cost);
                 if added == 0 { say!("proof from {n}: {e}"); continue }
                 say!("node is {added} block(s) past the agreed tip; extended with work-checked, linked headers from {n}");
-                match prove_reading(n, &chain, Some(agreed), &ids, &mut cost) { Ok(x) => { proven = Some(x); break } Err(e) => say!("proof from {n}: {e}") }
+                match prove_reading(n, chain, Some(agreed), ids, cost) { Ok(x) => { proven = Some(x); break } Err(e) => say!("proof from {n}: {e}") }
             }
         }
     }
@@ -1109,18 +1198,14 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
         let keep = chain.iter().position(|h| h.height <= agreed).map_or(16, |i| 16.max(i + crate::chain::FRESH));
         if let Err(e) = write_whole(&format!("{state}/agreed-chain.bin"), &chain_bytes(chain.iter().take(keep))) { say!("note: the chain could not be saved in {state} ({e}); the one from before is kept"); }
     }
-    let Some((height, found)) = proven else { say!("NOT PROVEN by any node given"); return Err(crate::out::Fail::said(1)) };
-    // A box counts as confirmed once it has been proven at or below the tip the peers agreed on. A proof against a
-    // newer header rests on that header's one source and its own work: seen, not confirmed.
-    // The same goes for what is taken away. A box is dropped, and a payment called confirmed or failed, only on a proof
-    // at or below the agreed tip; a proof above it can add what it shows (marked as seen) and settles nothing.
-    let settled = height <= agreed;
-    // each box asked about, for a program: its id, what the proof showed ("proven": unspent and ours, at or below the agreed
-    // tip; "seen": the same above it; "absent"; "spent"; "undone"; "void"; "expected"; "other_address"; "undecodable"; "absent_above_agreed_tip";
-    // "absent_below_confirmed")
-    let checked = |id: &str, state: &str| crate::out::push("checked", serde_json::json!({ "id": id, "state": state, "height": height }));
-    let mut expect: Vec<String> = w.expect.clone();
-    // What became of the payments this wallet sent, read off the same proof as the balance (`payment_outcome`).
+    proven
+}
+
+/// What became of the payments this wallet sent, read off the same proof as the balance (`payment_outcome`): each
+/// one waiting is confirmed, given up, found to have its coins spent, or left waiting and sent again.
+fn settle_sent(c: &Ctx, w: &mut WalletFile, shown: &Shown, nodes: &[String], my_trees: &[ErgoTree], books: &mut Books, cost: &mut RestCost) -> Sent {
+    let Shown { ids, found, height, agreed, settled, chain } = *shown;
+    let (node, expect) = (&c.node, &mut books.expect);
     const GIVE_UP: u64 = 10;
     // boxes that payments of this wallet (waiting or settled) spend, and every box a waiting payment creates
     let spent_by_us: Vec<String> = w.pending.iter().flat_map(|p| p.inputs.iter()).chain(w.done.iter().flat_map(|d| d.inputs.iter())).cloned().collect();
@@ -1133,7 +1218,7 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
     // spends is gone and none it creates is there, it may have been included and spent on: that is settled by a
     // proof that it is in the chain, or left as "coins spent".
     let late: Vec<(String, Option<u32>)> = done.iter().filter(|d| settled && d.result == "not included" && !present(&d.watch) && d.inputs.iter().any(|i| !present(i)))
-        .map(|d| (d.tx.clone(), prove_included(node, &chain, &d.tx, &mut cost).ok().filter(|h| *h <= agreed))).collect();
+        .map(|d| (d.tx.clone(), prove_included(node, chain, &d.tx, cost).ok().filter(|h| *h <= agreed))).collect();
     for (tx, included) in late {
         let Some(d) = done.iter_mut().find(|d| d.tx == tx) else { continue };
         match included {
@@ -1149,7 +1234,7 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
     // A payment settled earlier as "coins spent" (or, by an older build, "spent elsewhere") is given one try at a proof
     // that it is in the chain. If it is, it confirmed: the earlier word is put right.
     for d in done.iter_mut().filter(|d| settled && (d.result == "coins spent" || d.result == "spent elsewhere") && !d.other.contains_key("inclusion_tried")) {
-        match prove_included(node, &chain, &d.tx, &mut cost) {
+        match prove_included(node, chain, &d.tx, cost) {
             Ok(h) if h <= agreed => {
                 d.result = "confirmed".into(); d.seen_at = h as u64; d.other.insert("proof".into(), serde_json::json!("inclusion")); d.other.insert("inclusion_tried".into(), true.into());
                 crate::out::push("payments", serde_json::json!({ "tx": d.tx, "result": "confirmed", "height": h, "proof": "inclusion" }));
@@ -1165,7 +1250,7 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
         let inputs: Vec<String> = p.inputs.clone();
         let first = p.first_look.unwrap_or(height as u64);
         p.first_look = Some(first);
-        let outs = outputs_of(&p, &my_trees);
+        let outs = outputs_of(&p, my_trees);
         let created = present(&p.watch) || outs.iter().any(|(id, _)| present(id));
         made.extend(outs.into_iter().map(|x| x.0));
         let verdict = payment_outcome(settled, created, inputs.iter().any(|i| !present(i)), (height as u64).saturating_sub(first) >= GIVE_UP);
@@ -1174,9 +1259,9 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
         // First, whether it can be proven to be in the chain all the same: the block a node names, linked by hash to
         // the agreed chain, and a Merkle proof from the transaction to that block (`prove_included`). Then it confirmed,
         // whatever became of its boxes since.
-        let included: Option<u32> = (verdict == Some("coins spent")).then(|| prove_included(node, &chain, &tx, &mut cost).ok()).flatten().filter(|h| *h <= agreed);
+        let included: Option<u32> = (verdict == Some("coins spent")).then(|| prove_included(node, chain, &tx, cost).ok()).flatten().filter(|h| *h <= agreed);
         let verdict = if included.is_some() { Some("confirmed") } else { verdict };
-        let reported: Option<String> = (verdict == Some("coins spent")).then(|| node_says(&nodes, &tx)).flatten();
+        let reported: Option<String> = (verdict == Some("coins spent")).then(|| node_says(nodes, &tx)).flatten();
         match verdict {
             Some(v) => {
                 crate::out::push("payments", serde_json::json!({ "tx": tx, "result": v, "node_says": reported, "height": included, "proof": included.map(|_| "inclusion") }));
@@ -1188,7 +1273,7 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
                     _ => format!("NOT INCLUDED after {GIVE_UP} blocks; its coins count as this wallet's again") });
                 if v != "confirmed" || included.is_some() {
                     // nothing it would have created is expected any more
-                    let outs: Vec<String> = outputs_of(&p, &my_trees).into_iter().map(|x| x.0).collect();
+                    let outs: Vec<String> = outputs_of(&p, my_trees).into_iter().map(|x| x.0).collect();
                     expect.retain(|e| !outs.contains(e));
                 }
                 let mut d = Done { tx, watch: p.watch.clone(), inputs: p.inputs.clone(), result: v.to_string(), seen_at: included.unwrap_or(height) as u64, ..Default::default() };
@@ -1215,18 +1300,19 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
     let quiet: Vec<String> = still.iter().flat_map(|p| p.inputs.iter().chain(std::iter::once(&p.watch))).chain(done.iter().flat_map(|d| d.inputs.iter().chain(std::iter::once(&d.watch)))).cloned().chain(made).collect();
     w.pending = still;
     w.done = done;
-    // the boxes paying this wallet that its own payments still waiting make: built and signed here from coins proven
-    // unspent under an agreed tip, which this sync has asked about again (a coin of one gone has settled it, above)
-    let own_waiting: Vec<String> = w.pending.iter().flat_map(|p| outputs_of(p, &my_trees)).filter(|x| x.1).map(|x| x.0).collect();
-    // a box confirmed under a header the agreed chain no longer has there left with its block: undone, not spent.
-    // Only the stored chain can say, so a reorganisation further back than it reaches still reads as a spend.
-    let header_at = |h: u64| chain.iter().find(|x| x.height as u64 == h).map(|x| hex(&crate::chain::id32(x)));
-    let (mut void, mut undone) = (std::mem::take(&mut w.void), std::mem::take(&mut w.undone));
-    // A held payment none of whose boxes exist, one of whose coins this wallet had seen unspent and is now gone, at or
-    // below the agreed tip, can never confirm: what it promised is void, and the payment is put aside (`given-up/`;
-    // nothing sends it again). A coin never seen is not taken for gone: it may be made by a payment not yet in a block
-    // (a payer who chains payments). Coins seen unspent now are written down with the payment.
-    for (file, v, inputs, outs) in &promises {
+    Sent { spent_by_us, held, quiet, refresh }
+}
+
+/// A held payment none of whose boxes exist, one of whose coins this wallet had seen unspent and is now gone, at or
+/// below the agreed tip, can never confirm: what it promised is void, and the payment is put aside (`given-up/`;
+/// nothing sends it again). A coin never seen is not taken for gone: it may be made by a payment not yet in a block
+/// (a payer who chains payments). Coins seen unspent now are written down with the payment.
+fn settle_held(c: &Ctx, shown: &Shown, promises: &[Held], books: &mut Books, cost: &mut RestCost) {
+    let Shown { ids, found, height, agreed, settled, chain } = *shown;
+    let (node, state) = (&c.node, &c.state);
+    let Books { expect, void, .. } = books;
+    let present = |id: &str| ids.iter().position(|x| x == id).map(|i| found[i].is_some()).unwrap_or(false);
+    for (file, v, inputs, outs) in promises {
         if !settled || outs.iter().any(|o| present(o)) { continue }
         // each coin with the height it was seen unspent at: a proof from below that height (a node behind) says nothing
         // about whether it is gone since
@@ -1248,7 +1334,7 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
         // looks like: if it can be proven to be in the chain, it is not void
         // the id read from the payment's own bytes, never from the file's word
         if let Some(tx) = v["tx_bytes"].as_str().and_then(unhex).and_then(|b| ergo_lib::chain::transaction::Transaction::sigma_parse_bytes(&b).ok()).map(|t| String::from(t.id())) {
-            if let Ok(h) = prove_included(node, &chain, &tx, &mut cost) { if h <= agreed { say!("  a payment held for this wallet is in the chain (proven, block {h}); what it made has been spent since"); continue } }
+            if let Ok(h) = prove_included(node, chain, &tx, cost) { if h <= agreed { say!("  a payment held for this wallet is in the chain (proven, block {h}); what it made has been spent since"); continue } }
         }
         expect.retain(|e| !outs.contains(e));
         for o in outs { if !void.contains(o) { void.push(o.clone()); } }
@@ -1257,6 +1343,26 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
         crate::out::push("void", serde_json::json!({ "boxes": outs, "coin_gone": gone, "reason": "a coin it spends, seen unspent before, is gone" }));
         say!("  a payment held for this wallet can never confirm: its coin {}, seen unspent before, is not an unspent box at height {height}; what it promised ({}) is void", clip(gone, 16), outs.iter().map(|o| clip(o, 16)).collect::<Vec<_>>().join(", "));
     }
+}
+
+/// Each box asked about, read off the proof: kept, added, dropped as spent, or said to be undone, void or absent.
+/// Handed back: whether a box went that no payment of this wallet spent (another wallet of the phrase may be at work).
+fn settle_boxes(c: &Ctx, w: &mut WalletFile, shown: &Shown, sent: &Sent, books: &mut Books, my_trees: &[ErgoTree], proven_held: &[String]) -> bool {
+    let Shown { ids, found, height, agreed, settled, chain } = *shown;
+    let Sent { spent_by_us, held, quiet, .. } = sent;
+    let Books { expect, void, undone } = books;
+    let sub = c.sub;
+    let mut refresh = false;
+    // each box asked about, for a program: its id, what the proof showed ("proven": unspent and ours, at or below the agreed
+    // tip; "seen": the same above it; "absent"; "spent"; "undone"; "void"; "expected"; "other_address"; "undecodable"; "absent_above_agreed_tip";
+    // "absent_below_confirmed")
+    let checked = |id: &str, state: &str| crate::out::push("checked", serde_json::json!({ "id": id, "state": state, "height": height }));
+    // the boxes paying this wallet that its own payments still waiting make: built and signed here from coins proven
+    // unspent under an agreed tip, which this sync has asked about again (a coin of one gone has settled it, above)
+    let own_waiting: Vec<String> = w.pending.iter().flat_map(|p| outputs_of(p, my_trees)).filter(|x| x.1).map(|x| x.0).collect();
+    // a box confirmed under a header the agreed chain no longer has there left with its block: undone, not spent.
+    // Only the stored chain can say, so a reorganisation further back than it reaches still reads as a spend.
+    let header_at = |h: u64| chain.iter().find(|x| x.height as u64 == h).map(|x| hex(&crate::chain::id32(x)));
     let boxes = &mut w.boxes;
     for (id, f) in ids.iter().zip(found.iter()) {
         if held.contains(id) { continue }
@@ -1309,6 +1415,85 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
             }
         }
     }
+    refresh
+}
+
+/// wallet receive | status, and the second half of restore: prove the wallet's boxes against the agreed chain and
+/// say what became of the payments it sent. The steps, in order: what to ask about (payments held from a node's pool
+/// with `--pools`, what the nodes list with `--reconcile`); one proof of all of it (`proof_from`); then the
+/// wallet's own payments (`settle_sent`), payments held for it (`settle_held`) and its boxes (`settle_boxes`) are
+/// each read off that proof.
+fn cmd_sync(c: &Ctx, o: Open) -> Ended {
+    let Ctx { args, state, node, chain, enc, .. } = c;
+    let sub = c.sub;
+    let Open { mut w, addr, scanning, my_trees, addr_strs, .. } = o;
+    if node.is_empty() || chain.is_empty() { return Err(crate::out::Fail::new(2, "usage: tachys wallet receive|status|restore --state DIR --node URL[,URL...] [--ids ID,...] [--reconcile] [--mnemonic-file FILE]  (run `tachys tips --state DIR` first)".to_string())) }
+    let nodes: Vec<String> = crate::nodes::each(node);
+    let mut cost = RestCost::default();
+    let mut tracked: Vec<String> = w.boxes.keys().cloned().collect();
+    let mut ids: Vec<String> = match sub {
+        "receive" => arg(args, "--ids", String::new())?.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+        "status" | "restore" | "watch" => {
+            // boxes we created ourselves (change from our own payments) are looked for without asking anyone
+            let mut v = tracked.clone();
+            v.extend(w.expect.iter().cloned());
+            // boxes undone by a reorganisation are asked about until they are back (or seen no more for long: the last 64)
+            v.extend(w.undone.iter().filter(|u| !v.contains(u)).cloned().collect::<Vec<_>>());
+            v
+        }
+        _ => { return Err(crate::out::Fail::new(2, "usage: tachys wallet new|restore|receive|status|send ...".to_string())) }
+    };
+    // every box a waiting payment creates is asked about too: any one of them existing shows it is in the chain
+    for p in &w.pending { for (id, _) in outputs_of(p, &my_trees) { if !ids.contains(&id) { ids.push(id); } } }
+    if sub == "receive" && args.iter().any(|a| a == "--pools") { take_from_pools(c, &mut w, &my_trees, &nodes, &ids, &mut cost); }
+    // payments still waiting, and ones given up on (they may yet be included): the boxes they spend and one they create.
+    // On every sync, `receive` too: each such payment is settled by this proof, and a coin of it not asked about would
+    // read as gone
+    let watched = w.pending.iter().map(|p| (&p.inputs, &p.watch)).chain(w.done.iter().filter(|d| d.result == "not included").map(|d| (&d.inputs, &d.watch)));
+    for id in watched.flat_map(|(inputs, watch)| inputs.iter().chain(std::iter::once(watch))) { if !id.is_empty() && !ids.contains(id) { ids.push(id.clone()); } }
+    // payments this wallet holds that someone else made to it (`wallet promise`, or fetched from a node's pool with
+    // `--pools`): the boxes each promises and the coins it spends are asked about too, so that one whose coin is gone
+    // is known to be dead (void) and not waited for
+    let promises = held_promises(state, &w);
+    // the boxes promised by a payment held with its coins proven unspent and its signatures verified when it was taken
+    // (`--pools`); one handed over (`wallet promise`) was checked for nothing, and a file from before says nothing
+    let proven_held: Vec<String> = promises.iter().filter(|p| p.1["proven"] == true).flat_map(|p| p.3.iter().cloned()).collect();
+    for (_, _, inputs, outs) in &promises { for id in inputs.iter().chain(outs.iter()) { if !ids.contains(id) { ids.push(id.clone()); } } }
+    // `refresh`: an earlier sync saw the sign of another wallet of this phrase at work (a box gone that no payment of
+    // ours spent, or a payment whose outcome the proof could not tell), so the nodes are asked again what the addresses hold
+    let reconcile = sub == "restore" || (sub == "status" && (args.iter().any(|a| a == "--reconcile") || w.refresh));
+    if reconcile && w.refresh && !args.iter().any(|a| a == "--reconcile") { say!("looking again for this wallet's boxes: something else has spent or moved its coins since the last sync"); }
+    // every node given is asked what it lists for each address, and the union is taken
+    let (all_listed, any_listed) = if reconcile { listed_at(&nodes, &addr_strs, &mut ids, &mut cost) } else { (false, false) };
+    crate::out::set("listed_by_all", reconcile.then_some(all_listed));
+    // nothing known and nobody to ask is not "a balance of nothing"
+    if ids.is_empty() && reconcile && !any_listed { return Err("no node answered what this wallet's addresses hold".into()) }
+    if ids.is_empty() {
+        // a restored wallet that every node says is empty at all twenty addresses keeps the first
+        if scanning && all_listed {
+            w.scan_addresses = false;
+            let keep = (w.addresses.unwrap_or(1) as usize).clamp(1, addr_strs.len());
+            w.addresses = Some(keep as u64); w.address_list = Some(addr_strs.iter().take(keep).cloned().collect());
+            c.save(&w)?;
+        }
+        crate::out::set("address", enc.address_to_str(&addr)); crate::out::set("addresses", &addr_strs); crate::out::set("nanoerg", 0); crate::out::set("boxes", 0); crate::out::set("tokens", serde_json::json!([])); say!("address {}\nno boxes tracked; balance 0 ERG", enc.address_to_str(&addr)); return Ok(())
+    }
+    let mut chain = chain.clone();
+    // the tip the peers agreed on: a proof at or below it settles (below); one above it is only seen
+    let agreed = agreed_height(state);
+    let proven = proof_from(&nodes, state, &mut chain, agreed, &ids, &mut cost);
+    let Some((height, found)) = proven else { say!("NOT PROVEN by any node given"); return Err(crate::out::Fail::said(1)) };
+    // A box counts as confirmed once it has been proven at or below the tip the peers agreed on. A proof against a
+    // newer header rests on that header's one source and its own work: seen, not confirmed.
+    // The same goes for what is taken away. A box is dropped, and a payment called confirmed or failed, only on a proof
+    // at or below the agreed tip; a proof above it can add what it shows (marked as seen) and settles nothing.
+    let settled = height <= agreed;
+    let shown = Shown { ids: &ids, found: &found, height, agreed, settled, chain: &chain };
+    let mut books = Books { expect: w.expect.clone(), void: std::mem::take(&mut w.void), undone: std::mem::take(&mut w.undone) };
+    let sent = settle_sent(c, &mut w, &shown, &nodes, &my_trees, &mut books, &mut cost);
+    settle_held(c, &shown, &promises, &mut books, &mut cost);
+    let refresh = settle_boxes(c, &mut w, &shown, &sent, &mut books, &my_trees, &proven_held) | sent.refresh;
+    let boxes = &w.boxes;
     tracked = boxes.keys().cloned().collect();
     let total: u64 = boxes.values().fold(0u64, |a, b| a.saturating_add(b.value));
     // a restored wallet has now been looked over at all twenty addresses: keep those up to the last one that holds a box
@@ -1316,6 +1501,7 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
         let trees: Vec<_> = boxes.values().filter_map(|b| unhex(&b.bytes)).filter_map(|b| ErgoBox::sigma_parse_bytes(&b).ok()).map(|b| b.ergo_tree).collect();
         my_trees.iter().rposition(|t| trees.contains(t)).map_or(1, |i| i + 1)
     });
+    let Books { expect, mut undone, mut void } = books;
     w.expect = expect;
     let keep_last = |v: &mut Vec<String>| { let n = v.len(); if n > 64 { v.drain(..n - 64); } };
     keep_last(&mut undone); keep_last(&mut void);
@@ -1441,6 +1627,73 @@ mod tests {
     }
     fn signed(state: &str) -> Option<Transaction> { serde_json::from_str(&std::fs::read_to_string(format!("{state}/last-tx.json")).ok()?).ok() }
 
+    fn token(n: u8, amount: u64) -> Token { Token { token_id: TokenId::from(ergo_chain_types::Digest32::from([n; 32])), amount: TokenAmount::try_from(amount).unwrap() } }
+    fn candidate(value: u64, tree: &ErgoTree, tokens: &[Token]) -> ErgoBoxCandidate {
+        let mut b = ErgoBoxCandidateBuilder::new(BoxValue::try_from(value).unwrap(), tree.clone(), 1);
+        for t in tokens { b.add_token(*t); }
+        b.build().unwrap()
+    }
+    fn boxed(value: u64, tree: &ErgoTree, tokens: &[Token], index: u16) -> ErgoBox { ErgoBox::from_box_candidate(&candidate(value, tree, tokens), TxId::zero(), index).unwrap() }
+    fn fee_script() -> ErgoTree { ErgoTree::sigma_parse_bytes(&unhex(&fee_tree_hex()).unwrap()).unwrap() }
+    fn id_of(t: Token) -> String { String::from(t.token_id) }
+
+    #[test]
+    fn what_leaves_the_wallet_is_what_its_boxes_put_in_less_what_comes_back() {
+        let enc = AddressEncoder::new(NetworkPrefix::Mainnet);
+        let (mine, payee, other) = ([address(0).script().unwrap(), address(1).script().unwrap()], address(5), address(6));
+        // two boxes of ours at two of our addresses go in, with 100 of one token and 7 of another
+        let spent = [boxed(10 * ERG, &mine[0], &[token(1, 100)], 0), boxed(3 * ERG, &mine[1], &[token(2, 7)], 1)];
+        // 2 ERG and 40 of the first token to a payee, the fee, and the rest back to our first address, less 2 of the second token (burned)
+        let outs = [candidate(2 * ERG, &payee.script().unwrap(), &[token(1, 40)]), candidate(FEE, &fee_script(), &[]), candidate(11 * ERG - FEE, &mine[0], &[token(1, 60), token(2, 5)])];
+        let (nano, tokens, payees) = leaves_wallet(&spent, &outs, &mine, None, &enc);
+        assert_eq!(nano, 2 * ERG + FEE, "what the payee gets and the fee");
+        assert_eq!(tokens, [(id_of(token(1, 1)), 40), (id_of(token(2, 1)), 2)].into_iter().collect(), "tokens paid and tokens burned both leave");
+        assert_eq!(payees, vec![text(&payee)], "the fee is not a payee, nor is our own address");
+        // nothing but change: only the fee leaves, no token and no payee
+        let (nano, tokens, payees) = leaves_wallet(&spent, &[candidate(FEE, &fee_script(), &[]), candidate(13 * ERG - FEE, &mine[1], &[token(1, 100), token(2, 7)])], &mine, None, &enc);
+        assert_eq!((nano, tokens.len(), payees.len()), (FEE, 0, 0));
+        // a box of someone else's among those spent puts in nothing of ours, and what goes back to them is a payee's
+        let theirs = boxed(4 * ERG, &other.script().unwrap(), &[token(3, 9)], 2);
+        let with_theirs = [spent[0].clone(), theirs];
+        let outs = [candidate(4 * ERG, &other.script().unwrap(), &[token(3, 9)]), candidate(FEE, &fee_script(), &[]), candidate(10 * ERG - FEE, &mine[0], &[token(1, 100)])];
+        let (nano, tokens, payees) = leaves_wallet(&with_theirs, &outs, &mine, None, &enc);
+        assert_eq!((nano, tokens.len(), payees), (FEE, 0, vec![text(&other)]));
+        // each payee is named once, however many boxes it is paid in
+        let outs = [candidate(ERG, &payee.script().unwrap(), &[]), candidate(ERG, &payee.script().unwrap(), &[]), candidate(ERG, &other.script().unwrap(), &[]), candidate(10 * ERG, &mine[0], &[token(1, 100), token(2, 7)])];
+        let (nano, _, payees) = leaves_wallet(&spent, &outs, &mine, None, &enc);
+        assert_eq!((nano, payees), (3 * ERG, vec![text(&payee), text(&other)]));
+    }
+
+    #[test]
+    fn only_the_offer_box_a_token_fee_puts_back_is_not_a_payee() {
+        let enc = AddressEncoder::new(NetworkPrefix::Mainnet);
+        let mine = [address(0).script().unwrap()];
+        // a stand-in for the offer's contract: all that is read of it is that the box put back is under the same script
+        let (offer_script, payee) = (address(7).script().unwrap(), address(5));
+        let offer = boxed(5 * ERG, &offer_script, &[token(4, 10)], 3);
+        let spent = [boxed(ERG / 2, &mine[0], &[token(4, 50)], 0), offer.clone()];
+        let told = |at: i32| { let mut e = ContextExtension::empty(); e.values.insert(0, Constant::from(at)); (offer.box_id(), e) };
+        // the payee, the offer put back with less ERG and 3 more of the token, the fee, our change
+        let outs = |back: u64, also: Option<u64>| {
+            let mut o = vec![candidate(ERG, &payee.script().unwrap(), &[]), candidate(back, &offer_script, &[token(4, 13)]), candidate(FEE, &fee_script(), &[]), candidate(1_000_000, &mine[0], &[token(4, 47)])];
+            if let Some(v) = also { o.push(candidate(v, &offer_script, &[])); }
+            o
+        };
+        let (nano, tokens, payees) = leaves_wallet(&spent, &outs(4 * ERG, None), &mine, Some(&told(1)), &enc);
+        assert_eq!(nano, ERG / 2 - 1_000_000, "all the ERG we put in but the change");
+        assert_eq!(tokens, [(id_of(token(4, 1)), 3)].into_iter().collect(), "the token units the fee cost still leave");
+        assert_eq!(payees, vec![text(&payee)], "the offer put back is the fee's other half, not a payee");
+        let under_offer = text(&Address::recreate_from_ergo_tree(&offer_script).unwrap());
+        // a second box under the offer's script is a payee
+        assert_eq!(leaves_wallet(&spent, &outs(4 * ERG, Some(ERG)), &mine, Some(&told(1)), &enc).2, vec![text(&payee), under_offer.clone()]);
+        // so is the box put back if it holds more ERG than the offer had: that ERG would be ours
+        assert_eq!(leaves_wallet(&spent, &outs(5 * ERG + 1, None), &mine, Some(&told(1)), &enc).2, vec![text(&payee), under_offer.clone()]);
+        // and a box under that script the contract is not told is its own, or with no offer spent at all
+        assert_eq!(leaves_wallet(&spent, &outs(4 * ERG, None), &mine, Some(&told(0)), &enc).2, vec![text(&payee), under_offer.clone()]);
+        assert_eq!(leaves_wallet(&spent[..1], &outs(4 * ERG, None), &mine, Some(&told(1)), &enc).2, vec![text(&payee), under_offer.clone()]);
+        assert_eq!(leaves_wallet(&spent, &outs(4 * ERG, None), &mine, None, &enc).2, vec![text(&payee), under_offer]);
+    }
+
     #[test]
     fn a_payment_pays_the_payee_and_the_fee_and_returns_the_rest() {
         let st = state("send");
@@ -1540,10 +1793,12 @@ mod tests {
         let st = state("released");
         let (me, payee) = (address(0), text(&address(1)));
         // a second, larger box beside the first: box selection alone would take it and leave the first untouched
-        let big = ErgoBox::from_box_candidate(&ErgoBoxCandidateBuilder::new(BoxValue::try_from(50 * ERG).unwrap(), me.script().unwrap(), 1).build().unwrap(), TxId::zero(), 1).unwrap();
         let path = format!("{st}/wallet.json");
         let mut w = crate::walletfile::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let small = w.boxes.keys().next().unwrap().clone();
+        // box selection takes the box with the greatest id first, and the first box's id moves with the release
+        // checkpoint (it is created a hundred blocks below it): the large box is one whose id is the greater
+        let big = (1u16..).map(|i| ErgoBox::from_box_candidate(&ErgoBoxCandidateBuilder::new(BoxValue::try_from(50 * ERG).unwrap(), me.script().unwrap(), 1).build().unwrap(), TxId::zero(), i).unwrap()).find(|b| String::from(b.box_id()) > small).unwrap();
         w.boxes.insert(String::from(big.box_id()), TrackedBox { value: 50 * ERG, confirmed_at: Some(1), bytes: hex(&big.sigma_serialize_bytes().unwrap()), ..Default::default() });
         std::fs::write(&path, crate::walletfile::text(&w).unwrap()).unwrap();
         let spends = |st: &str| -> Vec<String> { signed(st).unwrap().inputs.iter().map(|i| String::from(i.box_id)).collect() };

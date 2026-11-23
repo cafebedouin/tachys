@@ -1,0 +1,24 @@
+{
+ "answer": {
+  "change": [
+   "8f7225c28d172fb45764fa9530036cb42acf50690f7e53670a7992474b05229d"
+  ],
+  "command": "wallet send",
+  "error": "send: node refused (400): {\"error\":400,\"reason\":\"bad.request\",\"detail\":\"double spend\"}",
+  "exit": 1,
+  "fee_nanoerg": 1100000,
+  "leaves_wallet_nanoerg": 1001100000,
+  "ok": false,
+  "payees": [
+   "9fwAsEewLQ9EogJyX3tJRrBx6rxNoW2bUQAjcmQfUHayQaHRriS"
+  ],
+  "receipt": [
+   "4d14c0bf0597629f5ec5a03e9f006dcf3c1c4c9d421618bf4b6e9b77ca6d7b62"
+  ],
+  "signed": true,
+  "tokens_out": {},
+  "tx": "31778ffbd149e1666349465ba08b40183ed74c5f03550d5c406ccee4f3af154e",
+  "v": 1
+ },
+ "code": 1
+}

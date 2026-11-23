@@ -112,7 +112,7 @@ the wallet, read off the transaction itself: what its boxes put in, less what co
 - `allow_tokens` and `token_limits`: a token leaves the wallet (paid, burned, or paid as a fee) only
   if `allow_tokens` is true and the token has its own `per_payment` and `per_day`, in raw units.
 - `DIR/payments.log` must exist: create an empty one beside the policy. A missing log is a refusal,
-  not a day with nothing spent, and so is a log with a line that cannot be read.
+  not a day with nothing spent, and so is a log with a line that cannot be read (its time, its amount or its tokens).
 - `wallet mnemonic` is refused while the policy file is there.
 
 The entry is written to the log before the signature is made, under a lock, so two payments at once

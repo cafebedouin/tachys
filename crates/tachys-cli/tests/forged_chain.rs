@@ -48,6 +48,10 @@ fn mine(parent: &Header, difficulty: u32, root: &ADDigest, timestamp: u64) -> He
 fn checkpoint() -> (Header, serde_json::Value) {
     let mut v: serde_json::Value = serde_json::from_str(include_str!("../../../anchors/mainnet.json")).unwrap();
     v["nBits"] = bits(CHECKPOINT_DIFFICULTY).into();
+    // an epoch's last block, whatever height the release checkpoint is at: the tests below let the difficulty fall
+    // at the block right after it, which the rule allows only at an epoch's first
+    let height = v["height"].as_u64().unwrap();
+    v["height"] = (height - height % 128).into();
     v["timestamp"] = (now_ms() - 3_600_000).into();
     let h = sealed(&serde_json::from_value::<Header>(v.clone()).unwrap());
     let id: Vec<u8> = h.id.0.into();
