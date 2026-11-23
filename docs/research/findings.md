@@ -1070,7 +1070,13 @@ million, headers 2.1 million; nothing written to `fuzz/artifacts/`.
 The build's refusal, on the build machine: `assembleRelease` and `bundleRelease` with no key, refused; with
 `-PtachysIdSuffix=.test`, built, `CN=Android Debug`; with a key made for the test, built, that key's certificate;
 `testDebugUnitTest assembleDebug` (what CI runs), passed.
-**Not run:** `assembleRelease` with the project's key since the refusal was added; either APK installed on a phone, or installed over v0.0.1's (which is what shows the key is the same
-one to a phone); the Linux program from the release run for anything but its checksum and attestation (the one
+The released 32-bit APK on a phone (a Galaxy Note 2, SGH-T889, LineageOS on Android 7.1.2, over adb): the phone
+held a debug build of 0.0.1 signed with the debug key and refused the release over it
+(`INSTALL_FAILED_UPDATE_INCOMPATIBLE`, as Android does for any other key); with that build uninstalled, and its
+testnet wallet with it, the release installed, the phone says `0.0.2-spike`, version code 2, not debuggable, and
+the app started and was still in front some seconds later with no crash of its own in the log.
+**Not run:** `assembleRelease` with the project's key since the refusal was added; the 64-bit APK on a phone; the
+32-bit one for more than starting (no screen was looked at, no wallet made or restored); either installed over
+v0.0.1's release (which is what shows the key is the same one to a phone: what this phone held was a debug build); the Linux program from the release run for anything but its checksum and attestation (the one
 `./build-linux.sh` makes is not expected to be the same bytes); the fuzz targets with inputs over 4096 bytes, in
 the phone build, or for the JSON of REST answers; `cargo audit` in the release workflow.
