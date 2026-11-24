@@ -6,8 +6,20 @@ use std::collections::BTreeSet;
 fn main() {
     println!("cargo:rerun-if-changed=src");
     let mut options: BTreeSet<String> = BTreeSet::new();
-    for entry in std::fs::read_dir("src").expect("src") {
-        let path = entry.expect("entry").path();
+    // every source file, in `src` and the directories under it (`src/wallet/`)
+    let mut files: Vec<std::path::PathBuf> = vec![];
+    let mut dirs = vec![std::path::PathBuf::from("src")];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).expect("src") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    for path in files {
         let name = path
             .file_name()
             .and_then(|n| n.to_str())
