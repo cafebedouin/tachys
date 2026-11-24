@@ -2,3 +2,10 @@
 # the 2 MB a test thread gets by default. With this, `cargo test --workspace` passes in debug as well as release.
 [env]
 RUST_MIN_STACK = "8388608"
+
+# `cargo tests`: every test in the workspace but four of the vendored codec's that go by the clock (a frame must
+# arrive within thirty seconds while eight readers share the machine) and fail when it is busy, whatever the code
+# is. They test the codec's connection pool, which is upstream's and not ours to change. All of it is run whatever
+# fails. To run the four: `cargo test -p ergo-p2p --lib` on a quiet machine.
+[alias]
+tests = ["test", "--workspace", "--no-fail-fast", "--", "--skip", "concurrent_readers_over_budget", "--skip", "read_frame_body_slow_trickle_beats_the_idle_deadline", "--skip", "read_frame_body_steady_slow_sender_survives_many_deadlines"]

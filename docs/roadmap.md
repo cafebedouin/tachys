@@ -105,8 +105,8 @@ instead, which as far as we know is new for Ergo:
   mainnet's limits: a recipe must keep one miner at a steady rate (a network file's `epoch_length` says 16 for it).
 - Accepting a payment by its signed transaction as well as by a box id (most counterparties hand over a transaction
   id; a transaction id alone does not name the coins without a node's word).
-- A codec of our own in place of the vendored one, and the binary measured. (Two of its tests,
-  `concurrent_readers_over_budget_*`, fail on a loaded machine and pass alone.)
+- A codec of our own in place of the vendored one, and the binary measured. (Four of its tests go by the clock and
+  fail on a loaded machine; `cargo tests` and CI leave them out, and CI runs them alone afterwards.)
 - The in-process binding with a key. The app now runs the core in its own process (`crates/tachys-c`, finding 64);
   on the Note 2 that has synced, drawn a QR code beside a sync and renamed a wallet, all with a read-only wallet.
   A seed has been sealed and opened this way with a wallet's own password, and a payment made each way on mainnet
@@ -121,9 +121,10 @@ instead, which as far as we know is new for Ergo:
   macOS are the same code and untried. For an iPhone the shared code is ready (finding 67) and there is a draft of its
   hooks that has never been compiled; there is no app, and nothing has been built for an Apple target. On a computer:
   no installer tried, no camera, and nobody has looked at the window.
-- The app's main source file is too long. (`wallet send` and the sync were, and are split into their steps: finding 61.)
-  What the app makes of the core's answers is tested for a payment's outcome, a derived address and a wrong password
-  (`vectors/app/`, finding 61); what it reads of a sync, a receipt, an offer list and the wallet file is not.
+- The app's sources are split by what they do, and the wallet's too (finding 71). What the app makes of the core's
+  answers is tested for a payment's outcome, a derived address and a wrong password (`vectors/app/`, finding 61), and
+  its reading of the wallet file and its own wallet logic against the core (findings 70, 71); what it reads of a
+  sync, a receipt and an offer list is not, and one test draws a screen.
 - A fee paid in a token from the app (finding 68): paid once on mainnet; the Send screen's keeping the fee back has no
   test; when a node stays a block ahead the app can still only say the offers could not be checked and be asked again.
 - The fuzz targets (`fuzz/`: box proofs, peer messages, signed bytes, headers) have run for minutes, not days, and

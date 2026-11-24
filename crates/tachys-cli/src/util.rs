@@ -362,4 +362,54 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn a_turn_is_waited_for_no_longer_than_the_call_has_and_is_shared_within_a_call() {
+        let dir = std::env::temp_dir().join(format!("tachys-turn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = dir.to_string_lossy().to_string();
+        // another program has its turn at this wallet
+        let other = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(dir.join("wallet.lock"))
+            .unwrap();
+        other.lock().unwrap();
+        let own = crate::own::Own::new();
+        let _mine = crate::own::enter(&own);
+        {
+            let _within = Deadline::set(std::time::Instant::now() + Duration::from_millis(300));
+            let t = std::time::Instant::now();
+            let refused = turn(&state).err().expect("the other still has it");
+            assert!(refused.contains("the time given ran out"), "{refused}");
+            assert!(
+                t.elapsed() >= Duration::from_millis(250) && t.elapsed() < Duration::from_secs(10),
+                "{:?}",
+                t.elapsed()
+            );
+        }
+        drop(other);
+        // free now; and a command inside another is the same call, and waits for nothing
+        let outer = turn(&state).expect("free");
+        let inner = turn(&state).expect("the same call");
+        drop(outer);
+        // still held while the inner one is: a second call cannot take it
+        let second = std::thread::spawn({
+            let state = state.clone();
+            move || {
+                let own = crate::own::Own::new();
+                let _theirs = crate::own::enter(&own);
+                let _within = Deadline::set(std::time::Instant::now() + Duration::from_millis(200));
+                turn(&state).is_err()
+            }
+        });
+        assert!(
+            second.join().unwrap(),
+            "held until the last command of the call lets go"
+        );
+        drop(inner);
+        assert!(own.turns.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

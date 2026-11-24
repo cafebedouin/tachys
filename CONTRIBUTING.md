@@ -17,11 +17,12 @@ sentence. This page says how.
 2. Build and test. Neither needs a network:
 
    ```
-   cargo test --workspace
+   cargo tests
    cargo clippy -p tachys -p tachys-verify -p tachys-net -p tachys-c --all-targets -- -D warnings
    ```
 
-   Both must be clean. CI runs the same, with the phone build and `cargo audit`.
+   Both must be clean. (`cargo tests` is `cargo test --workspace` without four of the vendored codec's tests that go
+   by the clock and fail on a busy machine: `.cargo/config.toml`.) CI runs the same, with the phone build and `cargo audit`.
 3. Keep to how the code is written (`AGENTS.md`, "If you are working on this repository", is the full list):
    - formatted with rustfmt, which CI checks: `cargo fmt -p tachys -p tachys-verify -p tachys-net -p tachys-c`
      (never a bare `cargo fmt`: it would rewrite `vendor/`);

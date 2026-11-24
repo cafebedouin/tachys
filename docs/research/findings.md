@@ -1492,3 +1492,33 @@ commit and the toolchain given as an input are as written, not as run. The silen
 was read, not reproduced, before or after; `pay` with a token and ERG was tested as the command it builds, not as a
 payment. The app's waiting for its turn (the sealing, a name, an address, a promise) has no test and was not tried
 by hand. The private network kept once was not run on the rig. No person has reviewed any of it.
+
+## 71. The code is formatted and split by what it does; more of the app is tested
+
+No change to what anything does. After finding 70 the maintainer asked for the long lines to go, for the two
+longest files to be split, and for whatever tests made sense.
+
+- **Formatted.** The four tachys crates and the fuzz targets are rustfmt-formatted and CI checks it; `vendor/` is
+  not touched (the packages are named: a bare `cargo fmt` would rewrite it). `.git-blame-ignore-revs` names the
+  commit. About 190 lines stay long: a statement that is one long sentence is not broken by rustfmt.
+- **`wallet.rs` is `wallet/`**: `mod.rs` (what every subcommand works from, the door in, and the small commands),
+  `request.rs` (a signing request), `send.rs` (a payment built, held to the policy, handed on), `settle.rs` (boxes
+  proven and payments settled), `tests.rs`. `build.rs`, which gathers the options the commands read, now reads the
+  directories under `src` as well; the list it gathers is the same, compared before and after.
+- **`App.kt` is eight files**: `Core.kt` (the app's wallet logic, which now imports nothing that draws), `Widgets.kt`,
+  a file for each group of screens, and `App.kt` with what is left: the screens' frame and the one turn at a time.
+- **`cargo tests`** (`.cargo/config.toml`) is `cargo test --workspace` without the four tests of the vendored codec
+  that go by the clock, and CI runs the same, then those four alone with their failure shown and not counted.
+
+**Tests** added. In the core: `a_wallet_asked_for_twice_at_once_is_made_once_and_keeps_its_phrase`;
+`a_turn_is_waited_for_no_longer_than_the_call_has_and_is_shared_within_a_call`;
+`a_policy_with_a_rule_misspelt_signs_nothing` (through `wallet send`, with nothing signed or counted);
+`a_private_network_is_made_once_for_its_file_and_not_once_a_call`. In the app: `CoreTest`, five tests of `Core`
+with the library loaded and no screen: a wallet made, sealed, named, given an address and read back; a wallet
+already here not added again, in a sentence that names the machine; a read-only wallet made whole by its phrase;
+plain-text phrases sealed with the wallet otherwise as it was; the version. `ViewTest`: where a sent payment stands,
+for each result the core gives.
+**Run:** `cargo tests`: 1009 passed, none failed, the four left out; clippy and the format check over the four
+crates; the shared module's tests, 45, none skipped; the common-code check; the debug app built.
+**Not run:** this build on a phone, nor the app in a window after its split: one test draws a screen, so that the
+screens still work is the compiler's word and that test's. The workflows have not run since they were changed.

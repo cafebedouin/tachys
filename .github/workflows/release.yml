@@ -22,7 +22,7 @@ jobs:
         with:
           toolchain: 1.98.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      # the wallet's own tests; the vendored codec's are CI's, and three of them fail by the clock on a busy machine
+      # the wallet's own tests; the vendored codec's are CI's, and four of them fail by the clock on a busy machine
       - run: cargo test --locked -p tachys -p tachys-verify -p tachys-net -p tachys-c
       - run: ./build-linux.sh
       # the tag must be the version the program says it is, and a release carries a checkpoint under a week old

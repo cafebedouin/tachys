@@ -485,3 +485,66 @@ fn a_command_that_only_reads_the_wallet_does_not_wait_for_one_that_writes() {
     drop(held);
     assert_eq!(writer.join().unwrap(), (0, true));
 }
+
+/// `wallet new` found no wallet and wrote one, with nothing held between: two at once on one directory could each find
+/// none, and the second write over the first's seed phrase after the first had answered with its address.
+#[test]
+fn a_wallet_asked_for_twice_at_once_is_made_once_and_keeps_its_phrase() {
+    for round in 0..6 {
+        let st = dir(&format!("once-{round}"));
+        let go = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let makers: Vec<_> = (0..4)
+            .map(|_| {
+                let (st, go) = (st.to_string(), go.clone());
+                std::thread::spawn(move || {
+                    go.wait();
+                    call(
+                        &[
+                            "wallet",
+                            "new",
+                            "--state",
+                            &st,
+                            "--network",
+                            "testnet",
+                            "--json",
+                        ],
+                        &[],
+                    )
+                })
+            })
+            .collect();
+        let answers: Vec<(i32, Value, String)> =
+            makers.into_iter().map(|t| t.join().unwrap()).collect();
+        let made: Vec<&Value> = answers.iter().filter(|a| a.0 == 0).map(|a| &a.1).collect();
+        assert_eq!(made.len(), 1, "round {round}: {answers:?}");
+        assert!(
+            answers
+                .iter()
+                .filter(|a| a.0 != 0)
+                .all(|a| a.0 == 2 && a.1["error"].as_str().unwrap().contains("already exists")),
+            "round {round}: {answers:?}"
+        );
+        // the wallet on disk is the one that was answered for
+        let w: Value =
+            serde_json::from_str(&std::fs::read_to_string(format!("{st}/wallet.json")).unwrap())
+                .unwrap();
+        assert_eq!(w["address"], made[0]["address"], "round {round}");
+        let (code, j, _) = call(
+            &[
+                "wallet",
+                "address",
+                "--state",
+                &st,
+                "--network",
+                "testnet",
+                "--json",
+            ],
+            &[],
+        );
+        assert_eq!(
+            (code, &j["addresses"][0]),
+            (0, &made[0]["address"]),
+            "and its phrase leads to that address"
+        );
+    }
+}

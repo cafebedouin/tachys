@@ -17,7 +17,7 @@ call this one. Written for one person.
    checkpoint is old: `tachys version` and every `tips` answer say its age (`checkpoint_age_days`), and `tips` warns
    past sixty days. **A build is good for sixty days from its checkpoint; thirty is better.** To refresh: `./refresh-anchors.sh` does what follows for both networks and leaves the commit to you; by hand, take a header at least a day behind the tip from a node you run or trust
    (`GET /blocks/at/HEIGHT`, then `GET /blocks/ID/header`), check its id on a second source, and replace the file
-   with that JSON. `cargo test --workspace` must still pass. No test leans on which header the
+   with that JSON. `cargo tests` must still pass. No test leans on which header the
    checkpoint is (finding 62: the tests that needed one fixed header read `vectors/header-1914880.json`), so a
    failure after a refresh is to be read, not expected.
 2. **The seed lists** (`seeds-mainnet.txt`, `seeds-testnet.txt`, and the copies the app ships in
@@ -122,6 +122,6 @@ the same bytes as the workflow's.
 
 - A report of something that could cost money: `SECURITY.md`.
 - Anything else: an issue (the template warns against pasting a wallet file).
-- A change: it must pass `cargo test --workspace` and the clippy line in `AGENTS.md`, leave `vendor/` alone, and
+- A change: it must pass `cargo tests` and the clippy line in `AGENTS.md`, leave `vendor/` alone, and
   come with a finding if it changes what the wallet does. `anchors/`, the seed lists and the node list are the
   maintainer's to refresh, not a contributor's.

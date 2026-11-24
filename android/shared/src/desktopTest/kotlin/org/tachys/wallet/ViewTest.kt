@@ -62,4 +62,29 @@ class ViewTest {
         // a receipt checked against the chain was received when it was remembered
         assertEquals("Received", paymentStatus(JSONObject().put("dir", "in").put("state", "sent").put("receipt", id('1')), w))
     }
+
+    @Test fun aPaymentSentIsSaidToStandWhereTheWalletFileSaysItStands() {
+        val base = JSONObject(kept)
+        fun file(pending: List<String> = listOf(), done: List<Triple<String, String, Int>> = listOf()): WalletView {
+            val o = JSONObject(kept)
+            o.put("pending", JSONArray(pending.map { JSONObject().put("tx", it) }))
+            o.put("done", JSONArray(done.map { (tx, result, at) -> JSONObject().put("tx", tx).put("result", result).put("seen_at", at) }))
+            return view(o.toString())
+        }
+        fun sent(tx: String, state: String = "sent", change: String = "") = JSONObject().put("dir", "out").put("tx", tx).put("state", state).put("change", change)
+        assertTrue(base.has("boxes"))
+        // signed with no network: waiting for one, whatever the wallet file says
+        assertEquals("Waiting for network", paymentStatus(sent("t", "queued"), file(pending = listOf("t"))))
+        assertEquals("Waiting to confirm", paymentStatus(sent("t"), file(pending = listOf("t"))))
+        // the boxes were last proven at 106: settled at 106 is one confirmation, at 104 three
+        assertEquals("Confirmed · at least 1 confirmation", paymentStatus(sent("t"), file(done = listOf(Triple("t", "confirmed", 106)))))
+        assertEquals("Confirmed · at least 3 confirmations", paymentStatus(sent("t"), file(done = listOf(Triple("t", "confirmed", 104)))))
+        assertTrue(paymentStatus(sent("t"), file(done = listOf(Triple("t", "spent elsewhere", 105)))).startsWith("Failed"))
+        assertTrue(paymentStatus(sent("t"), file(done = listOf(Triple("t", "coins spent", 105)))).contains("Check with the payee"))
+        assertTrue(paymentStatus(sent("t"), file(done = listOf(Triple("t", "not included", 105)))).startsWith("Not included"))
+        // the core no longer has word of it: its change still expected is waiting, and otherwise it is not called confirmed
+        assertEquals("Waiting to confirm", paymentStatus(sent("gone", change = id('e')), file()))
+        assertEquals("Sent · no longer tracked", paymentStatus(sent("gone", change = id('1')), file()))
+        assertEquals("Sent · no longer tracked", paymentStatus(sent("gone"), file()))
+    }
 }

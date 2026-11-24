@@ -1014,3 +1014,46 @@ fn a_call_keeps_no_connection_to_a_node_open_for_the_next_call() {
         "and the next call opens its own"
     );
 }
+
+/// `--net-file` made a network, and kept it for the life of the process, on every call: a program that goes on living
+/// kept as many as it made calls. One is made for each file as it reads.
+#[test]
+fn a_private_network_is_made_once_for_its_file_and_not_once_a_call() {
+    let dir = std::env::temp_dir().join(format!("tachys-netfile-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("net.json").to_string_lossy().to_string();
+    let checkpoint: serde_json::Value =
+        serde_json::from_str(crate::network::MAINNET.checkpoint_json).unwrap();
+    let write = |name: &str| {
+        let net =
+            serde_json::json!({ "name": name, "magic": [9, 9, 9, 9], "checkpoint": checkpoint });
+        std::fs::write(&file, net.to_string()).unwrap()
+    };
+    let args: Vec<String> = ["tachys", "version", "--net-file", &file]
+        .map(String::from)
+        .to_vec();
+    // a call of this test's own: the network it sets is not the one the tests beside it read
+    let own = crate::own::Own::new();
+    let _mine = crate::own::enter(&own);
+    let set = || {
+        crate::setup(&args).unwrap();
+        crate::network::net() as *const crate::network::Net
+    };
+    write("private-a");
+    let first = set();
+    assert_eq!(crate::network::net().name, "private-a");
+    assert!(
+        std::ptr::eq(first, set()) && std::ptr::eq(first, set()),
+        "the same file: the same network"
+    );
+    // a file that reads otherwise is another network
+    write("private-b");
+    let second = set();
+    assert!(!std::ptr::eq(first, second));
+    assert_eq!(crate::network::net().name, "private-b");
+    // and the first is still there for a call that names a file reading as it did
+    write("private-a");
+    assert!(std::ptr::eq(first, set()));
+    let _ = std::fs::remove_dir_all(&dir);
+}

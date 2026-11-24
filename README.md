@@ -139,7 +139,8 @@ Two things it lays groundwork for (`docs/roadmap.md`):
 ## Build and test
 
 ```
-cargo test --workspace                   # about 1000 tests, some 840 of them the vendored codec's own; no network
+cargo tests                              # about 1000 tests, some 840 of them the vendored codec's own; no network
+                                         # (`cargo test --workspace` less four of the codec's that go by the clock)
 cargo run --release -p tachys -- tips --state state        # learn the tip from mainnet peers
 ```
 
