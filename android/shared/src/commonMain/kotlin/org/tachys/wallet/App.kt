@@ -323,12 +323,14 @@ class Core(val on: Platform) {
         }
     }
     /** The best proven offer of ERG for a token (Babel fees) that holds enough to be used: nanoERG per smallest token
-     *  unit, or 0 if there is none. The proof is against the node's tip, so a tip one block old is refreshed once. */
+     *  unit, 0 if there is none, or UNPROVEN if the offers could not be checked just now. The proof is against the node's tip, so a tip one block old is refreshed once. */
     fun babelPrice(token: String): Long {
         fun offers() = ask(listOf(), "wallet", "babel-list", "--state", state, "--node", node, "--token", token)
         var a = offers()
         // the proof is against the node's tip: if it did not check, the tip is refreshed once and the offers asked for again
         if (!a.ok && tips()) a = offers()
+        // still not checked (the node and the peers a block apart, or no node): that is not "no offer"
+        if (!a.ok) return UNPROVEN
         val list = a.json?.takeIf { a.ok }?.optJSONArray("offers") ?: JSONArray()
         // an offer too small to cover the missing ERG cannot be the one used, so its price is not the one to quote
         return (0 until list.length()).map { list.getJSONObject(it) }.filter { it.optLong("available_nanoerg") >= FEE_SHORT_MAX }.map { it.optLong("nanoerg_per_unit") }.filter { it > 0 }.maxOrNull() ?: 0L
@@ -416,6 +418,8 @@ class Core(val on: Platform) {
         /** What a command that did what it was asked answers. */
         const val OK = "ok"
         /** The file that marks a wallet sealed with a password of its own. The core does not read it. */
+        /** `babelPrice`: the offers could not be checked against the agreed tip; asking again may find one. */
+        const val UNPROVEN = -2L
         const val OWN = "own-password"
         const val WRONG = "That is not this wallet's password."
         val LOST get() = "This wallet's seed phrase can no longer be opened on this $device: the key that guarded it is gone, which happens when the $device's screen lock is removed. Restore the wallet from its written seed phrase."
@@ -633,6 +637,8 @@ const val REPORTED_NOTE = "* The name and its decimal places are what a node rep
 const val FEE_SHORT_MAX = 3_100_000L
 /** The most token units a fee paid in a token can cost at `price` nanoERG per unit (rounded up, and safe for any price). */
 fun feeCeiling(price: Long): Long = if (price <= 0L) 0L else (FEE_SHORT_MAX - 1) / price + 1
+/** Of `held` units of a token, what can be sent when the fee is paid in it at `price` nanoERG a unit: the rest is kept for the fee. */
+fun leftAfterFee(held: Long, price: Long): Long = (held - feeCeiling(price)).coerceAtLeast(0L)
 /** Did the core say a node took the transaction? Its own line says so; nothing a node writes can be on such a line. */
 /** "No tokens", "1 token", "5 tokens". */
 fun tokenCount(n: Int) = when (n) { 0 -> "No tokens"; 1 -> "1 token"; else -> "$n tokens" }
@@ -929,6 +935,12 @@ fun Send(core: Core, w: WalletView, busy: Boolean, asked: PayRequest, send: (Str
     val spare = (w.nano - 1_100_000L - if (staying) 1_000_000L else 0L).coerceAtLeast(0L)
     val short = w.nano < 2_100_000L
     val feeToken = picked.firstOrNull()?.takeIf { short && feeInToken }
+    // the fee switched to a token, or its price just learnt, with more of that token typed than the fee leaves: the amount
+    // comes down to what can be sent, whichever was done first
+    LaunchedEffect(offer, feeInToken, short) {
+        val t = picked.firstOrNull()
+        if (t != null && short && feeInToken && offer > 0 && raw(t) > leftAfterFee(t.raw, offer)) amounts[t.id] = shown(leftAfterFee(t.raw, offer), t.decimals)
+    }
     CardBox {
         Text("Send from ${w.name}", color = Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         if (w.readOnly) { Text("This wallet is read-only: it has an address but no key.", color = Color.White, fontSize = 16.sp); return@CardBox }
@@ -937,7 +949,10 @@ fun Send(core: Core, w: WalletView, busy: Boolean, asked: PayRequest, send: (Str
         if (alsoTokens) Text("The scanned request also asks for tokens. They are not filled in here: add them below.", color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
         AmountRow("ERG", erg, w.erg + " ERG", nano > w.nano, onMax = { erg = shown(spare, 9) }) { erg = it }
         picked.forEach { t ->
-            AmountRow(label(t), amounts[t.id] ?: "", t.amount, raw(t) > t.raw, onMax = { amounts[t.id] = t.amount }, onRemove = { chosen.remove(t.id); amounts.remove(t.id); if (chosen.isEmpty()) feeInToken = false }) { amounts[t.id] = it }
+            // of the token the fee is paid in, what the fee may cost is kept back: it is not there to send
+            val kept = if (short && feeInToken && offer > 0 && t.id == picked.firstOrNull()?.id) t.raw - leftAfterFee(t.raw, offer) else 0L
+            val free = t.raw - kept
+            AmountRow(label(t), amounts[t.id] ?: "", if (kept > 0) shown(free, t.decimals) + " (" + shown(kept, t.decimals) + " kept for the fee)" else t.amount, raw(t) > free, onMax = { amounts[t.id] = shown(free, t.decimals) }, onRemove = { chosen.remove(t.id); amounts.remove(t.id); if (chosen.isEmpty()) feeInToken = false }) { amounts[t.id] = it }
         }
         if (picked.isNotEmpty() && nano == 0L) Text("Tokens travel in a box that must hold some ERG: 0.001 ERG goes with them.", color = Dim, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
         if (rest.isNotEmpty()) {
@@ -965,8 +980,9 @@ fun Send(core: Core, w: WalletView, busy: Boolean, asked: PayRequest, send: (Str
                 if (feeInToken) { offer = -1L; scope.launch { offer = withContext(background) { core.babelPrice(first.id) } } }
             }
             if (feeInToken) Text(when {
+                offer == Core.UNPROVEN -> "The offers for ${first.name} could not be checked against the chain just now: the node and the peers were a block apart, or no node answered. Tap the fee button twice to ask again."
                 offer < 0 -> "Looking for an offer…"
-                offer == 0L -> "No offer for ${first.name} could be proven right now, so the fee cannot be paid in it."
+                offer == 0L -> "Nobody is offering ERG for ${first.name} right now, so the fee cannot be paid in it."
                 // the ERG a payment is short of is at most the fee, the payee's box and the change box: 0.0031 ERG
                 else -> "For a wallet without enough ERG: the missing ERG comes from an offer on the chain. Best offer: 1 ${first.name} buys " + shown(offer, 9 - first.decimals) + " ERG, so this costs at most " + shown(feeCeiling(offer), first.decimals) + " ${first.name}. Nothing is signed above that; the result shows the exact amount."
             }, color = Dim, fontSize = 12.sp)
@@ -985,6 +1001,10 @@ fun Send(core: Core, w: WalletView, busy: Boolean, asked: PayRequest, send: (Str
                 sending.any { it.second <= 0L } -> result = "Enter an amount for each token, or remove it with ✕."
                 nano > w.nano || sending.any { (t, r) -> r > t.raw } -> result = "That is more than this wallet holds."
                 feeToken != null && offer <= 0L -> result = "The fee's price in ${feeToken.name} is not known yet. Wait for it to show above, or switch the fee back to ERG."
+                // the fee comes out of the same token: what is sent must leave what the fee may cost
+                feeToken != null && sending.first { it.first.id == feeToken.id }.second > feeToken.raw - feeCeiling(offer) -> result =
+                    if (feeToken.raw <= feeCeiling(offer)) "The fee may cost up to ${shown(feeCeiling(offer), feeToken.decimals)} ${feeToken.name}, and this wallet has ${feeToken.amount}: not enough to pay the fee in it."
+                    else "The fee is paid in ${feeToken.name} too and may cost up to ${shown(feeCeiling(offer), feeToken.decimals)}. Send at most ${shown(feeToken.raw - feeCeiling(offer), feeToken.decimals)} ${feeToken.name}, so that enough is left for it."
                 else -> send(to, nano, sending, feeToken, if (feeToken != null) feeCeiling(offer) else 0L) { r ->
                     val j = try { JSONObject(r) } catch (e: Exception) { null }
                     val state = j?.optString("state") ?: "refused"

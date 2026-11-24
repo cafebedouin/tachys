@@ -731,29 +731,35 @@ fn babel_tree(token: &str) -> Option<ErgoTree> { unhex(&babel_hex(token)).and_th
 fn babel_price(b: &ErgoBox) -> i64 { b.additional_registers.get_constant(R5).ok().flatten().and_then(|c| c.try_extract_into::<i64>().ok()).unwrap_or(0) }
     // The node lists the offers; each one is then proven unspent under the agreed tip (a proof only above it, against
     // a block one node has shown, is not used) and checked to sit under the Babel contract for this token, so a node
-    // can hide an offer but cannot invent one.
-fn proven_babel_offers(c: &Ctx, token: &str) -> Vec<ErgoBox> {
+    // can hide an offer but cannot invent one. An error is a lookup that could not be made or could not be checked (the
+    // node did not answer, or its proof is against a block the agreed chain does not have yet): that is not "no offers",
+    // and a caller must be able to tell the two apart to know that asking again may find one.
+fn proven_babel_offers(c: &Ctx, token: &str) -> Result<Vec<ErgoBox>, String> {
     let Ctx { node, chain, state, .. } = c;
     let price_of = babel_price;
-    let Some(tree) = babel_tree(token) else { return vec![] };
+    let Some(tree) = babel_tree(token) else { return Ok(vec![]) };
     let n = crate::nodes::each(node).into_iter().find(|n| !n.starts_with("p2p://")).unwrap_or_default();
-    let Ok(r) = http().post(&format!("{n}/blockchain/box/unspent/byErgoTree?offset=0&limit=50")).set("Content-Type", "application/json").send_string(&format!("\"{}\"", babel_hex(token))) else { return vec![] };
+    let Ok(r) = http().post(&format!("{n}/blockchain/box/unspent/byErgoTree?offset=0&limit=50")).set("Content-Type", "application/json").send_string(&format!("\"{}\"", babel_hex(token))) else { return Err("no node answered when asked for the offers".into()) };
     let ids: Vec<String> = serde_json::from_str::<serde_json::Value>(&r.into_string().unwrap_or_default()).ok().and_then(|v| v.as_array().map(|x| x.iter().filter_map(|b| b["boxId"].as_str().map(String::from)).collect())).unwrap_or_default();
-    if ids.is_empty() { return vec![] }
+    if ids.is_empty() { return Ok(vec![]) }
     let mut cost = RestCost::default();
     match prove_any_agreed(node, chain, agreed_height(state), &ids, &mut cost) {
-        Ok((_, found)) => found.into_iter().flatten().filter_map(|b| ErgoBox::sigma_parse_bytes(&b).ok()).filter(|b| b.ergo_tree == tree && price_of(b) > 0).collect(),
-        Err(e) => { complain!("offer lookup: {e}"); vec![] }
+        Ok((_, found)) => Ok(found.into_iter().flatten().filter_map(|b| ErgoBox::sigma_parse_bytes(&b).ok()).filter(|b| b.ergo_tree == tree && price_of(b) > 0).collect()),
+        Err(e) => Err(e),
     }
 }
 
-/// wallet babel-list: the offers a node lists for a token, each proven.
+/// wallet babel-list: the offers a node lists for a token, each proven. `proven` says the lookup was checked against
+/// the agreed tip; when it could not be (exit 1), the empty list means "not known", not "none".
 fn babel_list(s: &Wanted) -> Ended {
     let (token_hex, node, price_of) = (&s.token_hex, &s.c.node, babel_price);
     let babel_offers = |token: &str| proven_babel_offers(s.c, token);
     if token_hex.len() != 64 || node.is_empty() { return Err("babel-list needs --token ID and --node".into()) }
-    let offers = babel_offers(token_hex);
     crate::out::set("offers", serde_json::json!([]));
+    let offers = match babel_offers(token_hex) {
+        Ok(found) => { crate::out::set("proven", serde_json::json!(true)); found }
+        Err(e) => { crate::out::set("proven", serde_json::json!(false)); return Err(format!("the offers could not be checked: {e}").into()) }
+    };
     if offers.is_empty() { say!("no proven offers for that token"); }
     for b in &offers { crate::out::push("offers", serde_json::json!({ "box": String::from(b.box_id()), "available_nanoerg": b.value.as_u64().saturating_sub(1_000_000), "nanoerg_per_unit": price_of(b) })); say!("offer {}  {} nanoERG available at {} nanoERG per token unit", String::from(b.box_id()), b.value.as_u64().saturating_sub(1_000_000), price_of(b)); }
     Ok(())
@@ -800,11 +806,16 @@ fn babel_paid_built(s: &Wanted) -> Result<Built, Fail> {
     let short = need - my_erg;
     for t in &want_tokens { let have = left.entry(String::from(t.token_id)).or_default(); if *have < *t.amount.as_u64() { return Err("not enough of a token being sent".into()) } *have -= *t.amount.as_u64(); }
     // the best offer: the one that asks the fewest tokens and can still hold a box's minimum afterwards
-    let offers = babel_offers(&babel_token);
+    let offers = babel_offers(&babel_token).map_err(|e| format!("the offers for the fee could not be checked: {e}"))?;
     let have_fee_token = *left.get(&babel_token).unwrap_or(&0);
     let cost_in = |b: &ErgoBox| -> u64 { let p = price_of(b) as u64; short.div_ceil(p) };
     let Some(offer) = offers.iter().filter(|b| *b.value.as_u64() >= short + 1_000_000 && cost_in(b) <= have_fee_token).min_by_key(|b| cost_in(b)) else {
-        return Err(format!("no proven offer covers {short} nanoERG for the tokens this wallet has ({} offers seen, {have_fee_token} token units available)", offers.len()).into())
+        // which of the two it is: no offer holds enough ERG, or the wallet has too few of the token left after what it is sending
+        let cheapest = offers.iter().filter(|b| *b.value.as_u64() >= short + 1_000_000).map(&cost_in).min();
+        return Err(match cheapest {
+            Some(cost) => format!("the fee would cost {cost} units of the token and {have_fee_token} are left after what is being sent: send {} fewer, or pay the fee in ERG", cost - have_fee_token),
+            None => format!("no proven offer holds the {short} nanoERG this payment is short of ({} offers seen)", offers.len()),
+        }.into())
     };
     let paid = cost_in(offer);
     // The node lists the offers, so it can leave the good ones out. Nothing is signed above what was agreed to.

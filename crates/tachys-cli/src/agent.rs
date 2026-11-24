@@ -612,9 +612,16 @@ mod tests {
         let mut chain = (hb.len() as u16).to_be_bytes().to_vec(); chain.extend_from_slice(&hb);
         chain.extend_from_slice(&std::fs::read(format!("{above}/agreed-chain.bin")).unwrap());
         std::fs::write(format!("{above}/agreed-chain.bin"), chain).unwrap();
-        let offers = |st: &str| call(&["wallet", "babel-list", "--state", st, "--node", &url, "--token", &token])["offers"].as_array().map_or(0, |a| a.len());
-        assert_eq!(offers(&under), 1, "an offer proven under the agreed tip is listed");
-        assert_eq!(offers(&above), 0, "an offer proven only above the agreed tip is not used");
+        // (the answer whatever the command ended with: a lookup that could not be checked ends with 1)
+        let asked = |st: &str| -> (i32, serde_json::Value) {
+            let a = crate::call(&["tachys", "wallet", "babel-list", "--state", st, "--node", &url, "--token", &token, "--json"].map(String::from), &[]);
+            (a.code, serde_json::from_str(a.out.trim()).unwrap())
+        };
+        let (code, listed) = asked(&under);
+        assert_eq!((code, listed["ok"].as_bool(), listed["proven"].as_bool(), listed["offers"].as_array().map(|a| a.len())), (0, Some(true), Some(true), Some(1)), "an offer proven under the agreed tip is listed: {listed}");
+        // an offer proven only above the agreed tip is not used; and that is said, not passed off as an empty list of offers
+        let (code, listed) = asked(&above);
+        assert_eq!((code, listed["ok"].as_bool(), listed["proven"].as_bool(), listed["offers"].as_array().map(|a| a.len())), (1, Some(false), Some(false), Some(0)), "{listed}");
         for st in [under, above] { let _ = std::fs::remove_dir_all(st); }
     }
 

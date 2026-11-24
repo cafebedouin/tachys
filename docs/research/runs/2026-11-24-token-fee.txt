@@ -1,0 +1,31 @@
+==== the fault, from the build machine (target/debug/tachys, the build of finding 67; mainnet; a fresh state watching the phone wallet's address)
+tachys tips: ok true, verdict agreed
+tachys nodes: five nodes, each at height 1923614
+tachys wallet babel-list --node auto --token (SigRSV) --json:  exit 0
+  {"command":"wallet babel-list","exit":0,"offers":[],"ok":true,"v":1}
+  sentences: offer lookup: the proof matches no header of the agreed chain among its newest 4 (1923610..1923613); the node
+    may be ahead of it, or well behind: run `tachys tips` again / no proven offers for that token
+the same lookup an hour earlier against a named node, after a balance had refreshed the tip: one offer,
+  available_nanoerg 1000000000, nanoerg_per_unit 100000
+
+==== after the change
+cargo test -p tachys --lib babel: 2 passed (a_babel_offer_is_proven_under_the_agreed_tip_or_not_used among them); its answer above the tip:
+  {"command":"wallet babel-list","error":"send: the offers could not be checked: http://127.0.0.1:... proves only against a
+   block above the tip the peers agree on (1922385 > 1922384)","exit":1,"offers":[],"ok":false,"proven":false,"v":1}
+cargo clippy over the four crates: clean (after `redundant closure` at wallet.rs:814 was put right)
+cargo test -p tachys: 96 passed, 0 failed
+./gradlew :shared:compileCommonMainKotlinMetadata :shared:desktopTest: 30 tests, 0 skipped, 0 failed
+
+==== on the Galaxy Note 2, mainnet, by the maintainer's hand; the screen read over adb afterwards, not touched
+(build with the core's fix) the Send form of a wallet holding 0.001000 ERG and 135 SigRSV, SigRSV 135, "Fee: paid in SigRSV":
+  "For a wallet without enough ERG: the missing ERG comes from an offer on the chain. Best offer: 1 SigRSV buys 0.0001 ERG,
+   so this costs at most 31 SigRSV. Nothing is signed above that; the result shows the exact amount."
+  after Send: "no proven offer covers 2100000 nanoERG for the tokens this wallet has (1 offers seen, 0 token units available)"
+(build that keeps the fee back) after Send:
+  "Sent 104 SigRSV. Fee paid in tokens: 21 SigRSV. Give the payee this receipt ..." and a box id (3b58a805…, the rest left out)
+
+==== that payment, read from a node (/blockchain/box/byId, /blockchain/transaction/byId)
+the receipt's box: in block 1923634, 1000000 nanoERG, 104 SigRSV, unspent
+inputs  (nanoERG, SigRSV):  the wallet's box (1000000, 135); a box under the offer's script (1001000000, 0)
+outputs (nanoERG, SigRSV):  the payee (1000000, 104); the offer's script again (998900000, 21); the wallet (1000000, 10);
+  the miners' fee script (1100000, 0)

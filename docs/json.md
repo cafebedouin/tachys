@@ -84,7 +84,9 @@ signing: the same fields with `signed: false`, and nothing written or counted.
 **`wallet request`** — `give`, `get`, `others_put_in`, `others_receive` (each `nanoerg` and `tokens`), `fee_nanoerg`,
 `net_nanoerg`, `paid_to`, `inputs`, `signed`; when signed and sent, `tx` and `sent_via`.
 
-**`wallet babel-list`** — `offers`: `box`, `available_nanoerg`, `nanoerg_per_unit`.
+**`wallet babel-list`** — `offers`: `box`, `available_nanoerg`, `nanoerg_per_unit`. `proven`: the list was checked against the
+agreed tip. When it could not be (the node did not answer, or was a block ahead of the peers), `proven` is false, the
+command fails (exit 1) and the empty list means "not known": ask again after `tips`.
 
 `listed_by_all` (with `--reconcile`): every node asked answered for every address. `refresh_due`, `node_says`:
 see below.

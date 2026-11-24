@@ -1294,3 +1294,47 @@ and the refusal was on the screen.
 **Not run:** on the phone: a token sent, the fee paid in a token, a signing request, the history's times, the
 camera, anything behind the screen lock. Anything for an iPhone, including whether `iosMain` compiles. The
 packaged app on Windows or macOS, and any installer. A window looked at by a person. A payment from a computer.
+
+## 68. An offer that could not be checked was reported as no offer; a fee in a token left nothing to pay itself with
+
+**What was wrong.** Found by the maintainer trying to pay a fee in SigRSV from the phone, where the app said "No
+offer for SigRSV could be proven right now" although one was on the chain. Two faults, one behind the other.
+- `wallet babel-list` proves each offer a node lists against the agreed chain. When the node was a block ahead of
+  the peers (roadmap, item 6), or did not answer, the lookup could not be checked, and the command answered that as
+  success with an empty list: `ok: true, offers: []`, the reason only in a sentence. The app refreshes the tip and
+  asks again when the command fails; it never failed, so it never asked again. Reproduced from the build machine
+  with the same address: `the proof matches no header of the agreed chain among its newest 4 (1923610..1923613)`
+  with the node at 1923614, exit 0.
+- With the price found, the payment was refused: `no proven offer covers 2100000 nanoERG for the tokens this wallet
+  has (1 offers seen, 0 token units available)`. The whole 135 SigRSV were being sent (Max), so none was left for
+  the fee, which is paid in the same token. Nothing in the app kept the fee back, and the refusal did not say that
+  this was the matter.
+
+**What changed.**
+- Core: a lookup that could not be made or checked is a failure (exit 1) with `proven: false`; `offers: []` with
+  `proven: true` means it was checked and there are none. `wallet send --babel` gives the same reason in place of
+  "no proven offer". Its refusal for too few tokens now says what the fee would cost, what is left after what is
+  being sent, and how many fewer to send.
+- App: the retry now happens; if the offers still cannot be checked it says so, and no longer that nobody is
+  offering. With the fee in a token and its price known, what the fee may cost is kept back from that token: the
+  row reads "Available: 104 (31 kept for the fee)", Max fills that in, more than that is marked as too much, and an
+  amount typed before the fee was switched (or before its price arrived) comes down to it. A check before signing
+  says "send at most N" if it is still over.
+
+**Tests:** `a_babel_offer_is_proven_under_the_agreed_tip_or_not_used` now also holds that a lookup above the agreed
+tip ends with 1, `ok` false and `proven` false, and one under it with 0 and `proven` true.
+`whenTheFeeIsPaidInATokenWhatItMayCostIsKeptBackFromWhatCanBeSent` (the arithmetic of what is kept). Nothing tests
+the Send screen's part.
+**Run** (`runs/2026-11-24-token-fee.txt`): the tachys crate's tests (96 passed) and clippy over the four; the 30
+tests of the shared module; on the Galaxy Note 2, on mainnet, by the maintainer's hand: with the first fix, the
+price shown ("1 SigRSV buys 0.0001 ERG, so this costs at most 31 SigRSV") and then the refusal above; with the
+second, "Sent 104 SigRSV. Fee paid in tokens: 21 SigRSV." Read from a node afterwards: the transaction spends the
+wallet's box (0.001 ERG, 135 SigRSV) and the offer's box (1.001 ERG); it pays 104 SigRSV with 0.001 ERG to the
+payee, returns the offer's box 0.0021 ERG lighter and 21 SigRSV heavier, leaves the wallet 10 SigRSV with 0.001
+ERG, and pays the miners 0.0011 ERG.
+**The maintainer's word, not seen from here:** that the paying wallet was one behind the phone's screen lock (it
+had been restored that way for this), and that the payee's address was read by the camera. If so, this one
+payment is the first on this build of a token sent, a fee paid in a token, a key opened by the screen lock and a
+code scanned.
+**Not run:** the amount coming down on the screen was not watched (the screen was read only after the payment).
+The retry when a node is a block ahead, on a phone. A signing request. `babel-offer`. Any of this on a computer.

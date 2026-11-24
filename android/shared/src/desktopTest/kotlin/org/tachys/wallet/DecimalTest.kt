@@ -54,4 +54,14 @@ class DecimalTest {
         assertTrue(positive("1.5")); assertTrue(positive("0.0000000000001")); assertTrue(positive(".5"))
         assertFalse(positive("0")); assertFalse(positive("0.000")); assertFalse(positive("")); assertFalse(positive(".")); assertFalse(positive("-1")); assertFalse(positive("1.2.3"))
     }
+
+    @Test fun whenTheFeeIsPaidInATokenWhatItMayCostIsKeptBackFromWhatCanBeSent() {
+        // 0.0001 ERG a unit: the 0.0031 ERG a payment can be short of is 31 units at most
+        assertEquals(31L, feeCeiling(100_000L)); assertEquals(104L, leftAfterFee(135L, 100_000L))
+        assertEquals(0L, leftAfterFee(31L, 100_000L)); assertEquals(0L, leftAfterFee(20L, 100_000L)); assertEquals(1L, leftAfterFee(32L, 100_000L))
+        // a price that does not divide the ERG: rounded up, never short
+        assertEquals(2L, feeCeiling(3_099_999L)); assertEquals(1L, feeCeiling(3_100_000L)); assertEquals(4L, feeCeiling(1_000_000L))
+        // no price known: nothing is kept
+        assertEquals(135L, leftAfterFee(135L, 0L))
+    }
 }

@@ -124,6 +124,8 @@ instead, which as far as we know is new for Ergo:
 - The app's main source file is too long. (`wallet send` and the sync were, and are split into their steps: finding 61.)
   What the app makes of the core's answers is tested for a payment's outcome, a derived address and a wrong password
   (`vectors/app/`, finding 61); what it reads of a sync, a receipt, an offer list and the wallet file is not.
+- A fee paid in a token from the app (finding 68): paid once on mainnet; the Send screen's keeping the fee back has no
+  test; when a node stays a block ahead the app can still only say the offers could not be checked and be asked again.
 - The fuzz targets (`fuzz/`: box proofs, peer messages, signed bytes, headers) have run for minutes, not days, and
   not in CI; the JSON of REST answers has no target.
 - The fuzzing ran on the build machine; none of it has run in the phone build. A panic there is now caught and
