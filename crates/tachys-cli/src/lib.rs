@@ -3,7 +3,8 @@
 //! `call` runs one command, given as the command line would give it, and hands back how it ended and what it
 //! wrote. The `tachys` program is `cli`: the same thing with the process's own arguments, stdin and stdout.
 //! A command never ends the process, reads no stdin of its own accord and leaves nothing behind for the next call:
-//! the network, the answer and the peer protocol's magic are set afresh by each. Calls are taken one at a time.
+//! the network, the answer and the peer protocol's magic are each call's own (`own.rs`), so calls from several
+//! threads run at the same time.
 #[macro_use]
 mod out;
 mod agent;
@@ -11,6 +12,7 @@ mod chain;
 mod network;
 mod nodes;
 mod outbox;
+mod own;
 mod policy;
 mod proofs;
 mod seal;
@@ -47,31 +49,29 @@ pub struct Answer {
     pub err: String,
 }
 
-/// One call at a time: the network and the answer under way belong to the call that holds this.
-static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 /// Runs one command. `args` are as on the command line, the program's name first (`["tachys", "balance", "--state",
 /// dir]`); `input` are the lines the command may read where the program would read stdin (the password, then a seed
-/// phrase). Nothing is written to the process's stdout or stderr and the process is never ended.
-/// Not to be called from inside an async runtime: it runs its own.
+/// phrase). Nothing is written to the process's stdout or stderr and the process is never ended. Calls from several
+/// threads run at the same time, each with its own network and answer; two that write one state directory are two
+/// runs of the program on it. Not to be called from inside an async runtime: it runs its own.
 pub fn call(args: &[String], input: &[String]) -> Answer {
-    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
-    let code = run(args, true, Some(input.to_vec()));
-    let (out, err) = out::written();
+    let (code, out, err) = run(args, true, Some(input.to_vec()));
     Answer { code, out, err }
 }
 
 /// The `tachys` program: one call with the process's arguments, reading stdin and writing stdout and stderr.
 /// Returns the exit code.
-pub fn cli() -> i32 {
-    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
-    run(&std::env::args().collect::<Vec<_>>(), false, None)
-}
+pub fn cli() -> i32 { run(&std::env::args().collect::<Vec<_>>(), false, None).0 }
 
-fn run(args: &[String], capture: bool, input: Option<Vec<String>>) -> i32 {
+/// One call: how it ended and, if it was captured, what it wrote.
+fn run(args: &[String], capture: bool, input: Option<Vec<String>>) -> (i32, String, String) {
+    let own = own::Own::new();
+    let _mine = own::enter(&own);
     out::start(args, capture, input);
     let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| out::Fail::new(1, format!("runtime: {e}")))?;
+        // every thread of the runtime works for this call: what it says and the network it is on are this call's
+        let theirs = own.clone();
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().on_thread_start(move || own::join(&theirs)).build().map_err(|e| out::Fail::new(1, format!("runtime: {e}")))?;
         rt.block_on(async { setup(args)?; dispatch(args).await })
     }));
     // The one place a call ends. A command hands back how it went; with `--json` its one object is written here.
@@ -88,7 +88,9 @@ fn run(args: &[String], capture: bool, input: Option<Vec<String>>) -> i32 {
         out::own_answer();
     }
     out::finish(code);
-    code
+    out::forget_input();
+    let (out, err) = out::written();
+    (code, out, err)
 }
 
 /// Sets the call up from its arguments: the options are ones some command reads, and the network is chosen.

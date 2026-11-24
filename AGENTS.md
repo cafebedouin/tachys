@@ -31,8 +31,8 @@ More: `docs/agents.md`. The fields of every answer: `docs/json.md`.
 ## If you are working on this repository
 
 - `cargo test --workspace` must pass (no network needed), and
-  `cargo clippy -p tachys -p tachys-verify -p tachys-net --all-targets -- -D warnings` must be clean. The vendored
-  codec under `vendor/` is kept as upstream wrote it: do not reformat or lint it.
+  `cargo clippy -p tachys -p tachys-verify -p tachys-net -p tachys-c --all-targets -- -D warnings` must be clean. The
+  vendored codec under `vendor/` is kept as upstream wrote it: do not reformat or lint it.
 - The code is written in long lines on purpose and is not rustfmt-formatted. Do not run `cargo fmt`.
 - A command never ends the process, prints through `say!`/`complain!` (never `println!`), and reports through
   fields (`out::set`). A caller must never have to read a sentence to decide anything.
@@ -44,6 +44,8 @@ More: `docs/agents.md`. The fields of every answer: `docs/json.md`.
 - Tests are named as sentences, need no network, and write only under the system's temporary directory.
 - Contributions are taken under the project's dedication (CC0); `vendor/` is not ours to change. `anchors/`, the
   seed lists and the node list are refreshed by the maintainer alone (`docs/maintaining.md`).
-- The phone app is `android/`; after a change to the core run `android/build-core.sh` before building it.
+- The phone app is `android/`; after a change to the core run `android/build-core.sh` before building it. The app
+  runs the core in its own process through `crates/tachys-c` (a C interface, `tachys.h`, and the JNI entry): a
+  command may run beside another, so nothing a command sets may outlive it or be seen by another (`own.rs`).
 - Wallet state directories, seed phrases and anything else private live in `private/` or `state*/`, both ignored.
   Never commit one.

@@ -121,8 +121,31 @@ let a: tachys::Answer = tachys::call(&["tachys".into(), "balance".into(), "--sta
 
 `args` are as on the command line, the program's name first. `input` are the lines a command reads where the
 program would read stdin: the password for `--pass-stdin`, then a seed phrase for `--mnemonic-file -`. Each call
-chooses its own network and leaves nothing for the next; nothing is written to the process's stdout; calls are
-taken one at a time. Do not call it from inside an async runtime: it runs its own.
+chooses its own network and leaves nothing for the next; nothing is written to the process's stdout. Calls from
+several threads run at the same time, each with its own network and answer (two that write one state directory are
+two runs of the program on it). Do not call it from inside an async runtime: it runs its own.
+
+## From C, or anything that can call C
+
+`crates/tachys-c` is the same call behind a C interface (`crates/tachys-c/tachys.h`), built as a shared library and
+a static one (`cargo build --release -p tachys-c`: `libtachys_c.so`, `libtachys_c.a`):
+
+```c
+const char *args[] = { "tachys", "balance", "--state", dir, "--json" };
+tachys_answer *a = tachys_call(args, 5, NULL, 0);   /* blocks until the command has ended */
+/* a->code, a->out (the one JSON object), a->err (the sentences): UTF-8, each ending with a 0 byte */
+tachys_free(a);
+```
+
+The command runs on a thread of its own with the stack the program's main thread has, so it may be called from a
+thread with little; several calls may run at once. A panic inside the wallet is answered with code 70 and the caller
+goes on. A stack overflow or an abort inside it would end the caller's process: a library cannot contain that, and a
+caller that must survive one runs the program instead. The input lines are wiped from the library's memory when the
+call ends, and an answer when it is freed; the seed phrase and the keys made from it are wiped where this project's
+own code holds them and not where the signing library does, so in a process that goes on living they may stay in
+freed memory, where a run of the program ended with them.
+
+The phone app uses the same library through one JNI method (`crates/tachys-c/src/jni.rs`, `docs/android.md`).
 
 ## What may change
 

@@ -1,15 +1,27 @@
 # The phone app
 
-`android/` is a Kotlin (Compose) app around the same core the command line uses. The core is built as a program,
-packed where Android will let it run, and started once for each thing the app does; the app decides on its JSON answer
-(`json.md`) and exit code and on nothing else (it shows the sentences, and draws a QR code from the rows `tachys qr` prints). Starting it costs about 16 ms on a Galaxy Note 2 (2012, Android 7.1.2),
-the oldest phone it has run on.
+`android/` is a Kotlin (Compose) app around the same core the command line uses. The core is built as a library
+(`crates/tachys-c`, `libtachys_c.so`) that the app loads and calls in its own process, once for each thing the app
+does, with the command line the `tachys` program would be given (`Native.kt`; one JNI method, and only arrays of
+bytes cross it). The app decides on the JSON answer (`json.md`) and the code the command ended with and on nothing
+else (it shows the sentences, and draws a QR code from the rows `tachys qr` prints). Calls run side by side: the
+address shown as a QR code does not wait for a sync. A panic inside the core is an answer the app shows; a stack
+overflow or an abort inside it would close the app, where it used to end only the core's own process (finding 64).
 
 ## Build
 
 ```
-android/build-core.sh              # the core for arm64 and 32-bit ARM, into app/src/main/jniLibs/<abi>/libtachys.so
+android/build-core.sh              # the core for arm64 and 32-bit ARM, into app/src/main/jniLibs/<abi>/libtachys_c.so
 cd android && ./gradlew assembleRelease     # or assembleDebug, the only build that keeps the adb test hooks
+```
+
+An app built without the first step installs and starts and can do nothing: every answer is "the core is not in
+this build". The app's tests call the core too, through the same JNI method, when the build machine has the library
+for itself and says where; without `TACHYS_HOST_CORE` those tests are skipped:
+
+```
+cargo build -p tachys-c --features jni
+cd android && TACHYS_HOST_CORE=$PWD/../target/debug ./gradlew testDebugUnitTest
 ```
 
 `assembleRelease` needs a signing key and is refused without one: name your own (the comment in
@@ -35,6 +47,12 @@ payments, the boxes (and a button to make them one), history.
 
 Seed phrases are sealed with a password the app makes and keeps in the Android Keystore, released only by the
 phone's screen lock. A phone with no screen lock gets the encryption but no guard.
+
+A wallet can instead be given a password of its own when it is made or restored ("Guarded by": Screen lock or
+Password). Its key is then opened by that password and never by the screen lock, so the wallet can be handed to
+someone, or to an agent driving the phone, without the phone's lock. The password is the whole wallet (it shows
+the seed phrase), and a weak one can be guessed from a copy of the wallet's file; a forgotten one is put right by
+restoring from the written words (finding 65).
 
 Nodes are found automatically (well-known ones first). To use one node only, your own say, write its address in
 Settings as `http://HOST:PORT`.
@@ -63,3 +81,9 @@ signed; each payment was proven from the payee's side. Two faults found there ar
 app synced stayed at "Reading…", and coins seen only in a block one node had shown made the card say "no boxes yet".
 The New, Restore and Read-only forms now go back to the three choices. Not run since: the release build, mainnet, the
 camera, the Pixel 6.
+
+Since the core became a library the app calls in its own process (finding 64), a release build of the copy that
+installs beside the app has run on the Note 2, on mainnet, with a read-only wallet: a sync, the balance (the same
+as the command line gave), Receive opened while a sync ran, a rename while a sync ran. With a wallet sealed by a password of its own (finding 65) it has also
+made, opened, removed and restored a wallet, and paid 0.01 ERG to it and back on mainnet. Not run since: anything
+behind the screen lock, a signing request, testnet, the Pixel 6, the camera.

@@ -18,7 +18,7 @@ sentence. This page says how.
 
    ```
    cargo test --workspace
-   cargo clippy -p tachys -p tachys-verify -p tachys-net --all-targets -- -D warnings
+   cargo clippy -p tachys -p tachys-verify -p tachys-net -p tachys-c --all-targets -- -D warnings
    ```
 
    Both must be clean. CI runs the same, with the phone build and `cargo audit`.

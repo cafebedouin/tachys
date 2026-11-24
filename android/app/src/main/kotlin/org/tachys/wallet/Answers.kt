@@ -17,12 +17,11 @@ class Reply(val code: Int, val json: JSONObject?, val text: String) {
 
 /**
  * One run of the core with `--json`, as a Reply: the code it ended with, what it wrote to its output (its one JSON
- * object is the last line that starts one; null if there is none) and its sentences, which it wrote to its error stream.
+ * object is the last line that starts one; null if there is none) and its sentences, which it wrote apart from it.
  */
 fun reply(code: Int, out: String, said: String): Reply {
     val json = try { out.lines().lastOrNull { it.startsWith("{") }?.let { JSONObject(it) } } catch (e: Exception) { null }
-    // Android 7 prints a harmless linker warning about the binary; it is not part of any answer
-    return Reply(code, json, said.lines().filterNot { it.startsWith("WARNING: linker") }.joinToString("\n").trim())
+    return Reply(code, json, said.trim())
 }
 
 /** `tips`: the peers agreed on a tip, and the chain was saved (the core exits 1 otherwise). */
@@ -63,4 +62,18 @@ fun sentAnswer(a: Reply, why: String): JSONObject {
     return JSONObject().put("state", state).put("tx", j?.optString("tx") ?: "").put("receipt", j?.optJSONArray("receipt")?.optString(0) ?: "")
         .put("change", j?.optJSONArray("change")?.optString(0) ?: "").put("fee_token_units", j?.optLong("fee_token_units", -1L) ?: -1L)
         .put("tx_bytes", j?.optString("tx_bytes") ?: "").put("error", if (state == "sent" || state == "queued") "" else why)
+}
+
+/** The fewest characters a password typed for one wallet may have. */
+const val PASSWORD_MIN = 8
+
+/**
+ * What is wrong with a password typed twice to seal one wallet, or null. The core reads a password as a line and
+ * without the spaces around it, so that is how it is counted and compared here.
+ */
+fun passwordFault(first: String, again: String): String? = when {
+    first.any { it == '\n' || it == '\r' } -> "A password is one line."
+    first.trim().length < PASSWORD_MIN -> "A password for a wallet has at least $PASSWORD_MIN characters."
+    first.trim() != again.trim() -> "The two passwords are not the same."
+    else -> null
 }

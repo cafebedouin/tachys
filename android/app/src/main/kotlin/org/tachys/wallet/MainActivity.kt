@@ -19,6 +19,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.relocation.BringIntoViewRequester
@@ -42,10 +43,14 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -92,6 +97,8 @@ class WalletView(val name: String, val address: String, val erg: String, val box
  * The phone's own screen lock, used to guard the seed phrases and the app.
  * `open` hands over the password that opens the seed phrases, for one use: (what to tell the user, whether to ask for the
  * screen lock even if it was given a moment ago, then the password or null with the reason).
+ * A wallet may instead be sealed with a password of its own, typed when it was made (`Core.own`): the screens of such
+ * a wallet are given a Guard whose `open` asks for that password and whose `ask` does not ask for the screen lock.
  */
 class Guard(val secure: () -> Boolean, val ask: (String, (Boolean) -> Unit) -> Unit, val open: (String, Boolean, (String?, String) -> Unit) -> Unit)
 
@@ -181,7 +188,6 @@ class Receipt(val box: String, val purpose: String, val tx: String = "") {
 }
 
 class Core(private val ctx: Context) {
-    private val bin = File(ctx.applicationInfo.nativeLibraryDir, "libtachys.so").absolutePath
     private val prefs = ctx.getSharedPreferences("tachys", Context.MODE_PRIVATE)
     var testnet: Boolean
         get() = prefs.getBoolean("testnet", false)
@@ -223,28 +229,23 @@ class Core(private val ctx: Context) {
     } catch (e: Exception) { mapOf() }
 
     fun run(vararg args: String): String = exec(listOf(), *args)
-    /** Runs the core with lines on its input, so that a password or a seed phrase is never an argument or a file. */
+    /** Runs the core with lines for it to read, so that a password or a seed phrase is never an argument or a file. */
     private fun exec(input: List<String>, vararg args: String): String = execCode(input, *args).second
     /**
-     * Asks the core with `--json`: its exit code, the one JSON object it writes to its output (null if there is none),
-     * and its sentences, which it then writes to its error stream. What the app decides on (a tip agreed, boxes proven,
+     * Asks the core with `--json`: the code it ends with, the one JSON object it writes as its output (null if there is
+     * none), and its sentences, which it then writes apart from it. What the app decides on (a tip agreed, boxes proven,
      * a payment taken by a node, a receipt accepted) is read from the object and the code; the sentences are for showing.
      */
-    private fun ask(input: List<String>, vararg args: String): Reply = try {
-        val p = ProcessBuilder(listOf(bin) + args + listOf("--json", "--network", net)).start()
-        val said = StringBuilder()
-        val reader = Thread { try { said.append(p.errorStream.bufferedReader().readText()) } catch (e: java.io.IOException) { } }.also { it.start() }
-        try { p.outputStream.use { o -> input.forEach { o.write((it + "\n").toByteArray()) } } } catch (e: java.io.IOException) { /* the core ended without reading it */ }
-        val out = p.inputStream.bufferedReader().readText(); val code = p.waitFor(); reader.join()
-        reply(code, out, said.toString())
-    } catch (e: Exception) { Reply(-1, null, "error: ${e.message}") }
+    private fun ask(input: List<String>, vararg args: String): Reply = core(input, args.toList() + listOf("--json", "--network", net)).let { reply(it.code, it.out, it.err) }
     /** What the core printed and the code it ended with (-1 if it could not be run at all). */
-    private fun execCode(input: List<String>, vararg args: String): Pair<Int, String> = try {
-        val p = ProcessBuilder(listOf(bin) + args + listOf("--network", net)).redirectErrorStream(true).start()
-        try { p.outputStream.use { o -> input.forEach { o.write((it + "\n").toByteArray()) } } } catch (e: java.io.IOException) { /* the core ended without reading it */ }
-        // Android 7 prints a harmless linker warning about the binary; it is not part of any answer
-        val out = p.inputStream.bufferedReader().readText().lines().filterNot { it.startsWith("WARNING: linker") }.joinToString("\n"); p.waitFor() to out
-    } catch (e: Exception) { -1 to "error: ${e.message}" }
+    private fun execCode(input: List<String>, vararg args: String): Pair<Int, String> = core(input, args.toList() + listOf("--network", net)).let { it.code to it.out + it.err }
+    /**
+     * One command of the core, run in this process (`Native`). A panic inside the core comes back as its code 70 and the
+     * app goes on. If the library is not in this build, or will not load, the answer is -1 and why, as it was when the
+     * core was a program that would not start.
+     */
+    private fun core(input: List<String>, args: List<String>): Ran =
+        try { Native.run(args, input) } catch (e: Exception) { Ran(-1, "", "error: ${e.message}") } catch (e: LinkageError) { Ran(-1, "", "error: the core is not in this build (${e.message})") }
 
     /** Runs a command that needs the seed phrase: `pass` (from the Vault) opens it, and is the first line of the core's input. */
     private fun sealedAsk(pass: String, vararg args: String): Reply = ask(listOf(pass), *args, "--pass-stdin")
@@ -258,8 +259,14 @@ class Core(private val ctx: Context) {
         return plain().size
     }
     // words of letters only, in any of the languages the core takes (Japanese phrases are spaced with U+3000); the core's refusals all carry punctuation
-    /** Why the core did not do what was asked, in its words; the lost-key case is recognised by a field of its answer, not by those words. */
-    private fun failed(a: Reply): String = if (a.badPassword) LOST else a.error
+    /**
+     * Whether a wallet's seed phrase is sealed with a password of its own, typed by whoever made it, and not with the
+     * one the Vault keeps behind the screen lock. Marked by a file beside the wallet file, so it goes when the wallet does.
+     */
+    fun own(dir: String = sel): Boolean = File(path(dir), OWN).exists()
+    private fun mark(dir: String, own: Boolean) { File(path(dir), OWN).let { f -> if (own) f.writeText("") else f.delete() } }
+    /** Why the core did not do what was asked, in its words; a password that does not open the phrase is recognised by a field of its answer, not by those words. */
+    private fun failed(a: Reply, own: Boolean = own()): String = if (!a.badPassword) a.error else if (own) WRONG else LOST
 
     fun hasWallet() = dirs().isNotEmpty()
     /** Each of these answers `OK`, or the reason it did not happen. */
@@ -270,14 +277,15 @@ class Core(private val ctx: Context) {
         if (a.ok) sel = d else File(path(d)).deleteRecursively()
         return if (a.ok) OK else a.error
     }
-    fun create(name: String, pass: String): String {
+    /** `own`: `pass` is a password typed for this wallet, not the Vault's. */
+    fun create(name: String, pass: String, own: Boolean = false): String {
         val d = fresh(); seedChain(d)
         val a = sealedAsk(pass, "wallet", "new", "--state", path(d), "--name", name.ifBlank { "Wallet" })
-        if (a.ok) sel = d else File(path(d)).deleteRecursively()
-        return if (a.ok) OK else failed(a)
+        if (a.ok) { mark(d, own); sel = d } else File(path(d)).deleteRecursively()
+        return if (a.ok) OK else failed(a, own)
     }
     /** A seed phrase becomes a wallet; if it is the phrase of a read-only wallet already here, that wallet gets its key. */
-    fun restore(phrase: String, name: String, pass: String): String {
+    fun restore(phrase: String, name: String, pass: String, own: Boolean = false): String {
         val words = phrase.trim().lowercase().split(Regex("[\\s\u3000]+")).filter { it.isNotEmpty() }
         if (words.size !in listOf(12, 15, 18, 21, 24)) return "a seed phrase has 12, 15, 18, 21 or 24 words; this has ${words.size}"
         val line = words.joinToString(" ")
@@ -286,7 +294,8 @@ class Core(private val ctx: Context) {
         if (!derived.ok) return derived.error.removePrefix("seed phrase not accepted: ").replaceFirstChar { c -> c.uppercase() } + "."
         val address = derivedAddress(derived) ?: return "could not derive a key from that phrase"
         val same = views().firstOrNull { it.address == address }
-        // a full wallet of this phrase that can no longer open its own phrase (the phone's key went) is put back by the phrase
+        // a full wallet of this phrase that this password does not open (the phone's key went, its own password is
+        // forgotten, or it is to be guarded the other way from now on) is put back by the phrase, sealed with this password
         val closed = same != null && !same.readOnly && sealedAsk(pass, "wallet", "mnemonic", "--state", path(same.dir)).badPassword
         if (same != null && !same.readOnly && !closed) return "that wallet is already on this phone (${same.name})"
         val d = same?.dir ?: fresh()
@@ -294,8 +303,8 @@ class Core(private val ctx: Context) {
         // the wallet file is written first and its boxes looked for after (by the next sync); `restored` says the file is there
         val a = ask(listOf(pass, line), "wallet", "restore", "--state", path(d), "--mnemonic-file", "-", "--embed", "--name", name.ifBlank { "Wallet" }, *(if (closed) arrayOf("--reseal") else arrayOf()), "--pass-stdin")
         val done = restored(a)
-        if (done) sel = d else if (same == null) File(path(d)).deleteRecursively()
-        return if (done) OK else failed(a)
+        if (done) { mark(d, own); sel = d } else if (same == null) File(path(d)).deleteRecursively()
+        return if (done) OK else failed(a, own)
     }
     fun rename(name: String) = run("wallet", "name", "--state", state, "--name", name.ifBlank { "Wallet" })
     fun addAddress(pass: String) = sealed(pass, "wallet", "address", "--state", state, "--add")
@@ -303,6 +312,8 @@ class Core(private val ctx: Context) {
     fun pubkey(pass: String): String = sealedAsk(pass, "wallet", "pubkey", "--state", state).let { a -> textOf(a, "base58") ?: ("! " + failed(a)) }
     /** The seed phrase, or "! " and the reason it cannot be shown. */
     fun mnemonic(pass: String): String = sealedAsk(pass, "wallet", "mnemonic", "--state", state).let { a -> textOf(a, "mnemonic") ?: ("! " + failed(a)) }
+    /** Whether this password opens the wallet's seed phrase. */
+    fun opens(pass: String): Boolean = textOf(sealedAsk(pass, "wallet", "mnemonic", "--state", state), "mnemonic") != null
     fun remove() { val d = sel; File(path(d)).deleteRecursively(); prefs.edit().remove(payKey(d)).apply() }
     @Synchronized fun tips(): Boolean {
         File(chain).mkdirs()
@@ -490,6 +501,9 @@ class Core(private val ctx: Context) {
     companion object {
         /** What a command that did what it was asked answers. */
         const val OK = "ok"
+        /** The file that marks a wallet sealed with a password of its own. The core does not read it. */
+        const val OWN = "own-password"
+        const val WRONG = "That is not this wallet's password."
         const val LOST = "This wallet's seed phrase can no longer be opened on this phone: the key that guarded it is gone, which happens when the phone's screen lock is removed. Restore the wallet from its written seed phrase."
     }
 }
@@ -576,6 +590,12 @@ fun App(core: Core, opened: String, guard: Guard, locked: Boolean, unlock: () ->
         if (pass == null) status = why else scope.launch { plain = withContext(Dispatchers.IO) { core.sealAll(pass) }; refresh() }
     }
     LaunchedEffect(locked) { if (!locked && plain > 0) sealOld() }
+    // a wallet sealed with a password of its own is opened by asking for that password, here, and never by the screen lock
+    var asking by remember { mutableStateOf<Pair<String, (String?, String) -> Unit>?>(null) }
+    val keyed = remember(guard) { Guard(guard.secure,
+        { title, done -> if (core.own()) asking = title to { pass, _ -> done(pass != null && core.opens(pass)) } else guard.ask(title, done) },
+        { title, always, done -> if (core.own()) asking = title to done else guard.open(title, always, done) }) }
+    asking?.let { (title, done) -> if (!locked) PasswordPrompt(title) { pass -> asking = null; if (pass == null) done(null, "The wallet's password was not given, so the seed phrase stays closed.") else done(pass, "") } }
     BackHandler(enabled = screen != Screen.List && !locked) { screen = if (screen == Screen.Pending || screen == Screen.Boxes) Screen.Detail else Screen.List }
 
     if (locked) {
@@ -589,7 +609,8 @@ fun App(core: Core, opened: String, guard: Guard, locked: Boolean, unlock: () ->
         }
         return
     }
-    Column(Modifier.fillMaxSize().background(Bar).systemBarsPadding().imePadding().background(Bg)) {
+    // focusable itself, so that the focus a field gives up rests here and not on the first field of the form, which would bring the keyboard back
+    Column(Modifier.fillMaxSize().background(Bar).systemBarsPadding().imePadding().background(Bg).focusable()) {
         val w = wallets.firstOrNull { it.dir == sel }
         val net = if (core.testnet) " · testnet" else ""
         when (screen) {
@@ -613,9 +634,9 @@ fun App(core: Core, opened: String, guard: Guard, locked: Boolean, unlock: () ->
                     else payRequestFromCode(code).let { r -> if (r.address.isEmpty()) { status = "that code holds no address"; screen = Screen.List } else { payTo = r; screen = Screen.Send } }
                 }, { screen = Screen.List })
                 screen == Screen.Add || w == null -> AddWallet(core, guard) { refresh(); status = "not synced yet"; screen = Screen.List; sync() }
-                screen == Screen.Config -> key(w.dir) { Config(core, w, guard, { refresh() }) { refresh(); screen = Screen.List } }
+                screen == Screen.Config -> key(w.dir) { Config(core, w, keyed, { refresh() }) { refresh(); screen = Screen.List } }
                 screen == Screen.Pending -> Pending(core, w)
-                screen == Screen.Boxes -> Boxes(core, w, busy) { show -> guard.open("Consolidate ${w.name}", true) { pass, why -> if (pass == null) show(why) else io("consolidating…", { core.consolidate(pass) }) { r -> status = "synced just now"; show(r) } } }
+                screen == Screen.Boxes -> Boxes(core, w, busy) { show -> keyed.open("Consolidate ${w.name}", true) { pass, why -> if (pass == null) show(why) else io("consolidating…", { core.consolidate(pass) }) { r -> status = "synced just now"; show(r) } } }
                 screen == Screen.Detail -> Detail(core, w, { screen = Screen.Boxes }) { screen = Screen.Pending }
                 screen == Screen.Receive -> Receive(core, w, busy) { ids, show -> io("checking receipt…", { core.receive(ids) }) { r -> status = "synced just now"; show(r) } }
                 screen == Screen.Request -> {
@@ -626,7 +647,7 @@ fun App(core: Core, opened: String, guard: Guard, locked: Boolean, unlock: () ->
                     }
                     key(w.dir) { Request(core, requestCode, busy, { code -> requestCode = code }) { code, sign, show ->
                         if (!sign) io("reading request…", { core.request(code, null) }) { r -> status = "synced just now"; show(r) }
-                        else guard.open("Sign with ${w.name}", true) { pass, why -> if (pass == null) show("request refused: $why") else io("signing…", { core.request(code, pass) }) { r -> status = "synced just now"; show(r) } }
+                        else keyed.open("Sign with ${w.name}", true) { pass, why -> if (pass == null) show("request refused: $why") else io("signing…", { core.request(code, pass) }) { r -> status = "synced just now"; show(r) } }
                     } }
                 }
                 screen == Screen.Send -> {
@@ -636,7 +657,7 @@ fun App(core: Core, opened: String, guard: Guard, locked: Boolean, unlock: () ->
                         Text(w.name + (if (w.readOnly) "  (read-only)" else "") + "  ▾", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     }
                     Send(core, w, busy, payTo) { to, nano, tokens, feeToken, feeMax, show ->
-                    guard.open("Send from ${w.name}", true) { pass, why -> if (pass == null) show(why) else io("sending…", { core.send(to, nano, tokens, feeToken, feeMax, pass) }) { r -> status = "synced just now"; show(r) } }
+                    keyed.open("Send from ${w.name}", true) { pass, why -> if (pass == null) show(why) else io("sending…", { core.send(to, nano, tokens, feeToken, feeMax, pass) }) { r -> status = "synced just now"; show(r) } }
                     }
                 }
                 else -> {
@@ -698,15 +719,17 @@ fun Pill(text: String, bg: Color, fg: Color, modifier: Modifier = Modifier, outl
 
 /** A text field; `onScan` puts a QR button at its right-hand end. */
 @Composable
-fun Field(value: String, hint: String, numeric: Boolean = false, words: Boolean = false, onScan: (() -> Unit)? = null, onChange: (String) -> Unit) {
+fun Field(value: String, hint: String, numeric: Boolean = false, words: Boolean = false, secret: Boolean = false, onScan: (() -> Unit)? = null, onChange: (String) -> Unit) {
     val focus = LocalFocusManager.current // "Done" on the keyboard closes it
+    val keys = LocalSoftwareKeyboardController.current // (said outright: the focus given up can land on the form's first field, which would bring the keyboard straight back)
     Row(Modifier.fillMaxWidth().background(Bg, RoundedCornerShape(8.dp)), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.weight(1f).padding(12.dp)) {
             if (value.isEmpty()) Text(hint, color = Dim, fontSize = 16.sp)
             // addresses, ids and amounts are not words: no autocorrect, no suggestions
             BasicTextField(value, onChange, textStyle = TextStyle(color = Color.White, fontSize = 16.sp), cursorBrush = SolidColor(Accent), modifier = Modifier.fillMaxWidth(), singleLine = true,
+                visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
                 keyboardOptions = KeyboardOptions(autoCorrectEnabled = words, keyboardType = if (numeric) KeyboardType.Decimal else if (words) KeyboardType.Text else KeyboardType.Password, imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }))
+                keyboardActions = KeyboardActions(onDone = { focus.clearFocus(); keys?.hide() }))
         }
         if (onScan != null) QrButton { focus.clearFocus(); onScan() }
     }
@@ -1152,6 +1175,25 @@ fun SealNote(guard: Guard) {
          else "This phone has no screen lock. The seed phrase is kept encrypted, but anyone holding the phone can use it. Set a screen lock and it will guard the wallet from then on.", color = Dim, fontSize = 13.sp)
 }
 
+/** Asks for the password of a wallet that has one of its own, over whatever screen wanted it. `done(null)`: not given. */
+@Composable
+fun PasswordPrompt(title: String, done: (String?) -> Unit) {
+    var pass by remember { mutableStateOf("") }
+    Dialog(onDismissRequest = { done(null) }) {
+        Column(Modifier.fillMaxWidth().background(Card, RoundedCornerShape(12.dp)).padding(16.dp)) {
+            Text(title, color = Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text("This wallet has a password of its own.", color = Dim, fontSize = 14.sp)
+            Spacer(Modifier.height(10.dp))
+            Field(pass, "wallet password", secret = true) { pass = it }
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Pill("Cancel", Color.White, Color.Black, Modifier.weight(1f)) { done(null) }
+                Pill("Open", Accent, Color.Black, Modifier.weight(1f)) { if (pass.isNotBlank()) done(pass.trim()) }
+            }
+        }
+    }
+}
+
 /** The "+" page: a new wallet, a wallet restored from its seed phrase, or a read-only wallet. */
 @Composable
 fun AddWallet(core: Core, guard: Guard, onDone: () -> Unit) {
@@ -1161,12 +1203,37 @@ fun AddWallet(core: Core, guard: Guard, onDone: () -> Unit) {
     var phrase by remember { mutableStateOf("") }
     var words by remember { mutableStateOf("") }
     var msg by remember { mutableStateOf("") }
+    var own by remember { mutableStateOf(false) } // sealed with a password typed here, not behind the screen lock
+    var pass1 by remember { mutableStateOf("") }
+    var pass2 by remember { mutableStateOf("") }
     var scanning by remember { mutableStateOf(false) }
     if (scanning) { Scanner("Scan an address to watch", { address = addressFromCode(it); scanning = false }, { scanning = false }); return }
     @Composable fun NameField() { Field(name, "wallet name (optional)", words = true) { name = it.take(40) }; Spacer(Modifier.height(8.dp)) }
     // back from a form to the three choices, by the line at its top or the phone's back button. A phrase half typed is
     // dropped on the way out. Not from the words to write down: those are seen through to the end.
-    val leave = { mode = ""; msg = ""; phrase = ""; address = "" }
+    val leave = { mode = ""; msg = ""; phrase = ""; address = ""; own = false; pass1 = ""; pass2 = "" }
+    // what guards the seed phrase: the phone's screen lock, or a password for this wallet alone
+    @Composable fun GuardChoice() {
+        Text("Guarded by", color = Dim, fontSize = 13.sp)
+        Spacer(Modifier.height(4.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Pill("Screen lock", if (!own) Color.White else Bg, if (!own) Color.Black else Color.White, Modifier.weight(1f)) { own = false; msg = "" }
+            Pill("Password", if (own) Color.White else Bg, if (own) Color.Black else Color.White, Modifier.weight(1f)) { own = true; msg = "" }
+        }
+        Spacer(Modifier.height(8.dp))
+        if (!own) SealNote(guard) else {
+            Field(pass1, "password for this wallet", secret = true) { pass1 = it }
+            Spacer(Modifier.height(8.dp))
+            Field(pass2, "the same password again", secret = true) { pass2 = it }
+            Spacer(Modifier.height(6.dp))
+            Text("The seed phrase is kept encrypted with this password, and whoever has the password and this phone can spend from the wallet and read its words: the phone's screen lock is not asked. A short or guessable password can be found by anyone who copies the wallet's file. If it is forgotten, the written words are the only way back.", color = Dim, fontSize = 13.sp)
+        }
+    }
+    // the password to seal with: the one typed, or the Vault's once the screen lock allows
+    fun sealWith(title: String, then: (String) -> Unit) {
+        if (!own) guard.open(title, false) { pass, why -> if (pass == null) msg = why else then(pass) }
+        else passwordFault(pass1, pass2).let { fault -> if (fault != null) msg = fault else then(pass1.trim()) }
+    }
     BackHandler(enabled = mode == "new" || mode == "restore" || mode == "watch") { leave() }
     // the words to write down: the back button does nothing here; the only way on is "I have written them down"
     BackHandler(enabled = mode == "words") { }
@@ -1191,15 +1258,15 @@ fun AddWallet(core: Core, guard: Guard, onDone: () -> Unit) {
             Text("New wallet", color = Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             NameField()
-            SealNote(guard)
+            GuardChoice()
             Spacer(Modifier.height(10.dp))
+            // why it did not happen is said here, by the button: under the card it would be off the screen
+            if (msg.isNotEmpty()) { Text(msg, color = Accent, fontSize = 15.sp); Spacer(Modifier.height(10.dp)) }
             Pill("Create", Accent, Color.Black, Modifier.fillMaxWidth()) {
-                guard.open("Create a wallet", false) { pass, why ->
-                    if (pass == null) msg = why else {
-                        val r = core.create(name, pass)
-                        val shown = if (r == Core.OK) core.mnemonic(pass) else "! $r"
-                        if (!shown.startsWith("! ")) { words = shown; msg = ""; mode = "words" } else msg = shown.drop(2)
-                    }
+                sealWith("Create a wallet") { pass ->
+                    val r = core.create(name, pass, own)
+                    val shown = if (r == Core.OK) core.mnemonic(pass) else "! $r"
+                    if (!shown.startsWith("! ")) { words = shown; msg = ""; pass1 = ""; pass2 = ""; mode = "words" } else msg = shown.drop(2)
                 }
             }
         }
@@ -1219,14 +1286,15 @@ fun AddWallet(core: Core, guard: Guard, onDone: () -> Unit) {
             NameField()
             Field(phrase, "seed phrase, words separated by spaces") { phrase = it }
             Text("Only the wallet's current coins are looked up, not its history.", color = Dim, fontSize = 13.sp)
-            SealNote(guard)
+            Spacer(Modifier.height(8.dp))
+            GuardChoice()
             Spacer(Modifier.height(10.dp))
+            // why it did not happen is said here, by the button: under the card it would be off the screen
+            if (msg.isNotEmpty()) { Text(msg, color = Accent, fontSize = 15.sp); Spacer(Modifier.height(10.dp)) }
             Pill("Restore", Accent, Color.Black, Modifier.fillMaxWidth()) {
-                guard.open("Restore a wallet", false) { pass, why ->
-                    if (pass == null) msg = why else {
-                        val r = core.restore(phrase, name, pass)
-                        if (r == Core.OK) { phrase = ""; onDone() } else msg = r
-                    }
+                sealWith("Restore a wallet") { pass ->
+                    val r = core.restore(phrase, name, pass, own)
+                    if (r == Core.OK) { phrase = ""; pass1 = ""; pass2 = ""; onDone() } else msg = r
                 }
             }
         }
@@ -1240,7 +1308,7 @@ fun AddWallet(core: Core, guard: Guard, onDone: () -> Unit) {
             Pill("Add", Color.White, Color.Black, Modifier.fillMaxWidth()) { val r = core.watch(address, name); if (r == Core.OK) onDone() else msg = r }
         }
     }
-    if (msg.isNotEmpty()) CardBox { Text(msg, color = Color.White, fontSize = 15.sp) }
+    if (msg.isNotEmpty() && mode != "new" && mode != "restore") CardBox { Text(msg, color = Color.White, fontSize = 15.sp) }
 }
 
 /** One wallet's own settings (the gear on its card). */
@@ -1287,7 +1355,7 @@ fun Config(core: Core, w: WalletView, guard: Guard, onChanged: () -> Unit, onRem
             if (words.isNotEmpty()) words = "" else guard.open("Show the seed phrase of ${w.name}", true) { pass, why -> if (pass == null) msg = why else core.mnemonic(pass).let { r -> if (!r.startsWith("! ")) { words = r; msg = "" } else msg = r.drop(2) } }
         }
         if (words.isNotEmpty()) {
-            Text(if (guard.secure()) "Anyone who sees these words can spend from this wallet. On this phone they are kept encrypted and open only with its screen lock." else "This phone has no screen lock, so nothing guards these words. Anyone who sees them can spend from this wallet.", color = Dim, fontSize = 13.sp)
+            Text(if (core.own()) "Anyone who sees these words can spend from this wallet. On this phone they are kept encrypted and open with this wallet's own password." else if (guard.secure()) "Anyone who sees these words can spend from this wallet. On this phone they are kept encrypted and open only with its screen lock." else "This phone has no screen lock, so nothing guards these words. Anyone who sees them can spend from this wallet.", color = Dim, fontSize = 13.sp)
             Spacer(Modifier.height(8.dp)); SecretWords(words)
         }
     }
@@ -1298,7 +1366,7 @@ fun Config(core: Core, w: WalletView, guard: Guard, onChanged: () -> Unit, onRem
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Pill("Keep", Color.White, Color.Black, Modifier.weight(1f)) { removing = false }
-                Pill("Remove", Accent, Color.Black, Modifier.weight(1f)) { if (w.readOnly) { core.remove(); onRemoved() } else guard.ask("Remove ${w.name}") { ok -> if (ok) { core.remove(); onRemoved() } } }
+                Pill("Remove", Accent, Color.Black, Modifier.weight(1f)) { if (w.readOnly) { core.remove(); onRemoved() } else guard.ask("Remove ${w.name}") { ok -> if (ok) { core.remove(); onRemoved() } else if (core.own()) { removing = false; msg = "The wallet's password was not given, or is not the right one, so the wallet stays." } } }
             }
         }
     }

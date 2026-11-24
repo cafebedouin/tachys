@@ -4,6 +4,7 @@ import java.io.File
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -79,13 +80,13 @@ class AnswersTest {
         assertFalse(reply(1, good, "").ok)
         assertFalse(reply(0, good.replace("\"ok\":true", "\"ok\":false"), "").ok)
         assertFalse("a layout this app does not read", reply(0, good.replace("\"v\":1", "\"v\":2"), "").ok)
-        // no object at all (the core could not be run, or was killed): not ok, and the reason is its last sentence
-        val none = reply(0, "not json", "WARNING: linker: something harmless\nfirst\nthe reason\n")
+        // no object at all (the core could not be run): not ok, and the reason is its last sentence
+        val none = reply(0, "not json", "first\nthe reason\n")
         assertFalse(none.ok); assertNull(none.json)
         assertEquals("the reason", none.error)
         assertEquals("no answer", reply(-1, "", "").error)
         // the object is the last line that starts one, whatever came before it
-        assertTrue(reply(0, "WARNING: linker: something harmless\n$good\n", "").ok)
+        assertTrue(reply(0, "something before it\n$good\n", "").ok)
     }
 
     // (not an answer of the core's: `tips` needs peers, so no answer of it is kept in vectors/app/)
@@ -95,5 +96,16 @@ class AnswersTest {
         assertFalse(tipAgreed(reply(1, agreed, "")))
         assertFalse(tipAgreed(reply(0, agreed.replace("agreed", "no quorum"), "")))
         assertFalse(tipAgreed(reply(0, "", "verdict: agreed")))
+    }
+
+    @Test fun aPasswordForAWalletIsLongEnoughTypedTheSameTwiceAndCountedAsTheCoreReadsIt() {
+        assertNull(passwordFault("correct horse", "correct horse"))
+        assertNotNull("too short", passwordFault("seven77", "seven77"))
+        assertNull(passwordFault("eight888", "eight888"))
+        assertNotNull("not the same", passwordFault("correct horse", "correct house"))
+        // the core drops the spaces around the line it reads: they neither count nor differ
+        assertNotNull("spaces do not make it long enough", passwordFault("  short  ", "  short  "))
+        assertNull(passwordFault(" correct horse", "correct horse "))
+        assertNotNull("two lines", passwordFault("correct\nhorse", "correct\nhorse"))
     }
 }

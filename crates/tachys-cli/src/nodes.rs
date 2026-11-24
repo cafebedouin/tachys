@@ -74,8 +74,8 @@ fn leads_outside(url: &str) -> bool {
 
 fn get(url: &str) -> Option<serde_json::Value> {
     use std::io::Read;
-    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
-    let agent = AGENT.get_or_init(|| ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(4)).timeout(Duration::from_secs(8)).redirects(0).build());
+    let own = crate::own::own();
+    let agent = own.http_quick.get_or_init(|| ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(4)).timeout(Duration::from_secs(8)).redirects(0).build());
     let mut text = String::new();
     agent.get(url).call().ok()?.into_reader().take(2_000_000).read_to_string(&mut text).ok()?;
     serde_json::from_str(&text).ok()

@@ -4,7 +4,8 @@
 
 Done:
 - Seed phrases can be encrypted at rest: on the command line when a password is given (plain text otherwise, and
-  `setup` says so), always in the app, where they open only with the screen lock if the phone has one.
+  `setup` says so), always in the app, where they open only with the screen lock if the phone has one, or with a
+  password of the wallet's own if it was given one (finding 65).
 - The tip rule holds a chain to consecutive heights and to the chain's own limits on a change of difficulty.
 - The tip is chosen by work, not height, on every path, with a floor that remembers the last agreed tip.
 - A payment is never reported sent, failed or confirmed on a node's wording: only on proofs, exit codes and fields.
@@ -106,15 +107,26 @@ instead, which as far as we know is new for Ergo:
   id; a transaction id alone does not name the coins without a node's word).
 - A codec of our own in place of the vendored one, and the binary measured. (Two of its tests,
   `concurrent_readers_over_budget_*`, fail on a loaded machine and pass alone.)
-- An in-process binding for the app (the library entry `tachys::call` is ready for one): the box-proof panics that
-  blocked it are closed, and the other decoders were fuzzed without one (findings 52, 57).
+- The in-process binding with a key. The app now runs the core in its own process (`crates/tachys-c`, finding 64);
+  on the Note 2 that has synced, drawn a QR code beside a sync and renamed a wallet, all with a read-only wallet.
+  A seed has been sealed and opened this way with a wallet's own password, and a payment made each way on mainnet
+  (finding 65); a signing request has not been run this way on a phone, nor a seed behind the screen lock, nor the
+  arm64 library.
+- A wallet's own password in the app (finding 65): nothing tests the screens; a wrong password is said at the foot of
+  the wallet's settings, which may be off the screen; the app lock and Remove of a screen-lock wallet still ask for
+  the phone's lock; a wallet's guard is changed only by restoring it.
+- Testnet's difficulty fell to 1 (seen 2026-11-24 UTC), under the floor a wallet that had synced there remembers:
+  such a wallet takes no header from testnet's peers. Not looked into further.
+- An Apple app. The C interface it would call is here and tested (`crates/tachys-c/tachys.h`); nothing has been
+  built for an Apple target, and there are no screens.
 - The app's main source file is too long. (`wallet send` and the sync were, and are split into their steps: finding 61.)
   What the app makes of the core's answers is tested for a payment's outcome, a derived address and a wrong password
   (`vectors/app/`, finding 61); what it reads of a sync, a receipt, an offer list and the wallet file is not.
 - The fuzz targets (`fuzz/`: box proofs, peer messages, signed bytes, headers) have run for minutes, not days, and
   not in CI; the JSON of REST answers has no target.
-- The fuzzing ran on the build machine, in the unwinding build; none of it has run in the phone build, where any panic
-  ends the core.
+- The fuzzing ran on the build machine; none of it has run in the phone build. A panic there is now caught and
+  answered (code 70), as on the build machine; a stack overflow or an abort inside the core would end the app, where
+  it used to end only the core's own process (finding 64).
 - A box seen only in a block above the agreed tip can still be dropped by a settled proof below where it was seen;
   boxes confirmed under the agreed tip are kept (by reading, not tested).
 - A peer whose pushed headers do not follow one another (the reference node pushes tip, tip-16, tip-128, tip-512)

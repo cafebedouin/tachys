@@ -4,6 +4,7 @@ members = [
     "crates/tachys-verify",
     "crates/tachys-net",
     "crates/tachys-cli",
+    "crates/tachys-c",
     "vendor/arkadianet-codec/ergo-primitives",
     "vendor/arkadianet-codec/ergo-ser",
     "vendor/arkadianet-codec/ergo-p2p",
@@ -38,11 +39,11 @@ indexmap   = { version = "2", features = ["serde"] }
 [profile.release]
 opt-level = 3
 
-# For phones: smallest binary, same code.
+# For phones: smallest binary, same code. A panic unwinds, as in every other build: the app runs the core in its own
+# process (crates/tachys-c), where a panic caught is an answer (code 70) and a panic that aborts is the app gone.
 [profile.phone]
 inherits = "release"
 opt-level = "z"
 lto = true
 codegen-units = 1
-panic = "abort"
 strip = true

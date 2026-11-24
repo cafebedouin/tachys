@@ -27,10 +27,10 @@ pub(crate) static MAINNET: Net = Net { name: "mainnet", magic: [1, 0, 2, 4], gen
 /// Testnet difficulty swings widely, so its floor is loose.
 pub(crate) static TESTNET: Net = Net { name: "testnet", magic: [2, 3, 2, 3], genesis: "5b1827ca092b599eafbaf339d2acf2445bc5216ec2e022d9c001a6fff660cad9",
     checkpoint_json: include_str!("../../../anchors/testnet.json"), floor_divisor: 1024, v2_activation_height: 0, block_interval_ms: 45_000, epoch_length: 128, seeds: "seeds-testnet.txt", testnet: true, fee_tree: "" };
-/// The network of the call under way. Set at the start of every call, so one process can serve mainnet and then testnet.
-static NET: std::sync::RwLock<&'static Net> = std::sync::RwLock::new(&MAINNET);
-pub(crate) fn net() -> &'static Net { *NET.read().unwrap_or_else(|p| p.into_inner()) }
-pub(crate) fn set_net(n: &'static Net) { *NET.write().unwrap_or_else(|p| p.into_inner()) = n; }
+/// The network of the call under way (`Own::net`). Set at the start of every call, so one process can serve mainnet
+/// and then testnet, and both at once.
+pub(crate) fn net() -> &'static Net { *crate::own::own().net.read().unwrap_or_else(|p| p.into_inner()) }
+pub(crate) fn set_net(n: &'static Net) { *crate::own::own().net.write().unwrap_or_else(|p| p.into_inner()) = n; }
 
 /// A network of our own (the rig), set up from `--net-file`: the only place the test hooks work.
 pub(crate) fn private_net() -> bool { !matches!(net().name, "mainnet" | "testnet") }

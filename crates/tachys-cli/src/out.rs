@@ -8,15 +8,13 @@
 //! own, with `v` and `ok` but without `exit` or `command`.) A caller decides on `ok` and the fields,
 //! never on the wording of a sentence: sentences may quote what a node said, fields never do unless named so.
 
-use std::sync::Mutex;
-
 /// The version of the JSON answers. It changes when a field is renamed, retyped or removed; adding one does not change it.
 pub(crate) const V: u64 = 1;
 
 /// Everything a call owns while it runs: whether it answers in JSON, the answer so far, the last things said, and
 /// (when called as a library) what it wrote and the lines it may read. Nothing of one call is left for the next.
 #[derive(Default)]
-struct Call {
+pub(crate) struct Call {
     json: bool,
     own_answer: bool,
     report: serde_json::Map<String, serde_json::Value>,
@@ -28,12 +26,11 @@ struct Call {
     /// lines to read in place of the process's stdin (a password, a seed phrase)
     input: Option<std::collections::VecDeque<String>>,
 }
-/// The calls under way: the last is the current one. A command that runs another (`balance` runs `tips` and
-/// `wallet status`) puts a call on top for it and takes it off when it ends.
-static CALLS: Mutex<Vec<Call>> = Mutex::new(Vec::new());
-
+/// The calls under way (`Own::calls`): the last is the current one. A command that runs another (`balance` runs
+/// `tips` and `wallet status`) puts a call on top for it and takes it off when it ends.
 fn now<R>(f: impl FnOnce(&mut Call) -> R) -> R {
-    let mut g = CALLS.lock().unwrap_or_else(|p| p.into_inner());
+    let own = crate::own::own();
+    let mut g = own.calls.lock().unwrap_or_else(|p| p.into_inner());
     if g.is_empty() { g.push(Call::default()); }
     f(g.last_mut().expect("just made sure"))
 }
@@ -45,23 +42,26 @@ fn command_of(args: &[String]) -> String { args.iter().skip(1).take_while(|a| !a
 pub(crate) fn start(args: &[String], capture: bool, input: Option<Vec<String>>) {
     let mut c = Call { json: args.iter().any(|a| a == "--json"), capture: capture.then(Default::default), input: input.map(Into::into), ..Default::default() };
     c.report.insert("command".into(), command_of(args).into());
-    let mut g = CALLS.lock().unwrap_or_else(|p| p.into_inner());
+    let own = crate::own::own();
+    let mut g = own.calls.lock().unwrap_or_else(|p| p.into_inner());
     g.clear();
     g.push(c);
 }
 /// What a captured call wrote: (stdout, stderr).
 pub(crate) fn written() -> (String, String) { now(|c| c.capture.clone().unwrap_or_default()) }
+/// The call is over: the lines it was handed and did not read are wiped (a password, a seed phrase).
+pub(crate) fn forget_input() { now(|c| if let Some(q) = c.input.as_mut() { q.iter_mut().for_each(zeroize::Zeroize::zeroize); q.clear(); }) }
 /// A call of another command from inside this one: its own answer, in JSON, its sentences kept.
 pub(crate) fn begin_inner(args: &[String]) {
     let mut c = Call { json: true, capture: Some(Default::default()), ..Default::default() };
     c.report.insert("command".into(), command_of(args).into());
-    CALLS.lock().unwrap_or_else(|p| p.into_inner()).push(c);
+    crate::own::own().calls.lock().unwrap_or_else(|p| p.into_inner()).push(c);
 }
 /// The inner call is over: its answer and what it said.
 pub(crate) fn end_inner(code: i32) -> (serde_json::Value, String) {
     let own = now(|c| c.own_answer);
     let a = answer(code);
-    let c = CALLS.lock().unwrap_or_else(|p| p.into_inner()).pop().unwrap_or_default();
+    let c = crate::own::own().calls.lock().unwrap_or_else(|p| p.into_inner()).pop().unwrap_or_default();
     let (out, err) = c.capture.unwrap_or_default();
     (if own { serde_json::from_str(out.trim()).unwrap_or(serde_json::Value::Null) } else { a }, err)
 }
@@ -71,7 +71,8 @@ pub(crate) fn write_out(s: &str) { if !now(|c| match &mut c.capture { Some(k) =>
 fn write_err(s: &str) { if !now(|c| match &mut c.capture { Some(k) => { k.1.push_str(s); k.1.push('\n'); true } None => false }) { eprintln!("{s}") } }
 /// The next line of input: one the caller handed over, or a line of the process's stdin.
 pub(crate) fn read_line() -> String {
-    if let Some(l) = now(|c| c.input.as_mut().map(|q| q.pop_front().unwrap_or_default())) { return l.trim().to_string() }
+    // the line may be a password or a seed phrase: the copy it was handed over in is wiped once it has been read
+    if let Some(mut l) = now(|c| c.input.as_mut().map(|q| q.pop_front().unwrap_or_default())) { let read = l.trim().to_string(); zeroize::Zeroize::zeroize(&mut l); return read }
     let mut s = String::new(); let _ = std::io::stdin().read_line(&mut s); s.trim().to_string()
 }
 

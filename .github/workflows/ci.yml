@@ -22,9 +22,9 @@ jobs:
       # the whole workspace, vendored codec included, unoptimised (.cargo/config.toml gives its deep tests the stack they need)
       - run: cargo test --workspace --locked
       # the tachys crates only: the vendored codec is kept as upstream wrote it
-      - run: cargo clippy --locked -p tachys -p tachys-verify -p tachys-net --all-targets -- -D warnings
-      # the profile the phone runs (panic = abort) must at least build
-      - run: cargo build --locked --profile phone -p tachys
+      - run: cargo clippy --locked -p tachys -p tachys-verify -p tachys-net -p tachys-c --all-targets -- -D warnings
+      # the profile the phone runs, and the library the app loads, must at least build (here for this machine, not a phone)
+      - run: cargo build --locked --profile phone -p tachys -p tachys-c
       # the app ships its own copies of the seed lists
       - run: cmp seeds-mainnet.txt android/app/src/main/assets/seeds-mainnet.txt && cmp seeds-testnet.txt android/app/src/main/assets/seeds-testnet.txt
       # a build is good for sixty days from its checkpoint (docs/maintaining.md): fail the weekly run before that
@@ -41,18 +41,25 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.89
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --locked -p tachys -p tachys-verify -p tachys-net --all-targets
+      - run: cargo check --locked -p tachys -p tachys-verify -p tachys-net -p tachys-c --all-targets
 
-  # the app must compile and pack, and read the core's answers as its tests say; without the core in it (android/build-core.sh)
+  # the app must compile and pack, and read the core's answers as its tests say. The APK built here has no core in it
+  # (android/build-core.sh needs the NDK); the tests call the core built for this machine, through the JNI entry the phone uses
   app:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
-      # what the app makes of the core's answers, on the answers kept in vectors/app/ (which the core's tests hold it to)
-      - run: ./gradlew testDebugUnitTest assembleDebug
+      - run: cargo build --locked -p tachys-c --features jni
+      # what the app makes of the core's answers, on the answers kept in vectors/app/ (which the core's tests hold it to),
+      # and the core itself called in the tests' own process (NativeTest.kt: skipped, not passed, without TACHYS_HOST_CORE)
+      - run: TACHYS_HOST_CORE="$GITHUB_WORKSPACE/target/debug" ./gradlew testDebugUnitTest assembleDebug
+        working-directory: android
+      - run: grep -L 'skipped="0"' app/build/test-results/testDebugUnitTest/*.xml | grep . && exit 1 || echo "no test was skipped"
         working-directory: android

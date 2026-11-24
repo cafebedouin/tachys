@@ -489,3 +489,35 @@ fn a_trickling_node_is_given_up_on_after_two_minutes() {
     assert!((119.0..126.0).contains(&s), "{s:.1} s");
     assert!(r.as_ref().is_ok_and(|x| x.1.len() < 15));
 }
+
+/// The HTTP client was one for the process, with the connections it keeps open. In a program run once per command
+/// that is one per command; in a process that goes on living (the app, since finding 64) a call would have sent its
+/// request down a connection the call before it left open, perhaps minutes ago and dead by now, and a POST down a dead
+/// connection is not sent again. Each call now has its own client: it uses one connection for its own requests and
+/// leaves none for the next.
+#[test]
+fn a_call_keeps_no_connection_to_a_node_open_for_the_next_call() {
+    use std::io::{Read, Write};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (connections, requests) = (std::sync::Arc::new(AtomicUsize::new(0)), std::sync::Arc::new(AtomicUsize::new(0)));
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/info", l.local_addr().unwrap());
+    // a node that keeps every connection open and answers each request on it
+    { let (connections, requests) = (connections.clone(), requests.clone()); std::thread::spawn(move || for c in l.incoming() {
+        let Ok(mut c) = c else { continue };
+        connections.fetch_add(1, Ordering::SeqCst);
+        let requests = requests.clone();
+        std::thread::spawn(move || { let mut buf = [0u8; 4096]; while matches!(c.read(&mut buf), Ok(n) if n > 0) {
+            requests.fetch_add(1, Ordering::SeqCst);
+            if c.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}").is_err() { break }
+        } });
+    }); }
+    let a_call = |url: String| {
+        let rt = crate::own::runtime_of_its_own();
+        rt.block_on(async move { tokio::spawn(async move { for _ in 0..3 { assert_eq!(crate::util::http().get(&url).call().unwrap().into_string().unwrap(), "{}"); } }).await.unwrap() })
+    };
+    a_call(url.clone());
+    assert_eq!((connections.load(Ordering::SeqCst), requests.load(Ordering::SeqCst)), (1, 3), "one call's requests share a connection");
+    a_call(url);
+    assert_eq!((connections.load(Ordering::SeqCst), requests.load(Ordering::SeqCst)), (2, 6), "and the next call opens its own");
+}

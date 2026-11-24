@@ -5,10 +5,34 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ergo_p2p::connection::Connection;
 use ergo_p2p::framing::MAINNET_MAGIC as DEFAULT_MAGIC;
 
-static MAGIC: std::sync::RwLock<[u8; 4]> = std::sync::RwLock::new(DEFAULT_MAGIC);
+/// What every connection is made with: the network's magic, and what the handshake declares about this client.
+#[derive(Clone, Copy)]
+struct Wire { magic: [u8; 4], declared: Declared }
+const WIRE: Wire = Wire { magic: DEFAULT_MAGIC, declared: Declared::Nothing };
+/// The process's own, for a thread no `Own` has been entered on.
+static SHARED: std::sync::RwLock<Wire> = std::sync::RwLock::new(WIRE);
+/// A network and a declaration of one's own, for a program that talks to mainnet and to testnet at once: make one,
+/// `enter` it on every thread the connections are made from (a runtime's `on_thread_start`), and what is set on those
+/// threads is set for them alone. A thread that entered none shares the process's.
+#[derive(Clone)]
+pub struct Own(std::sync::Arc<std::sync::RwLock<Wire>>);
+impl Default for Own { fn default() -> Self { Own(std::sync::Arc::new(std::sync::RwLock::new(WIRE))) } }
+thread_local! { static OWN: std::cell::RefCell<Option<Own>> = const { std::cell::RefCell::new(None) }; }
+impl Own {
+    /// From here on this thread's connections are made with this. Returns what the thread had, for `leave`.
+    pub fn enter(&self) -> Option<Own> { OWN.with(|o| o.replace(Some(self.clone()))) }
+    /// Puts back what `enter` returned.
+    pub fn leave(before: Option<Own>) { OWN.with(|o| *o.borrow_mut() = before); }
+}
+fn wire<R>(f: impl FnOnce(&mut Wire) -> R) -> R {
+    match OWN.with(|o| o.borrow().clone()) {
+        Some(own) => f(&mut own.0.write().unwrap_or_else(|p| p.into_inner())),
+        None => f(&mut SHARED.write().unwrap_or_else(|p| p.into_inner())),
+    }
+}
 /// Select the network for the connections that follow (default: mainnet). May be set again: one process can talk to
-/// mainnet and then to testnet, though not to both at once.
-pub fn set_network_magic(m: [u8; 4]) { *MAGIC.write().unwrap_or_else(|p| p.into_inner()) = m; }
+/// mainnet and then to testnet, and to both at once from threads that each entered an `Own`.
+pub fn set_network_magic(m: [u8; 4]) { wire(|w| w.magic = m) }
 /// What the handshake declares about this client. See docs/good-neighbour.md.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Declared {
@@ -20,16 +44,15 @@ pub enum Declared {
     /// A FALSE claim to be an archival node. For control arms on our own private network only.
     FullClaimForControlOnly,
 }
-static DECLARED: std::sync::RwLock<Declared> = std::sync::RwLock::new(Declared::Nothing);
-pub fn set_declared(d: Declared) { *DECLARED.write().unwrap_or_else(|p| p.into_inner()) = d; }
+pub fn set_declared(d: Declared) { wire(|w| w.declared = d) }
 fn mode_features() -> Vec<PeerFeature> {
-    match *DECLARED.read().unwrap_or_else(|p| p.into_inner()) {
+    match wire(|w| w.declared) {
         Declared::Nothing => vec![],
         Declared::Light => vec![PeerFeature::Mode { state_type: 1, verify_tx: false, nipopow: Some(1), blocks_to_keep: 0 }],
         Declared::FullClaimForControlOnly => vec![PeerFeature::Mode { state_type: 0, verify_tx: true, nipopow: None, blocks_to_keep: -1 }],
     }
 }
-fn magic() -> [u8; 4] { *MAGIC.read().unwrap_or_else(|p| p.into_inner()) }
+fn magic() -> [u8; 4] { wire(|w| w.magic) }
 use ergo_p2p::handshake::{deserialize_handshake_with_consumed, serialize_handshake, Handshake, PeerFeature, PeerSpec, Version};
 use ergo_p2p::message::{deserialize_nipopow_proof, serialize_get_nipopow_proof, CODE_GET_NIPOPOW_PROOF, CODE_NIPOPOW_PROOF};
 use ergo_p2p::types::NipopowProofData;

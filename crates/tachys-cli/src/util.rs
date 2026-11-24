@@ -73,19 +73,21 @@ impl Drop for Deadline { fn drop(&mut self) { DEADLINE.with(|d| d.set(self.0)); 
 /// a request past its deadline fails at once).
 pub(crate) fn request_time() -> Duration { Deadline::left().map_or(WHOLE_REQUEST, |l| l.min(WHOLE_REQUEST)).max(Duration::from_millis(1)) }
 
-/// One HTTP client for every request to a node. A node that takes the connection and then says nothing is given up on,
-/// and so is one that answers too slowly to finish within `request_time`.
-pub(crate) struct Http(&'static ureq::Agent);
+/// One HTTP client for every request a call makes to a node, and none kept for the next call: a connection left open
+/// by a call minutes ago may be dead, and a payment sent down a dead one is not sent again (a POST is not retried),
+/// where a call that opens its own, as each run of the program does, would have reached the node. A node that takes
+/// the connection and then says nothing is given up on, and so is one that answers too slowly to finish within
+/// `request_time`.
+pub(crate) struct Http(ureq::Agent);
 impl Http {
     pub(crate) fn get(&self, url: &str) -> ureq::Request { self.0.get(url).timeout(request_time()) }
     pub(crate) fn post(&self, url: &str) -> ureq::Request { self.0.post(url).timeout(request_time()) }
 }
 pub(crate) fn http() -> Http {
-    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
-    Http(AGENT.get_or_init(|| ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(10)).timeout_read(Duration::from_secs(30)).timeout_write(Duration::from_secs(30))
+    Http(crate::own::own().http.get_or_init(|| ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(10)).timeout_read(Duration::from_secs(30)).timeout_write(Duration::from_secs(30))
         .timeout(WHOLE_REQUEST)
         // a node is asked at the address it was found or named at, and nowhere it then points: a redirect could send an address lookup or a signed payment to another host
-        .redirects(0).build()))
+        .redirects(0).build()).clone())
 }
 
 /// Write a file that only its owner can read: a wallet file holds a seed phrase, sealed or not.

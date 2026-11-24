@@ -21,7 +21,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.98.1
       - uses: Swatinem/rust-cache@v2
       # the wallet's own tests; the vendored codec's are CI's, and three of them fail by the clock on a busy machine
-      - run: cargo test --locked -p tachys -p tachys-verify -p tachys-net
+      - run: cargo test --locked -p tachys -p tachys-verify -p tachys-net -p tachys-c
       - run: ./build-linux.sh
       # the tag must be the version the program says it is, and a release carries a checkpoint under a week old
       - id: built

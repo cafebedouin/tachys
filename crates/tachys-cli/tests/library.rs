@@ -69,15 +69,52 @@ fn a_password_and_a_phrase_are_handed_over_as_lines_not_read_from_stdin() {
 fn j_address(st: &str) -> Value { serde_json::from_str::<Value>(&std::fs::read_to_string(format!("{st}/wallet.json")).unwrap()).unwrap()["address"].clone() }
 
 #[test]
-fn calls_from_several_threads_take_their_turn() {
+fn calls_from_several_threads_run_at_once_each_on_its_own_network() {
     let dirs: Vec<(Tmp, &str)> = (0..6).map(|i| (dir(&format!("thread{i}")), if i % 2 == 0 { "mainnet" } else { "testnet" })).collect();
-    let handles: Vec<_> = dirs.into_iter().map(|(d, net)| std::thread::spawn(move || {
-        let (code, j, _) = call(&["setup", "--state", &d, "--network", net], &[]);
-        (code, net, j["network"].as_str().unwrap_or("").to_string(), j["address"].as_str().unwrap_or("").to_string())
-    })).collect();
+    // all six are inside a call before any goes on: with one network for the process, the last to choose would win
+    let together = std::sync::Arc::new(std::sync::Barrier::new(dirs.len()));
+    let handles: Vec<_> = dirs.into_iter().map(|(d, net)| { let together = together.clone(); std::thread::spawn(move || {
+        together.wait();
+        let mut all = vec![];
+        for _ in 0..20 {
+            let (code, j, _) = call(&["setup", "--state", &d, "--network", net], &[]);
+            let (_, v, _) = call(&["version", "--network", net, "--json"], &[]);
+            all.push((code, j["network"].as_str().unwrap_or("").to_string(), j["address"].as_str().unwrap_or("").to_string(), v["network"].as_str().unwrap_or("").to_string(), v["command"].as_str().unwrap_or("").to_string()));
+        }
+        (net, all)
+    }) }).collect();
     for h in handles {
-        let (code, asked, got, address) = h.join().unwrap();
-        assert_eq!((code, got.as_str()), (0, asked), "each got the network it asked for");
-        assert!(address.starts_with(if asked == "mainnet" { '9' } else { '3' }), "{asked}: {address}");
+        let (asked, all) = h.join().unwrap();
+        for (code, got, address, version_net, command) in all {
+            assert_eq!((code, got.as_str(), version_net.as_str(), command.as_str()), (0, asked, asked, "version"), "each got the network it asked for, and its own answer");
+            assert!(address.starts_with(if asked == "mainnet" { '9' } else { '3' }), "{asked}: {address}");
+        }
     }
+}
+
+#[test]
+fn a_call_does_not_wait_for_one_that_is_still_running() {
+    // a peer that takes the connection and says nothing holds `tips` until its deadline
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = l.local_addr().unwrap().to_string();
+    std::thread::spawn(move || { let mut held = vec![]; for c in l.incoming() { held.push(c); } });
+    let st = dir("slow");
+    let seeds = format!("{st}/seeds.txt");
+    std::fs::write(&seeds, &addr).unwrap();
+    let (started, go) = std::sync::mpsc::channel();
+    let slow = { let (st, seeds) = (st.to_string(), seeds.clone()); std::thread::spawn(move || {
+        started.send(()).unwrap();
+        let t = std::time::Instant::now();
+        let (code, _, _) = call(&["tips", "--seeds", &seeds, "--peers", "1", "--tries", "1", "--quorum", "1", "--state", &st, "--network", "testnet", "--json"], &[]);
+        (code, t.elapsed())
+    }) };
+    go.recv().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let t = std::time::Instant::now();
+    let (code, j, _) = call(&["qr", "an address to show while the sync runs", "--json"], &[]);
+    let quick = t.elapsed();
+    let (slow_code, slow_took) = slow.join().unwrap();
+    assert_eq!((code, &j["command"], j.get("verdict")), (0, &"qr".into(), None), "its own answer, with nothing of the other call's in it");
+    assert_ne!(slow_code, 0, "no tip: the peer said nothing");
+    assert!(quick < slow_took / 2 && slow_took > std::time::Duration::from_secs(1), "the quick call took {quick:?} while the slow one took {slow_took:?}");
 }

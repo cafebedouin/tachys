@@ -57,18 +57,20 @@ tachys history --state DIR
   is sealed on disk; otherwise it is there in plain text, and `setup` says so (`sealed: false`).
 
 `docs/agents.md` has the rest; `docs/json.md` has the other commands' fields (all of them take `--json`); a Rust
-program can call the wallet in its own process with `tachys::call(args, input)` (in a build that aborts on a
-panic, as the phone's does, a panic anywhere takes the caller down with it; the malformed proofs that caused one are
-refused before they reach the verifier, and the other decoders were fuzzed without one, but that is a fuzz, not a
-proof: `docs/roadmap.md`).
+program can call the wallet in its own process with `tachys::call(args, input)`, and any other through a C
+interface to the same call (`crates/tachys-c/tachys.h`). A panic inside the wallet is answered, not passed on; a
+stack overflow or an abort inside it would take the caller down with it. The malformed proofs that caused either
+are refused before they reach the verifier, and the other decoders were fuzzed without one, but that is a fuzz, not
+a proof: `docs/roadmap.md`.
 
 ## For a phone
 
 `android/` is the app: several wallets, send and receive with ERG and tokens, receipts as QR codes, payments
 signed offline and sent later, signing requests from other sites, all on the same core. It has run on a Galaxy
-Note 2 from 2012; the core is 2.7 MB and starts in 16 ms there. `docs/android.md` says what has been tried
-on a phone and what has not: the released build was tried by hand on the Note 2 by the maintainer, and on no
-other phone. A release carries an APK for each kind of phone, signed with the project's key (`SECURITY.md` gives
+Note 2 from 2012, with the core as a program the app started for each thing it did. The app now loads the core as a
+library and calls it in its own process (3.8 MB for that phone, 6.0 MB for a 64-bit one), and that build has not been
+on a phone yet. `docs/android.md` says what has been tried on a phone and what has not: the released build was
+tried by hand on the Note 2 by the maintainer, and on no other phone. A release carries an APK for each kind of phone, signed with the project's key (`SECURITY.md` gives
 its fingerprint), and the Linux program; the checksums are beside them. The APKs are the maintainer's builds; the
 Linux program, from v0.0.2 on, is built by the release workflow from the tagged commit and attested to it. None is
 a reproducible build: building your own is as good, and for money, better.
@@ -148,6 +150,7 @@ route. `.github/workflows/ci.yml` runs the tests and clippy.
 | | |
 |---|---|
 | `crates/tachys-cli` | the wallet: a library with one entry (`tachys::call`) and the `tachys` program |
+| `crates/tachys-c` | that entry for other languages: a C interface (`tachys.h`), and the JNI method the phone app calls |
 | `crates/tachys-verify` | checks on a NiPoPoW proof; the rule for choosing a tip by work; the node's difficulty rule |
 | `crates/tachys-net` | the smallest peer client that will do: handshake, hear a tip, fetch headers by id, serve |
 | `android/` | the phone app |

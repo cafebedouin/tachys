@@ -437,12 +437,11 @@ mod tests {
         (url, root)
     }
     fn receipt_of(state: &str, node: &str, receipt: &str) -> Receipt {
-        // one call at a time, as `crate::call` holds it: the inner `wallet receive` writes its answer where a call
-        // started by another test beside this one would clear it
-        let _one = crate::ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+        // a call of its own, as `crate::call` makes one: the inner `wallet receive` writes its answer where a test
+        // beside this one, sharing the answer of threads no call has taken, would clear it
         let a = Agent { state: state.to_string(), node: node.to_string() };
         let receipt = receipt.to_string();
-        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let rt = crate::own::runtime_of_its_own();
         rt.block_on(async move { tokio::spawn(async move { a.receipt(&receipt) }).await.unwrap() })
     }
     fn pending(state: &str, node: &str, receipt: &str) -> (Option<bool>, &'static str) { let r = receipt_of(state, node, receipt); (r.pending, r.code) }
@@ -573,8 +572,7 @@ mod tests {
         let st = dir("deadline");
         let seeds = format!("{st}/seeds.txt");
         std::fs::write(&seeds, &addr).unwrap();
-        let _one = crate::ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
-        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let rt = crate::own::runtime_of_its_own();
         let t = std::time::Instant::now();
         let ran = rt.block_on(async move { tokio::spawn(async move {
             let _d = crate::util::Deadline::set(std::time::Instant::now() + std::time::Duration::from_secs(2));

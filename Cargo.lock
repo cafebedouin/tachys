@@ -2038,6 +2038,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tachys-c"
+version = "0.0.2"
+dependencies = [
+ "serde_json",
+ "tachys",
+ "zeroize",
+]
+
+[[package]]
 name = "tachys-net"
 version = "0.0.2"
 dependencies = [

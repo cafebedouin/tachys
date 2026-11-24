@@ -1,0 +1,25 @@
+[package]
+name = "tachys-c"
+version = "0.0.2"
+edition = "2021"
+rust-version = "1.89"
+publish = false
+license = "CC0-1.0"
+description = "The wallet's one call, for a program that is not written in Rust: a C interface, and the same for Android's JNI"
+
+[lib]
+name = "tachys_c"
+# cdylib: what the phone app loads (libtachys_c.so); staticlib: what an Apple app would link; lib: for this crate's tests
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[features]
+# The JNI entry is always in an Android build. This puts it in any other, so that a JVM on the build machine can load
+# the library and the app's tests can call the core through the same door (android/app/src/test).
+jni = []
+
+[dependencies]
+tachys = { path = "../tachys-cli" }
+zeroize = "1"
+
+[dev-dependencies]
+serde_json = "1"

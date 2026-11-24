@@ -47,8 +47,13 @@ android {
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     buildFeatures { compose = true }
-    // the Rust core ships as an executable named like a library, so Android extracts it where it may be run
+    // The Rust core is a library the app loads (libtachys_c.so, crates/tachys-c). It is packed compressed and unpacked
+    // when the app is installed, as it was while the core was a program that had to be unpacked to be run: the way
+    // every phone this has been tried on has had it.
     packaging { jniLibs { useLegacyPackaging = true } }
+    // The tests call the core through the JNI when the build machine has the library and says where (NativeTest.kt):
+    // TACHYS_HOST_CORE is the directory holding libtachys_c.so, built with `cargo build -p tachys-c --features jni`.
+    testOptions { unitTests.all { test -> System.getenv("TACHYS_HOST_CORE")?.let { test.systemProperty("java.library.path", it) } } }
     splits { abi { isEnable = true; reset(); include("arm64-v8a", "armeabi-v7a"); isUniversalApk = false } }
 }
 

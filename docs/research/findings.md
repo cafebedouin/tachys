@@ -1080,3 +1080,128 @@ the app started and was still in front some seconds later with no crash of its o
 v0.0.1's release (which is what shows the key is the same one to a phone: what this phone held was a debug build); the Linux program from the release run for anything but its checksum and attestation (the one
 `./build-linux.sh` makes is not expected to be the same bytes); the fuzz targets with inputs over 4096 bytes, in
 the phone build, or for the JSON of REST answers; `cargo audit` in the release workflow.
+
+## 64. The app runs the core in its own process; calls run side by side
+
+The app started the core as a program for each thing it did. Findings 47 and 48 left it so on purpose: the phone
+build aborted on a panic, and calls into the library took turns. Both had to change before the core could move into
+the app's process, and a third thing turned up on the way. What a C caller or an Apple app would need came with it.
+
+- **Calls took turns, and the app's screen would have waited its turn.** `tachys::call` held one lock for the whole
+  call, because the answer under way, the network and the peer protocol's magic were one each for the process. The
+  app asks the core for things on the thread that draws the screen (the rows of a QR code, a wallet's name, a new
+  wallet) while a sync runs on another; as separate programs those ran side by side, and under the lock the screen
+  would have stopped for as long as the sync took. Each call now owns those things (`own.rs`; in `tachys-net`,
+  `Own`): the thread that makes a call and every thread of the runtime it starts are told which call they work for.
+  The lock is gone. A thread no call has taken shares one set, which is what the tests that run a command's parts
+  rely on.
+- **A connection to a node outlived the call that opened it.** The HTTP client was one for the process, with the
+  connections it keeps open. Run as a program that is one per command. In a process that goes on living, a call
+  would have sent its request down a connection left open by a call minutes before; if that connection was dead by
+  then, a GET is sent again on a new one and a POST is not (ureq 2, `unit.rs`: only idempotent requests are retried),
+  and a payment is a POST. Found by reading, before any build ran on a phone; not seen to happen. Each call now has
+  its own client and leaves no connection for the next.
+- **The phone build aborted on a panic.** The `phone` profile no longer says `panic = "abort"`: a panic in a
+  command is caught where it always was in the other builds and answered with code 70.
+- **The C interface** (`crates/tachys-c`, `tachys.h`): `tachys_call(args, n_args, input, n_input)` and
+  `tachys_free`, as a shared and a static library. The command runs on a thread of its own with 8 MiB of stack,
+  what the program's main thread has, because a thread an app calls from may have far less. The input lines are
+  wiped when the call ends and an answer when it is freed.
+- **The JNI entry** is one method, `Native.call(args, input)`, and only arrays of bytes cross it (UTF-8 strings each
+  ended by a 0 byte; back come the code, the length of the output, the output and the sentences). It calls four
+  functions of the JNI by their place in its table, which the JDK's `jni.h` and the NDK's both give as 171, 176, 200
+  and 208, so the crate needs no JNI library.
+- **The app** calls `Native.run` where it started the program (`MainActivity.kt`, `Native.kt`); what it makes of an
+  answer is unchanged. `build-core.sh` builds `libtachys_c.so`, refuses one without the JNI entry, and removes the
+  old program from `jniLibs`. An app built without the library says so in every answer.
+
+What this costs, plainly. A stack overflow or an abort inside the core now closes the app; it used to end only the
+core's own process, and the app showed a failure. The box proofs that overflowed the stack are bounded before they
+are walked (finding 52) and the decoders were fuzzed (finding 57), which is evidence and not proof. The seed phrase
+and the keys made from it are wiped where this project's code holds them; what the signing library leaves in freed
+memory used to go with the core's process and now stays in the app's until it is overwritten. The core is larger:
+6.0 MB for arm64 and 3.8 MB for 32-bit ARM, from 4.0 and 2.9 as a program (the program for arm64 built with
+unwinding is 4.7 MB, so about a third of the growth is the unwinding and the rest is being a library; why a library
+is that much larger was not looked into). The release APKs grow from 3.8 and 3.4 MB to 4.5 and 3.7 MB.
+
+**Tests:** `library.rs`: `calls_from_several_threads_run_at_once_each_on_its_own_network` (six threads, both
+networks, twenty calls each, every answer its own) and `a_call_does_not_wait_for_one_that_is_still_running` (a QR
+code asked for while `tips` waits on a silent peer) in place of the test that calls took turns. `tests.rs`:
+`a_call_keeps_no_connection_to_a_node_open_for_the_next_call`. `tachys-c/tests/c.rs`: four, calling the interface
+as C would (a password and a Japanese phrase as input lines; NULL, a missing list and bytes that are not UTF-8
+answered as misuse without repeating them; calls at once from threads with 64 KB of stack). `NativeTest.kt`: how
+lists and answers cross, always; and, when the build machine has the library and says where, the core called through
+the JNI entry in the tests' own JVM (a wallet made, sealed, opened, restored; six threads on two networks). CI now
+builds that library and fails if any app test was skipped.
+**Run** on the build machine (`runs/2026-11-23-in-process-core.txt`): the tests of the four tachys crates, 160
+passed, none failed; clippy clean over the four; a C program compiled against `tachys.h` with `-Wall -Wextra
+-pedantic -std=c99` and run against the shared and the static library; the app's 13 tests with the core loaded,
+none skipped; `assembleDebug`; both phone libraries built, each with the JNI entry among its three exported names
+and no build-machine path, the arm64 one aligned for 16 KB pages; the phone profile built for this machine; the
+release build of the copy that installs beside the app, whose APKs carry `libtachys_c.so` and no `libtachys.so`,
+and whose shrunk code still names `Native` and `call`.
+**Run on a phone** (the same log, its last part; added the same evening, once the Galaxy Note 2 was reachable):
+the release build of the copy that installs beside the app (shrunk, 32-bit, signed with the debug key), on Android
+7.1.2, on mainnet with a read-only wallet. Android loaded the library and the first sync ended "synced"; the balance
+shown (20.…… ERG, one box, six tokens, proven at 1923407) is what the command line answered for the same address
+from the build machine a minute later (207…… nanoERG, one box, six tokens, tip 1923408). Three times a sync
+was started and Receive opened straight after: each time the QR code was drawn, and on going back the header still
+read "syncing…". A wallet was renamed while a sync ran. Details opened. The app's process was the same one from
+first start to last.
+**Not run:** anything that needs a key, on a phone: New wallet got as far as the phone's screen-lock prompt, which
+was not answered, so no seed was sealed or opened, and nothing was restored, signed or sent. Testnet: its difficulty
+had fallen to 1 (two nodes' last headers, over REST), under the floor of 6 the testnet wallets here remember, and
+`tachys tips` from the build machine, with the build from before this change, took no header from either peer that
+answered; so no payment could be tried there by any build. The arm64 library on a phone; the Pixel 6; the camera;
+an emulator. The vendored codec's tests and `cargo audit`, which CI runs. The workflows as changed. The oldest
+Rust (1.89). The fuzz targets since. Anything for an Apple target. The rig.
+
+## 65. The app can seal a wallet with a password of its own
+
+**What was wrong.** On a phone every seed phrase was sealed with one password the app makes, keeps in the keystore
+and gives up only to the phone's screen lock. So a wallet could be handed to no one without handing over the
+screen lock, which opens the whole phone and every wallet in the app; and an agent, which cannot answer a screen
+lock at all, could not be given one. (It showed when the in-process build was tried on the Note 2: New wallet
+stopped at the screen-lock prompt, finding 64.) The command line has always sealed each wallet with the password
+it was given.
+
+**What changed** (the app only; the core is as it was). New and Restore ask what guards the wallet: the screen
+lock, as before and by default, or a password, typed twice, of at least eight characters. Such a wallet is marked by
+a file `own-password` beside its wallet file, which the core does not read. Whatever needs its key (Send, Sign,
+consolidating, adding an address, showing the public key or the seed phrase) asks for that password in a dialog and
+never for the screen lock; removing it asks for the password too. A password that does not open the phrase is
+recognised by the core's `bad_password` field, and for such a wallet is answered "That is not this wallet's
+password" and not with the lost-key sentence. Restoring a phrase whose wallet is on the phone, with a password
+that does not open it, seals it again with the password given: that is the way back from a forgotten password,
+and the way to change what guards a wallet. Two things found on the phone while trying it: after "Done" on the
+keyboard the next tap on a button put the focus on the form's first field and brought the keyboard back over the
+form (the screen now takes the focus a field gives up, and "Done" hides the keyboard); and why New or Restore did not
+happen was said under the card, off the screen (it is now said beside the button).
+
+**What it does not give.** The password is the whole wallet: whoever has it and the phone can read the seed
+phrase out. It is sealed as the command line seals (PBKDF2-HMAC-SHA256, 128000 rounds, then AES-256-GCM), so a
+copy of the wallet file can be guessed at off the phone, which the keystore's password (random) does not allow;
+eight characters is a floor, not a judgement that eight is enough. The password is a Kotlin string while the app
+holds it and is not wiped. The app lock is still the screen lock. Every wallet guarded by the screen lock still
+shares one password.
+
+**Tests:** `AnswersTest`: `aPasswordForAWalletIsLongEnoughTypedTheSameTwiceAndCountedAsTheCoreReadsIt`. That a
+password crosses into the core as a line, and a wrong one comes back as a field, was already held by `NativeTest`
+(finding 64). Nothing tests the screens.
+**Run** (`runs/2026-11-23-wallet-password.txt`): the app's 14 tests, none skipped; the release build of the copy
+that installs beside the app, on the Galaxy Note 2 (Android 7.1.2), on mainnet, driven over adb, the phone's
+screen lock never given: a wallet made with a password, its twelve words shown; the words asked for again with a
+wrong password (refused, in the sentence above) and with the right one (the same twelve); removal refused on a
+wrong password and done on the right one; the wallet restored from its words with the password, to the same
+address; an address added with the password; a mismatched pair of passwords refused beside the button; the
+keyboard staying down after "Done" and a tap on a button.
+**Run, a payment each way** (the same log, its last part): with a funded wallet of the maintainer's added to
+that copy under a password, 0.01 ERG sent from it to the wallet made above and, once proven there (one block
+later), the 0.0089 ERG left after the fee sent back; each signed on the phone, in the app's process, after the
+password dialog over Send, and each taken by a node. A wrong password over Send was refused in the sentence above
+with the form left as filled. Afterwards the app showed the funded wallet 0.0022 ERG lighter (two fees) with two
+boxes, and the other empty; the command line on the build machine answered the same nanoERG, boxes and tokens for
+the funded address.
+**Not run:** a signing request or a consolidation from such a wallet, and the dialog over those; a payment in a
+token, or with the fee in a token. A wallet turned from one guard to the other by restoring. A wallet guarded by
+the screen lock, since the change. Testnet (finding 64). The arm64 build, the Pixel 6.
