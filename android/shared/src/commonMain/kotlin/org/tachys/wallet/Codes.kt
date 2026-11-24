@@ -19,7 +19,9 @@ fun payRequestFromCode(code: String): PayRequest {
     val query = c.substringAfter('?', "")
     val params = query.split('&').filter { it.contains('=') }.associate { it.substringBefore('=') to (percentDecodedStrictly(it.substringAfter('=')) ?: "") }
     val address = (if (c.startsWith("http://") || c.startsWith("https://")) params["address"] ?: "" else c.removePrefix("ergo:").substringBefore('?')).filter { it.isLetterOrDigit() }
-    val erg = (params["amount"] ?: "").filter { it.isDigit() || it == '.' }.takeIf { positive(it) } ?: ""
+    // an amount is taken only if it is one as written, digits and at most one point: with whatever else was there
+    // dropped, `1,5` read as 15 and `0.01e2` as 0.012, and the Send screen was filled with that
+    val erg = (params["amount"] ?: "").trim().takeIf { a -> a.all { it in '0'..'9' || it == '.' } && positive(a) } ?: ""
     return PayRequest(address, erg, (params["description"] ?: "").take(80), params.keys.any { it.startsWith("token-") })
 }
 

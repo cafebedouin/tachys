@@ -160,6 +160,9 @@ pub(crate) async fn outbox(args: &[String]) -> crate::out::Ended {
 /// someone else's payment expects none of its boxes, and its wallet file, if any, is left as it was.
 fn void_promised(state: &str, tx: &ergo_lib::chain::transaction::Transaction, reason: &str) {
     let path = format!("{state}/wallet.json");
+    if !std::path::Path::new(&path).exists() { return }
+    // the wallet file is read, changed and written back: this command's turn at it, as every command that writes it takes
+    let Ok(_turn) = crate::util::turn(state) else { say!("  could not take a turn at {path}; the boxes it promised stay expected"); return };
     let Some(mut w) = std::fs::read_to_string(&path).ok().and_then(|t| crate::walletfile::parse(&t).ok()) else { return };
     let outs: Vec<String> = tx.outputs.iter().map(|o| String::from(o.box_id())).collect();
     let promised: Vec<String> = w.expect.iter().filter(|e| outs.contains(e)).cloned().collect();
@@ -167,8 +170,7 @@ fn void_promised(state: &str, tx: &ergo_lib::chain::transaction::Transaction, re
     w.expect.retain(|e| !promised.contains(e));
     for p in &promised { if !w.void.contains(p) { w.void.push(p.clone()); } }
     let n = w.void.len(); if n > 64 { w.void.drain(..n - 64); }
-    let tmp = format!("{path}.tmp");
-    let saved = crate::walletfile::text(&w).ok().is_some_and(|t| crate::util::write_private(&tmp, t.as_bytes()).and_then(|_| std::fs::rename(&tmp, &path)).is_ok());
+    let saved = crate::walletfile::text(&w).ok().is_some_and(|t| crate::util::write_whole(&path, t.as_bytes()).is_ok());
     if saved { crate::out::push("void", serde_json::json!({ "boxes": promised, "reason": reason })); say!("  the box{} it promised this wallet ({}) will never come: marked void", if promised.len() == 1 { "" } else { "es" }, promised.join(", ")); }
     else { say!("  could not mark the boxes it promised as void in {path}; they stay expected"); }
 }

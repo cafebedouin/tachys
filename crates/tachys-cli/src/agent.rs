@@ -55,6 +55,15 @@ pub(crate) fn erg_to_nano(s: &str) -> Result<u64, String> {
     w.checked_mul(1_000_000_000).and_then(|x| x.checked_add(f)).ok_or_else(|| format!("is more than can exist: {s:?}"))
 }
 
+/// What `pay` asks `wallet send` to pay: the ERG, the token, or both. ERG and a token asked for together are both
+/// paid; the ERG was once dropped without a word when a token was named.
+fn what_to_send(nano: u64, token: &str, token_amount: u64) -> Vec<String> {
+    let mut what = vec![];
+    if nano > 0 { what.extend(["--nanoerg".to_string(), nano.to_string()]); }
+    if !token.is_empty() { what.extend(["--token".to_string(), token.to_string(), "--token-amount".to_string(), token_amount.to_string()]); }
+    what
+}
+
 /// The commands for programs and agents, by name.
 pub(crate) const COMMANDS: &[&str] = &["recipes", "setup", "address", "balance", "pay", "accept", "wait", "history"];
 
@@ -122,7 +131,7 @@ impl Agent {
         // proven only in a block one node has shown
         let seen: u64 = w.boxes.values().filter(|b| b.confirmed_at.is_none()).fold(0u64, |a, b| a.saturating_add(b.value));
         let nano = w.nanoerg().saturating_sub(seen);
-        Ok(serde_json::json!({ "address": w.address, "nanoerg": nano, "unconfirmed_nanoerg": seen, "erg": format!("{:.9}", nano as f64 / 1e9), "boxes": w.boxes.values().filter(|b| b.confirmed_at.is_some()).count(),
+        Ok(serde_json::json!({ "address": w.address, "nanoerg": nano, "unconfirmed_nanoerg": seen, "erg": crate::util::erg(nano), "boxes": w.boxes.values().filter(|b| b.confirmed_at.is_some()).count(),
             "tokens": w.confirmed_tokens().iter().map(|(id, amount)| serde_json::json!({ "id": id, "amount": amount })).collect::<Vec<_>>(), "tip_height": tip_height, "network": net().name }))
     }
     /// Is this receipt real and ours? Accepted only once the box is proven under the tip the peers agree on. The answer
@@ -291,21 +300,22 @@ fn online(a: &Agent, cmd: &str, args: &[String]) -> Result<serde_json::Value, No
             let token_amount: u64 = opt(args, "--token-amount", 0)?;
             let purpose: String = opt(args, "--purpose", String::new())?;
             let dry = args.iter().any(|a| a == "--dry-run");
-            if to.is_empty() || (nano == 0 && token.is_empty()) { return Err(misuse("usage: tachys pay --state DIR --to ADDRESS (--erg X | --nanoerg N | --token ID --token-amount RAW) [--purpose TEXT] [--dry-run]")) }
+            if to.is_empty() || (nano == 0 && token.is_empty()) { return Err(misuse("usage: tachys pay --state DIR --to ADDRESS (--erg X | --nanoerg N | --token ID --token-amount RAW, or ERG and a token together) [--purpose TEXT] [--dry-run]")) }
             // The policy. `wallet send` holds every signature to it and writes the payment to the log before signing;
             // it is checked here first as well, so that a refusal costs no network and a dry run can answer.
             if !policy::present(state) { return Err(no("no_policy", format!("paying is off: there is no policy file at {}", policy::path(state)))) }
             if !token.is_empty() && token_amount == 0 { return Err(misuse("--token needs --token-amount RAW above zero")) }
             let fee = 1_100_000u64;
-            let spend = if token.is_empty() { nano } else { 1_000_000 };
+            // with a token goes the ERG asked for, or the least a box may hold if none was (`wallet send` does the same)
+            let spend = if token.is_empty() || nano > 0 { nano } else { 1_000_000 };
             let mut ask = policy::Ask { nano: spend.saturating_add(fee), payees: vec![to.clone()], purpose: purpose.clone(), what: "pay".into(), ..Default::default() };
             if !token.is_empty() { ask.tokens.insert(token.clone(), token_amount); }
             policy::reserve(state, &ask, true).map_err(|e| no("policy", e))?;
             a.tip()?;
             a.status()?;
-            let amount_s = nano.to_string(); let ta = token_amount.to_string();
+            let what = what_to_send(nano, &token, token_amount);
             let mut cmd: Vec<&str> = vec!["wallet", "send", "--state", state, "--node", node, "--to", &to, "--purpose", &purpose];
-            if token.is_empty() { cmd.extend(["--nanoerg", amount_s.as_str()]); } else { cmd.extend(["--token", token.as_str(), "--token-amount", ta.as_str()]); }
+            cmd.extend(what.iter().map(String::as_str));
             // A dry run builds the same transaction and stops before signing: what it reports leaving the wallet is
             // what a real payment would put on the payments log, not an estimate.
             cmd.push(if dry { "--dry-run" } else { "--broadcast" });
@@ -361,6 +371,15 @@ mod tests {
     //! `accept` first agrees on a tip with live peers (`Agent::tip`); what it then says of a receipt is `Agent::receipt`,
     //! tested here on its own against a node on this machine.
     use super::*;
+
+    #[test]
+    fn erg_asked_for_beside_a_token_is_paid_with_it_not_dropped() {
+        let t = "03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04";
+        assert_eq!(what_to_send(5_000_000_000, t, 7), ["--nanoerg", "5000000000", "--token", t, "--token-amount", "7"]);
+        // a token alone: `wallet send` gives its box the least a box may hold
+        assert_eq!(what_to_send(0, t, 7), ["--token", t, "--token-amount", "7"]);
+        assert_eq!(what_to_send(20_000_000, "", 0), ["--nanoerg", "20000000"]);
+    }
     use ergotree_ir::serialization::SigmaSerializable;
     use sigma_ser::ScorexSerializable;
     use std::io::{Read, Write};

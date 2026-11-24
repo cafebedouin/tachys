@@ -63,7 +63,7 @@ pub(crate) fn boxes(args: &[String]) -> crate::out::Ended {
                 }
             }
             crate::out::set("proven_at", height); crate::out::set("unspent", present); crate::out::set("nanoerg", total);
-            say!("verdict: PROVEN at height {height}: {present} of {} boxes unspent, {:.9} ERG, {}", ids.len(), total as f64 / 1e9, crate::util::count(tokens, "token entry").replace("entrys", "entries"));
+            say!("verdict: PROVEN at height {height}: {present} of {} boxes unspent, {} ERG, {}", ids.len(), crate::util::erg(total), crate::util::count(tokens, "token entry").replace("entrys", "entries"));
         }
     }
     Ok(())

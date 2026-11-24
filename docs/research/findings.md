@@ -1409,3 +1409,86 @@ module's, 32, none skipped; the common-code check; both phone libraries and the 
 change of wallet, the mark that cannot be written, and the reseal check have no test and were not tried by hand.
 The wiping was read, not observed. The reviewer's corrections to the iPhone draft's build were written into the
 docs as steps and not into the build, since nothing here can try them. No second reviewer, and no person.
+
+## 70. Three more reviews by models; one writer of a wallet at a time, and what else held
+
+Claude read the whole repository in the session that wrote this, running the tests and clippy before reading; the
+maintainer then gave it two more reviews of the same tree by other models. Every claim was checked against the code
+before anything changed. None of the three is a person's review.
+
+**What held, and was changed.**
+- **Two commands could write one wallet at once.** A command read `wallet.json`, worked, and wrote it back whole, with
+  nothing held between; only the payments log was locked. Run together, in each of 40 rounds one of two quick commands
+  failed with "could not write" (both wrote the same `wallet.json.tmp`, and the second found it already moved). By
+  reading, not run: a sync holds what it read for seconds while it talks to nodes, and a payment that was noted as
+  waiting in that time was written over by the sync's older copy, with no error; in the app, the sealing of old
+  plain-text phrases ran beside the first sync, and whichever wrote last undid the other (a phrase back in plain
+  text, or the boxes just proven gone until the next sync). Each command that writes a wallet now takes a lock on
+  `DIR/wallet.lock` before it reads the file and keeps it until it ends (`util::turn`); a command inside another is
+  the same call and shares it; the ones that only read (`address`, `mnemonic`, `pubkey`, `derive`, `babel-list`) take
+  none. `wallet new` on one directory twice at once could each have found no wallet and the second have written over
+  the first's phrase: it is under the same lock. A file written whole now has a name of its own beside it and the
+  directory is synced after the move. In the app the sealing waits for the work under way and holds the screens' one
+  turn; a new name, a new address and a payment kept as a promise are asked for off the thread that draws, since
+  each may now wait behind a sync.
+- **A policy file with a rule misspelt.** `allowed_payee` for `allowed_payees` was a policy with no list of payees:
+  anyone could be paid. (A limit misspelt was already zero.) A policy that names anything but its five rules is now
+  refused whole.
+- **`tachys pay --token … --erg …` paid the token and dropped the ERG** without a word: the box got the least a box
+  may hold. Both are now paid, and the policy is asked about both.
+- **An incoming payment held as a promise and then made void read as "Received"** in the app: the core takes a void
+  box off the boxes expected, and "not expected" was all the screen looked at. The app now reads the wallet file's
+  `void` list and says so.
+- **An amount in a payment link was what was left after dropping everything but digits and points**: `1,5` read as
+  15, `0.01e2` as 0.012, and filled the Send screen (the same slip finding 69 fixed for a stray %). It is taken only
+  if it is written as an amount.
+- **`shownFixed` threw on a token said to have fewer than no decimal places** (`shown` and `units` were made safe in
+  finding 69; this one was missed). Only called with nine places today.
+- **`erg` in the `balance` answer, and two sentences, went through a float** (the roadmap had it). Written from the
+  whole number now.
+- **The balance the screens show is the app's own reading of the wallet file**, and nothing tested it. It is moved out
+  of the screens' file (`View.kt`), adds as the core adds (held at the top, never wrapped), and is tested on
+  `vectors/app/wallet-file.json`, which a test of the core holds to what the core writes and to the core's own sums.
+- **`--net-file` leaked a network for every call**, in a process that goes on living: one is now kept for each file.
+- **A node that answers at both `http://HOST` and `https://HOST`** was asked at the plain one, which always answers
+  sooner. It is now asked at the second only. (Most nodes offer no https, and those are chosen as before.)
+- **The sums a signing request is shown by could wrap** in a release build (the request's writer chooses the
+  amounts); they are held at the top, as the policy's are. A state directory is made for its owner only, not made
+  and then closed.
+- **`Core` read the machine's name from a variable the screens set**, so it said "phone" on a computer if asked before
+  a screen was drawn. It reads the platform's own. The app's About card said 0.0.1; it asks the core.
+- **CI**: the workspace's tests run to the end whatever fails (four of the vendored codec's tests go by the clock and
+  come first; when they failed, none of the wallet's own ran); every action is named by its commit, in both
+  workflows, and `cargo-audit` by its version; a job builds the phone libraries with `android/build-core.sh`.
+
+**What did not hold.**
+- That the iPhone draft's `s.cstr.ptr` is dead before `tachys_call`: inside `memScoped`, `ptr` allocates in that
+  scope and lives to its end (by Kotlin/Native's documentation; nothing here can compile it). One reviewer quoted an
+  `Ios.kt` that is not the file in the repository.
+- That `docs/maintaining.md` says "the three crates": it does not.
+- That nodes should be ranked https first, or plain HTTP refused: nearly every node is plain HTTP only (roadmap,
+  open item 5). Only the node that offers both was changed.
+- The code quoted for `pay` was not the code, though what it described was true.
+
+**Known and left.** Each call starts a runtime with a thread for each core (a reviewer's point about an old phone:
+not measured, so not changed; the commands block inside it, and one thread could starve them). The iPhone draft
+does not wipe the C copies of the input lines, and one lock serves every `locked` block. In the app, restoring a
+phrase over a read-only wallet still runs on the thread that draws, and now waits there if that wallet is syncing.
+Two `tips` at once on one chain directory are not kept apart (roadmap). A token amount is a `Long` in the app: a
+sum above what that holds shows as the most it holds, which no token on the chain can reach.
+
+**Tests:** `two_commands_that_write_one_wallet_take_turns_and_both_changes_are_kept`;
+`a_command_that_only_reads_the_wallet_does_not_wait_for_one_that_writes`;
+`two_writers_of_one_file_each_move_in_a_whole_file`; `a_policy_that_names_a_rule_this_build_does_not_know_allows_nothing`;
+`erg_asked_for_beside_a_token_is_paid_with_it_not_dropped`; `erg_is_written_from_the_whole_number_and_agrees_with_it_at_any_size`;
+`a_node_that_answers_both_ways_is_asked_over_https_only`; `the_wallet_file_the_app_is_tested_on_is_one_this_build_writes`;
+in the app, `ViewTest` (five), `anAmountInAPaymentLinkIsTakenOnlyIfItIsWrittenAsOne`,
+`aBalanceOfATokenSaidToHaveNoPlacesOrFewerStopsNothing`.
+**Run** (`runs/2026-11-24-two-reviews.txt`): the two commands at once, before (40 of 40 failed) and after (none
+failed, none lost); clippy over the four crates; the workspace's tests, 1009 passed; the shared module's, 39, none
+skipped; both phone libraries and the debug app built.
+**Not run:** this build on a phone. Either workflow since it was changed: the `phone-core` job, the actions named by
+commit and the toolchain given as an input are as written, not as run. The silent loss between a sync and a payment
+was read, not reproduced, before or after; `pay` with a token and ERG was tested as the command it builds, not as a
+payment. The app's waiting for its turn (the sealing, a name, an address, a promise) has no test and was not tried
+by hand. The private network kept once was not run on the rig. No person has reviewed any of it.

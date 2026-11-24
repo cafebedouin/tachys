@@ -65,6 +65,14 @@ class CodesTest {
         payRequestFromCode("https://explorer.ergoplatform.com/payment-request?address=9abc&amount=0&token-aa=3").let { assertEquals("9abc", it.address); assertEquals("", it.erg); assertEquals(true, it.tokens) }
     }
 
+    @Test fun anAmountInAPaymentLinkIsTakenOnlyIfItIsWrittenAsOne() {
+        for (good in listOf("1.5", "0.02", "12", ".5", "5.")) assertEquals(good, payRequestFromCode("ergo:9abc?amount=$good").erg)
+        // with whatever is not a digit or a point dropped, each of these read as another amount: 15, 100, 10, 0.012, 15, 12
+        for (bad in listOf("1,5", "100 ERG", "1 0", "0.01e2", "-1.5", "1.2.3", "１２", "0", "0.0", "abc", "")) assertEquals(bad, "", payRequestFromCode("ergo:9abc?amount=${percentEncoded(bad)}").erg)
+        // the address and the note are still read when the amount is not
+        payRequestFromCode("ergo:9abc?amount=1,5&description=rent").let { assertEquals("9abc", it.address); assertEquals("", it.erg); assertEquals("rent", it.note) }
+    }
+
     @Test fun aPaymentLinkThatCannotBeReadGivesNoAmountAndNoNote() {
         // a % that starts no byte: the digits around it must not run together into an amount (1%2 is not 12)
         payRequestFromCode("ergo:9abc?amount=1%2").let { assertEquals("9abc", it.address); assertEquals("", it.erg) }

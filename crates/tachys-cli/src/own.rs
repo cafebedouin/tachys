@@ -1,6 +1,6 @@
 //! What a call owns while it runs, so that calls can run at the same time in one process and none leaves anything
-//! for the next: the answer under way, the network, the peer protocol's magic and declaration, and the connections
-//! kept open to nodes. Every thread of a call is told which call it works
+//! for the next: the answer under way, the network, the peer protocol's magic and declaration, the connections
+//! kept open to nodes, and its turn at each wallet it writes. Every thread of a call is told which call it works
 //! for (`enter` on the thread that makes the call, `join` on each thread of the runtime it starts), and reads and
 //! writes that call's own. A thread no call has taken shares one (`SHARED`): a test that runs a command's parts.
 
@@ -16,9 +16,11 @@ pub(crate) struct Own {
     /// one that finds nodes (`nodes.rs`)
     pub(crate) http: OnceLock<ureq::Agent>,
     pub(crate) http_quick: OnceLock<ureq::Agent>,
+    /// the wallets this call has its turn at (`util::turn`): the lock on each, and how many of its commands hold it
+    pub(crate) turns: Mutex<std::collections::HashMap<String, (std::fs::File, usize)>>,
 }
 impl Own {
-    pub(crate) fn new() -> Arc<Own> { Arc::new(Own { calls: Mutex::new(Vec::new()), net: RwLock::new(&crate::network::MAINNET), wire: tachys_net::Own::default(), http: OnceLock::new(), http_quick: OnceLock::new() }) }
+    pub(crate) fn new() -> Arc<Own> { Arc::new(Own { calls: Mutex::new(Vec::new()), net: RwLock::new(&crate::network::MAINNET), wire: tachys_net::Own::default(), http: OnceLock::new(), http_quick: OnceLock::new(), turns: Mutex::new(std::collections::HashMap::new()) }) }
 }
 static SHARED: LazyLock<Arc<Own>> = LazyLock::new(Own::new);
 thread_local! { static OWN: RefCell<Option<Arc<Own>>> = const { RefCell::new(None) }; }

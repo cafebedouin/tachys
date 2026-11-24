@@ -118,3 +118,49 @@ fn a_call_does_not_wait_for_one_that_is_still_running() {
     assert_ne!(slow_code, 0, "no tip: the peer said nothing");
     assert!(quick < slow_took / 2 && slow_took > std::time::Duration::from_secs(1), "the quick call took {quick:?} while the slow one took {slow_took:?}");
 }
+
+/// Two commands that write one wallet take turns. They read the wallet file, changed it and wrote it back with nothing
+/// between them: started together, one failed ("could not write"), and a slow one (a sync) that finished after a quick
+/// one wrote the file as it had read it, the quick one's change gone.
+#[test]
+fn two_commands_that_write_one_wallet_take_turns_and_both_changes_are_kept() {
+    for round in 0..12 {
+        let st = dir(&format!("turns-{round}"));
+        assert_eq!(call(&["wallet", "new", "--state", &st, "--network", "testnet", "--json"], &[]).0, 0);
+        let go = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let name = format!("n{round}");
+        let run = |args: Vec<String>| { let go = go.clone(); std::thread::spawn(move || { go.wait(); call(&args.iter().map(String::as_str).collect::<Vec<_>>(), &[]) }) };
+        let threads = [
+            run(["wallet", "address", "--add", "--state", &st, "--network", "testnet", "--json"].map(String::from).to_vec()),
+            run(["wallet", "name", "--name", &name, "--state", &st, "--network", "testnet", "--json"].map(String::from).to_vec()),
+            run(["wallet", "address", "--add", "--state", &st, "--network", "testnet", "--json"].map(String::from).to_vec()),
+        ];
+        for t in threads { let (code, j, err) = t.join().unwrap(); assert_eq!(code, 0, "round {round}: {j} {err}"); }
+        let w: Value = serde_json::from_str(&std::fs::read_to_string(format!("{st}/wallet.json")).unwrap()).unwrap();
+        assert_eq!((w["name"].as_str(), w["addresses"].as_u64(), w["address_list"].as_array().map(|a| a.len())), (Some(name.as_str()), Some(3), Some(3)), "round {round}: the name and both addresses");
+    }
+}
+
+/// A command that only reads the wallet waits for no one: the words can be shown while another command has its turn.
+#[test]
+fn a_command_that_only_reads_the_wallet_does_not_wait_for_one_that_writes() {
+    let st = dir("reads");
+    assert_eq!(call(&["wallet", "new", "--state", &st, "--network", "testnet", "--json"], &[]).0, 0);
+    // another program at work on this wallet: the lock every writing command takes, held here
+    let held = std::fs::OpenOptions::new().append(true).open(format!("{st}/wallet.lock")).unwrap();
+    held.lock().unwrap();
+    let t = std::time::Instant::now();
+    let (code, j, _) = call(&["wallet", "address", "--state", &st, "--network", "testnet", "--json"], &[]);
+    assert_eq!((code, j["addresses"].as_array().map(|a| a.len())), (0, Some(1)));
+    assert_eq!(call(&["wallet", "mnemonic", "--state", &st, "--network", "testnet", "--json"], &[]).0, 0);
+    assert!(t.elapsed() < std::time::Duration::from_secs(5));
+    // and one that writes does wait: it goes through only once the other is done
+    let (st2, waited) = (st.to_string(), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
+    let w2 = waited.clone();
+    let writer = std::thread::spawn(move || { let r = call(&["wallet", "name", "--name", "after", "--state", &st2, "--network", "testnet", "--json"], &[]); (r.0, w2.load(std::sync::atomic::Ordering::SeqCst)) });
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    assert!(!writer.is_finished(), "it is waiting its turn");
+    waited.store(true, std::sync::atomic::Ordering::SeqCst);
+    drop(held);
+    assert_eq!(writer.join().unwrap(), (0, true));
+}

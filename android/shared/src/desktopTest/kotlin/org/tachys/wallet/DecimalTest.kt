@@ -23,6 +23,13 @@ class DecimalTest {
         assertEquals(BigDecimal("123456789012345678901234567890").movePointLeft(7).stripTrailingZeros().toPlainString(), shown("123456789012345678901234567890", 7))
     }
 
+    @Test fun aBalanceOfATokenSaidToHaveNoPlacesOrFewerStopsNothing() {
+        // `shown` read these; this one threw, on the thread that draws
+        assertEquals("15.00", shownFixed(15L, 0, 2)); assertEquals("15", shownFixed(15L, 0, 0)); assertEquals("0.00", shownFixed(0L, 0, 2))
+        assertEquals("1500.00", shownFixed(15L, -2, 2)); assertEquals("-1500", shownFixed(-15L, -2, 0))
+        assertEquals(shown(15L, -2), shownFixed(15L, -2, 0))
+    }
+
     @Test fun aBalanceIsCutToSixPlacesAndNeverRoundedUp() {
         assertEquals("20.704714", shownFixed(20_704_714_794L, 9, 6)); assertEquals("0.000000", shownFixed(999L, 9, 6))
         repeat(20000) {

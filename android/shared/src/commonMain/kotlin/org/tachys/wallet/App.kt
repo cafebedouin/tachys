@@ -41,8 +41,8 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-// tachys phone app (spike). Screens follow the Ergo mobile wallet; all wallet logic is in the Rust
-// core, which for now is the command-line binary run as a child process.
+// The tachys app's screens, for a phone and a computer alike. They follow the Ergo mobile wallet; all wallet logic
+// is in the Rust core, which is a library loaded into this process and called one command at a time (`runCore`).
 
 val Bg = Color(0xFF303030)
 val Card = Color(0xFF424242)
@@ -65,7 +65,9 @@ class WalletView(val name: String, val address: String, val erg: String, val box
                  /** The balance exactly, in nanoERG (`erg` is rounded down for show). */
                  val nano: Long = 0L,
                  /** nanoERG in boxes proven only in a block one node has shown: tracked, shown apart, not in the balance and not spent. */
-                 val seen: Long = 0L)
+                 val seen: Long = 0L,
+                 /** Boxes promised to this wallet whose payment can never confirm (a coin it spends is gone, or it was refused for good). */
+                 val void: List<String> = listOf())
 
 /**
  * The phone's own screen lock, used to guard the seed phrases and the app.
@@ -180,12 +182,12 @@ class Core(val on: Platform) {
     /** Whether the mark is now as asked. */
     private fun mark(dir: String, own: Boolean): Boolean = FileAt(path(dir), OWN).let { f -> try { if (own) f.writeText("") else f.delete(); f.exists() == own } catch (e: Exception) { false } }
     /** Why the core did not do what was asked, in its words; a password that does not open the phrase is recognised by a field of its answer, not by those words. */
-    private fun failed(a: Reply, own: Boolean = own()): String = if (!a.badPassword) a.error else if (own) WRONG else LOST
+    private fun failed(a: Reply, own: Boolean = own()): String = if (!a.badPassword) a.error else if (own) WRONG else lost(on.device)
 
     fun hasWallet() = dirs().isNotEmpty()
     /** Each of these answers `OK`, or the reason it did not happen. */
     fun watch(address: String, name: String): String {
-        if (views().any { address in it.addresses }) return "that address is already a wallet on this $device"
+        if (views().any { address in it.addresses }) return "that address is already a wallet on this ${on.device}"
         val d = fresh(); seedChain(d)
         val a = ask(listOf(), "wallet", "watch", "--state", path(d), "--address", address, "--name", name.ifBlank { "Wallet" })
         if (a.ok) sel = d else FileAt(path(d)).deleteRecursively()
@@ -213,7 +215,7 @@ class Core(val on: Platform) {
         // a full wallet of this phrase that this password does not open (the phone's key went, its own password is
         // forgotten, or it is to be guarded the other way from now on) is put back by the phrase, sealed with this password
         val closed = same != null && !same.readOnly && sealedAsk(pass, "wallet", "mnemonic", "--state", path(same.dir)).badPassword
-        if (same != null && !same.readOnly && !closed) return "that wallet is already on this $device (${same.name})"
+        if (same != null && !same.readOnly && !closed) return "that wallet is already on this ${on.device} (${same.name})"
         val d = same?.dir ?: fresh()
         if (same == null) seedChain(d)
         // the wallet file is written first and its boxes looked for after (by the next sync); `restored` says the file is there
@@ -351,23 +353,8 @@ class Core(val on: Platform) {
         prefs.put(payKey(), JSONArray(all.take(10)).toString())
     }
 
-    /** Where a payment stands: signed but not sent, sent but not yet in a block, or done. */
-    fun status(p: JSONObject, w: WalletView): String = when {
-        p.optString("dir", "out") != "out" -> if (p.optString("state") == "promised" && p.optString("receipt") in w.expecting) "Promised, not on chain yet" else "Received"
-        p.optString("state") == "queued" -> "Waiting for network"
-        // the core's own verdict, read off the same proof as the balance
-        w.sent[p.optString("tx")] != null -> w.sent.getValue(p.optString("tx")).let { (result, at) -> when (result) {
-            "waiting" -> "Waiting to confirm"
-            "confirmed" -> "Confirmed · at least ${maxOf(1, w.provenAt - at + 1)} confirmation" + if (w.provenAt - at + 1 > 1) "s" else ""
-            "spent elsewhere" -> "Failed: its coins were spent by another payment"
-            // its coins are gone and so is everything it created: confirmed and since spent by the payee, or spent by something else; the proof cannot tell which
-            "coins spent" -> "Its coins are spent, but what it paid is no longer there to prove. Check with the payee before paying again"
-            else -> "Not included in a block: its coins are back in this wallet"
-        } }
-        p.optString("change").isNotEmpty() && p.optString("change") in w.expecting -> "Waiting to confirm"
-        // no word from the core on it any more (it keeps the last twenty): not something to call confirmed
-        else -> "Sent · no longer tracked"
-    }
+    /** Where a payment stands: signed but not sent, sent but not yet in a block, or done (`paymentStatus`). */
+    fun status(p: JSONObject, w: WalletView): String = paymentStatus(p, w)
     fun unfinished(status: String) = status.startsWith("Waiting") || status.startsWith("Promised")
     fun pending(w: WalletView): List<JSONObject> = payments().filter { unfinished(status(it, w)) }
 
@@ -386,40 +373,14 @@ class Core(val on: Platform) {
     /** Wallet folders whose file this app cannot read, each with why: said on the first screen, not left out in silence. */
     fun unreadable(): List<String> = dirs().filter { view(it) == null }.map { d ->
         val version = try { JSONObject(FileAt(path(d), "wallet.json").readText()).optInt("version", 0) } catch (e: Exception) { -1 }
-        if (version > WALLET_FILE_VERSION) "A wallet on this $device ($d) was written by a newer version of tachys (wallet file version $version; this app reads up to $WALLET_FILE_VERSION). It is not shown, and it has not been touched. Update the app to use it."
-        else "A wallet file on this $device ($d) cannot be read: it is damaged or cut short. It is not shown, and it has not been touched. It may still hold a seed phrase."
+        if (version > WALLET_FILE_VERSION) "A wallet on this ${on.device} ($d) was written by a newer version of tachys (wallet file version $version; this app reads up to $WALLET_FILE_VERSION). It is not shown, and it has not been touched. Update the app to use it."
+        else "A wallet file on this ${on.device} ($d) cannot be read: it is damaged or cut short. It is not shown, and it has not been touched. It may still hold a seed phrase."
     }
     fun wallet(): WalletView? = view(sel)
-    fun view(dir: String): WalletView? = try {
-        val w = JSONObject(FileAt(path(dir), "wallet.json").readText())
-        if (w.optInt("version", 0) > WALLET_FILE_VERSION) throw IllegalStateException("newer wallet file")
-        val boxes = w.getJSONObject("boxes")
-        var nano = 0L; var proven = 0; var seen = 0L
-        val sums = LinkedHashMap<String, Long>()
-        for (k in boxes.keys()) {
-            val b = boxes.getJSONObject(k)
-            // the balance is what is confirmed under a tip the peers agree on; a box only one node has shown is counted apart
-            if (b.isNull("confirmed_at")) { seen += b.getLong("value"); continue }
-            nano += b.getLong("value"); proven = maxOf(proven, b.optInt("proven_at"))
-            val a = b.optJSONArray("assets") ?: JSONArray()
-            for (i in 0 until a.length()) a.getJSONObject(i).let { sums[it.getString("id")] = (sums[it.getString("id")] ?: 0L) + it.getLong("amount") }
-        }
-        val rep = reported(dir)
-        val tokens = sums.map { (id, amt) ->
-            val s = shipped[id]; val r = rep[id]
-            when {
-                s != null -> TokenLine(id, s.first, s.second, amt, false)
-                r != null && r.first.isNotEmpty() -> TokenLine(id, r.first, r.second, amt, true)
-                else -> TokenLine(id, id.take(10) + "…", 0, amt, true)
-            }
-        }.sortedBy { it.reported }
-        WalletView(w.optString("name", "Wallet"), w.getString("address"),
-            shownFixed(nano, 9, 6), boxes.length(), tokens, proven,
-            w.optBoolean("watch", false), (w.optJSONArray("expect") ?: JSONArray()).let { a -> (0 until a.length()).map { a.getString(it) } }, dir,
-            w.optJSONArray("address_list")?.let { a -> (0 until a.length()).map { a.getString(it) } }?.takeIf { it.isNotEmpty() } ?: listOf(w.getString("address")),
-            ((w.optJSONArray("pending") ?: JSONArray()).let { a -> (0 until a.length()).map { a.getJSONObject(it).optString("tx") to ("waiting" to 0) } } +
-             (w.optJSONArray("done") ?: JSONArray()).let { a -> (0 until a.length()).map { a.getJSONObject(it).let { d -> d.optString("tx") to (d.optString("result") to d.optInt("seen_at")) } } }).toMap(), nano, seen)
-    } catch (e: Exception) { null }
+    /** A wallet as its file has it (`walletView`), with the names of its tokens; null if the file is not one this app reads. */
+    fun view(dir: String): WalletView? = try { walletView(FileAt(path(dir), "wallet.json").readText(), dir, shipped, reported(dir)) } catch (e: Exception) { null }
+    /** The core's own version, as it says it (`tachys version`); empty if it could not be asked. */
+    val version: String by lazy { ask(listOf(), "version").let { a -> if (a.ok) a.json?.optString("version") ?: "" else "" } }
     companion object {
         /** What a command that did what it was asked answers. */
         const val OK = "ok"
@@ -428,7 +389,8 @@ class Core(val on: Platform) {
         const val UNPROVEN = -2L
         const val OWN = "own-password"
         const val WRONG = "That is not this wallet's password."
-        val LOST get() = "This wallet's seed phrase can no longer be opened on this $device: the key that guarded it is gone, which happens when the $device's screen lock is removed. Restore the wallet from its written seed phrase."
+        fun lost(device: String) = "This wallet's seed phrase can no longer be opened on this $device: the key that guarded it is gone, which happens when the $device's screen lock is removed. Restore the wallet from its written seed phrase."
+        val LOST get() = lost(device)
     }
 }
 
@@ -463,7 +425,14 @@ private fun Screens(core: Core, opened: String, guard: Guard, locked: Boolean, u
     // seed phrases kept in plain text by an earlier build are sealed as soon as the screen lock allows
     var plain by remember { mutableStateOf(core.plain().size) }
     fun sealOld() = guard.open("Encrypt the seed phrases on this $device", false) { pass, why ->
-        if (pass == null) status = why else scope.launch { plain = withContext(background) { core.sealAll(pass) }; refresh() }
+        // sealing writes the wallet files a sync also writes: it waits for the work under way and holds the screens' one
+        // turn while it runs, as a sync or a payment does, and is not started beside them
+        if (pass == null) status = why else scope.launch {
+            while (busy) delay(200)
+            busy = true
+            try { plain = withContext(background) { core.sealAll(pass) } } finally { busy = false }
+            refresh()
+        }
     }
     LaunchedEffect(locked) { if (!locked && plain > 0) sealOld() }
     // a wallet sealed with a password of its own is opened by asking for that password, here, and never by the screen lock
@@ -555,7 +524,8 @@ private fun Screens(core: Core, opened: String, guard: Guard, locked: Boolean, u
     }
 }
 
-/** What this machine is called in the sentences shown ("phone", "computer"): the platform's word, set when the screens start. */
+/** What this machine is called in the sentences the screens show ("phone", "computer"): the platform's word, set when the
+ *  screens start. Only the screens read it; `Core`, which can be asked before any screen is drawn, reads `on.device`. */
 var device = "phone"
 
 /** The top bar. `action` puts a second tap target at its right-hand end (the "+" on the wallet list). */
@@ -823,6 +793,7 @@ fun Receive(core: Core, w: WalletView, busy: Boolean, check: (String, (String) -
     var purpose by remember { mutableStateOf("") }
     var result by remember { mutableStateOf("") }
     var scanning by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val focus = LocalFocusManager.current
     fun run(id: String, why: String) = check(id) { r ->
         // what the core's proof showed for this box (its JSON answer): the state, the block, and how many agreed blocks deep it is (a lower bound)
@@ -847,9 +818,10 @@ fun Receive(core: Core, w: WalletView, busy: Boolean, check: (String, (String) -
     }
     if (scanning) { Scanner("Scan the payer's receipt", {
         val rc = Receipt.parse(it); receipt = rc.box; purpose = rc.purpose; scanning = false
-        if (rc.tx.isNotEmpty()) {
+        if (rc.tx.isNotEmpty()) scope.launch {
             // an offline payment: keep the signed transaction; it is a promise until a sync proves it
-            val r = core.promise(rc.tx)
+            // (it writes the wallet file, so it waits its turn behind a sync of this wallet: off the thread that draws)
+            val r = withContext(background) { core.promise(rc.tx) }
             val j = try { JSONObject(r) } catch (e: Exception) { null }
             val box = j?.optJSONArray("promised")?.optString(0) ?: ""
             result = if (box.length != 64) (j?.optString("error")?.takeIf { it.isNotEmpty() } ?: "not a payment to this wallet") else {
@@ -1216,6 +1188,9 @@ fun Config(core: Core, w: WalletView, guard: Guard, onChanged: () -> Unit, onRem
     var words by remember { mutableStateOf("") }
     var msg by remember { mutableStateOf("") }
     var removing by remember { mutableStateOf(false) }
+    // a new address and a new name are written to the wallet file, which one command at a time writes: each waits its
+    // turn behind a sync of this wallet, off the thread that draws
+    val scope = rememberCoroutineScope()
     CardBox {
         Text(if (w.addresses.size > 1) "Wallet addresses" else "Wallet address", color = Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         w.addresses.forEachIndexed { i, a ->
@@ -1225,7 +1200,7 @@ fun Config(core: Core, w: WalletView, guard: Guard, onChanged: () -> Unit, onRem
         }
         if (!w.readOnly) {
             Spacer(Modifier.height(10.dp))
-            Pill("Add an address", Bg, Color.White, Modifier.fillMaxWidth()) { guard.open("Add an address to ${w.name}", false) { pass, why -> if (pass == null) msg = why else { val r = core.addAddress(pass); msg = if (r.startsWith("address ")) "" else r.lines().lastOrNull { it.isNotBlank() } ?: "failed"; onChanged() } } }
+            Pill("Add an address", Bg, Color.White, Modifier.fillMaxWidth()) { guard.open("Add an address to ${w.name}", false) { pass, why -> if (pass == null) msg = why else scope.launch { val r = withContext(background) { core.addAddress(pass) }; msg = if (r.startsWith("address ")) "" else r.lines().lastOrNull { it.isNotBlank() } ?: "failed"; onChanged() } } }
             Text("Every address belongs to the same seed phrase. The balance counts them all; change returns to the main address.", color = Dim, fontSize = 12.sp)
         }
     }
@@ -1234,7 +1209,7 @@ fun Config(core: Core, w: WalletView, guard: Guard, onChanged: () -> Unit, onRem
         Spacer(Modifier.height(8.dp))
         Field(name, "wallet name", words = true) { name = it.take(40) }
         Spacer(Modifier.height(10.dp))
-        Pill("Save name", Bg, Color.White, Modifier.fillMaxWidth()) { core.rename(name); onChanged() }
+        Pill("Save name", Bg, Color.White, Modifier.fillMaxWidth()) { scope.launch { withContext(background) { core.rename(name) }; onChanged() } }
     }
     if (!w.readOnly) CardBox {
         Pill(if (pub.isEmpty()) "Display public key" else "Hide public key", Bg, Color.White, Modifier.fillMaxWidth()) {
@@ -1313,7 +1288,7 @@ fun Settings(core: Core, guard: Guard, onChanged: () -> Unit) {
     if (msg.isNotEmpty()) CardBox { Text(msg, color = Color.White, fontSize = 15.sp) }
     CardBox {
         Text("About", color = Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        Text("tachys 0.0.1, a research build. The chain tip comes from peers and is checked for work; balances are proven, not reported. Box proofs, sending and token names use one node's REST port in this build. A token name marked \"as reported\" is what that node said, not something proven.", color = Dim, fontSize = 13.sp)
+        Text("tachys${core.version.let { if (it.isEmpty()) "" else " $it" }}, a research build. The chain tip comes from peers and is checked for work; balances are proven, not reported. Box proofs, sending and token names use one node's REST port in this build. A token name marked \"as reported\" is what that node said, not something proven.", color = Dim, fontSize = 13.sp)
     }
 }
 

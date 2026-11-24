@@ -17,9 +17,11 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.98.1
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, 2026-11-24
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # the wallet's own tests; the vendored codec's are CI's, and three of them fail by the clock on a busy machine
       - run: cargo test --locked -p tachys -p tachys-verify -p tachys-net -p tachys-c
       - run: ./build-linux.sh
@@ -35,7 +37,7 @@ jobs:
           test "$age" -lt 7
           glibc=$(objdump -T target/dist/tachys-$version-linux-x86_64 | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1 | cut -d_ -f2)
           { echo "version=$version"; echo "height=$height"; echo "glibc=$glibc"; } >> "$GITHUB_OUTPUT"
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: target/dist/tachys-${{ steps.built.outputs.version }}-linux-x86_64
       - env:

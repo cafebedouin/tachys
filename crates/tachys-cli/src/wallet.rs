@@ -176,10 +176,8 @@ impl<'a> Ctx<'a> {
     fn save(&self, w: &WalletFile) -> Ended {
         let path = &self.path;
         private_dir(&self.state);
-        let tmp = format!("{path}.tmp");
         let Ok(text) = crate::walletfile::text(w) else { return Err(crate::out::Fail::new(1, format!("could not write {path}"))) };
-        if write_private(&tmp, text.as_bytes()).and_then(|_| std::fs::rename(&tmp, path)).is_err() { return Err(crate::out::Fail::new(1, format!("could not write {path}"))) }
-        Ok(())
+        crate::util::write_whole(path, text.as_bytes()).map_err(|e| crate::out::Fail::new(1, format!("could not write {path} ({e})")))
     }
 
     /// A phrase someone typed is checked before it is used (word count, word list, checksum): a slip would otherwise open
@@ -246,6 +244,13 @@ struct Open {
 /// kept in plain text, as before.
 pub(crate) fn wallet(args: &[String]) -> Ended {
     let c = Ctx::new(args)?;
+    // One command at a time writes a wallet (`util::turn`): its turn is taken before the file is read and kept until
+    // the command ends. The ones that only read it take none, so the words or the key can be shown beside a sync.
+    // (A directory that is not there has no wallet to take a turn at, unless this command is about to make one.)
+    let makes = matches!(c.sub, "new" | "restore" | "watch");
+    let reads_only = matches!(c.sub, "derive" | "mnemonic" | "pubkey" | "babel-list") || (c.sub == "address" && !args.iter().any(|a| a == "--add"));
+    if makes { private_dir(&c.state); }
+    let _turn = if !reads_only && std::path::Path::new(&c.state).is_dir() { Some(crate::util::turn(&c.state).map_err(Fail::from)?) } else { None };
     match c.sub {
         "derive" => return cmd_derive(&c),
         "new" => return cmd_new(&c),
@@ -552,8 +557,9 @@ fn cmd_request(c: &Ctx, o: Open) -> Ended {
     // totals, from the transaction itself
     type Sums = (u64, std::collections::BTreeMap<String, u64>);
     fn add(s: &mut Sums, value: u64, tokens: Option<&ergotree_ir::chain::ergo_box::BoxTokens>) {
-        s.0 += value;
-        for t in tokens.into_iter().flat_map(|ts| ts.iter()) { *s.1.entry(String::from(t.token_id)).or_default() += *t.amount.as_u64(); }
+        // (whoever wrote the request chose these amounts: sums that would wrap are held at the top, as `leaves_wallet` holds them)
+        s.0 = s.0.saturating_add(value);
+        for t in tokens.into_iter().flat_map(|ts| ts.iter()) { let n = s.1.entry(String::from(t.token_id)).or_default(); *n = n.saturating_add(*t.amount.as_u64()); }
     }
     let fee_tree = fee_tree_hex();
     let (mut give, mut get, mut to_others, mut from_others): (Sums, Sums, Sums, Sums) = Default::default();
@@ -1535,7 +1541,7 @@ fn cmd_sync(c: &Ctx, o: Open) -> Ended {
     crate::out::set("tokens", w.tokens().iter().map(|(id, amount)| serde_json::json!({ "id": id, "amount": amount })).collect::<Vec<_>>());
     crate::out::set("proven_at", height); crate::out::set("agreed_height", agreed); crate::out::set("settled", settled); crate::out::set("expecting", &w.expect);
     crate::out::set("cost", serde_json::json!({ "requests": cost.requests, "sent": cost.sent, "received": cost.received }));
-    say!("address {}\nbalance {:.9} ERG in {} boxes, proven at height {height}\ncost: {} requests, {} B sent, {} B received", enc.address_to_str(&addr), total as f64 / 1e9, tracked.len(), cost.requests, cost.sent, cost.received);
+    say!("address {}\nbalance {} ERG in {} boxes, proven at height {height}\ncost: {} requests, {} B sent, {} B received", enc.address_to_str(&addr), crate::util::erg(total), tracked.len(), cost.requests, cost.sent, cost.received);
     if height > agreed { say!("note: height {height} is above the tip the peers agree on ({agreed}); the headers between came from this node alone"); }
     Ok(())
 }

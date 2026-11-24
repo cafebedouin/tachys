@@ -106,7 +106,14 @@ fn look_at_all(candidates: &[String], tip: u64) -> Vec<Found> {
         hs.into_iter().filter_map(|h| h.join().ok().flatten()).collect()
     });
     found.sort_by_key(|f| (!well_known().contains(&f.url.as_str()), f.ms));
-    found
+    one_way_in(found)
+}
+/// A node that answered at both `http://HOST` and `https://HOST` is kept at the second only. Few nodes offer it, and
+/// the plain one always answers sooner (no handshake), so by speed alone the wallet's addresses and payments went to
+/// such a node in the clear though it would have taken them sealed.
+fn one_way_in(found: Vec<Found>) -> Vec<Found> {
+    let sealed: Vec<String> = found.iter().filter_map(|f| f.url.strip_prefix("https://").map(str::to_string)).collect();
+    found.into_iter().filter(|f| !f.url.strip_prefix("http://").is_some_and(|host| sealed.iter().any(|s| s == host))).collect()
 }
 
 /// The REST addresses the well-known nodes' peers advertise.
@@ -192,6 +199,17 @@ pub(crate) fn nodes(args: &[String]) -> crate::out::Ended {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_node_that_answers_both_ways_is_asked_over_https_only() {
+        let f = |url: &str, ms: u64| Found { url: url.into(), height: 1, ms };
+        // the plain one answered sooner, as it always will, and is first on the list by speed
+        let found = vec![f("http://api.example.org", 40), f("http://203.0.113.9:9053", 60), f("https://api.example.org", 180)];
+        assert_eq!(one_way_in(found).iter().map(|f| f.url.as_str()).collect::<Vec<_>>(), ["http://203.0.113.9:9053", "https://api.example.org"]);
+        // a node with no https is kept as it is, and so is one whose https is at another port
+        let found = vec![f("http://203.0.113.9:9053", 60), f("https://203.0.113.9", 90)];
+        assert_eq!(one_way_in(found).len(), 2);
+    }
 
     #[test]
     fn an_advertised_address_is_taken_only_in_one_shape() {

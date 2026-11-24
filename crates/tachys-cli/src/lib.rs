@@ -105,16 +105,30 @@ fn setup(args: &[String]) -> out::Ended {
     // a private network (the rig): constants come from a JSON file written when the network is set up
     let net_file: String = arg(args, "--net-file", String::new())?;
     if !net_file.is_empty() {
-        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&net_file).unwrap_or_default()).unwrap_or(serde_json::Value::Null);
-        let leak = |x: String| -> &'static str { Box::leak(x.into_boxed_str()) };
-        let m: Vec<u8> = v["magic"].as_array().map(|a| a.iter().filter_map(|x| x.as_u64().map(|b| b as u8)).collect()).unwrap_or_default();
-        if m.len() != 4 { return Err(crate::out::Fail::new(2, format!("--net-file {net_file}: unreadable"))) }
-        let n = Net { name: leak(v["name"].as_str().unwrap_or("private").to_string()), magic: [m[0], m[1], m[2], m[3]],
-            genesis: leak(v["genesis"].as_str().unwrap_or("").to_string()), checkpoint_json: leak(v["checkpoint"].to_string()),
-            floor_divisor: v["floor_divisor"].as_u64().unwrap_or(1 << 20) as u32, v2_activation_height: v["v2_activation_height"].as_u64().unwrap_or(0) as u32,
-            block_interval_ms: v["block_interval_ms"].as_u64().unwrap_or(1000),
-            epoch_length: v["epoch_length"].as_u64().filter(|&e| (1..=u32::MAX as u64).contains(&e)).unwrap_or(128) as u32, seeds: leak(v["seeds"].as_str().unwrap_or("").to_string()), testnet: true, fee_tree: leak(v["fee_tree"].as_str().unwrap_or("").to_string()) };
-        network::set_net(Box::leak(Box::new(n)));
+        let text = std::fs::read_to_string(&net_file).unwrap_or_default();
+        // A network made from a file lives as long as the process (`net()` hands out `&'static`). One is made for each
+        // file as it reads, not for each call: a program that goes on living and calls a thousand times on one private
+        // network keeps one, where it kept a thousand.
+        static MADE: std::sync::Mutex<Vec<(String, &'static Net)>> = std::sync::Mutex::new(Vec::new());
+        let mut made = MADE.lock().unwrap_or_else(|p| p.into_inner());
+        let n: &'static Net = match made.iter().find(|(t, _)| *t == text) {
+            Some((_, n)) => n,
+            None => {
+                let v: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+                let leak = |x: String| -> &'static str { Box::leak(x.into_boxed_str()) };
+                let m: Vec<u8> = v["magic"].as_array().map(|a| a.iter().filter_map(|x| x.as_u64().map(|b| b as u8)).collect()).unwrap_or_default();
+                if m.len() != 4 { return Err(crate::out::Fail::new(2, format!("--net-file {net_file}: unreadable"))) }
+                let n: &'static Net = Box::leak(Box::new(Net { name: leak(v["name"].as_str().unwrap_or("private").to_string()), magic: [m[0], m[1], m[2], m[3]],
+                    genesis: leak(v["genesis"].as_str().unwrap_or("").to_string()), checkpoint_json: leak(v["checkpoint"].to_string()),
+                    floor_divisor: v["floor_divisor"].as_u64().unwrap_or(1 << 20) as u32, v2_activation_height: v["v2_activation_height"].as_u64().unwrap_or(0) as u32,
+                    block_interval_ms: v["block_interval_ms"].as_u64().unwrap_or(1000),
+                    epoch_length: v["epoch_length"].as_u64().filter(|&e| (1..=u32::MAX as u64).contains(&e)).unwrap_or(128) as u32, seeds: leak(v["seeds"].as_str().unwrap_or("").to_string()), testnet: true, fee_tree: leak(v["fee_tree"].as_str().unwrap_or("").to_string()) }));
+                made.push((text, n));
+                n
+            }
+        };
+        drop(made);
+        network::set_net(n);
     }
     if !network::checkpoint_readable() { return Err(out::Fail::new(2, format!("--net-file {net_file}: its checkpoint is not a header"))) }
     tachys_net::set_network_magic(net().magic);

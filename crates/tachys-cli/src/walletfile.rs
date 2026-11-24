@@ -195,6 +195,30 @@ pub(crate) fn text(w: &WalletFile) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    /// `vectors/app/wallet-file.json` is a wallet file as this build writes it, which the app's tests read
+    /// (`ViewTest.kt`): the balance on a wallet's card, its tokens and what Send lets be sent are the app's own reading
+    /// of this file, and this holds the file the app is tested on to the layout and the sums of the core.
+    #[test]
+    fn the_wallet_file_the_app_is_tested_on_is_one_this_build_writes() {
+        let id = |c: char| c.to_string().repeat(64);
+        let boxed = |value: u64, confirmed_at: Option<u64>, proven_at: u64, assets: &[(char, u64)]| TrackedBox { value, tokens: assets.len(), proven_at, first_proven: proven_at, confirmed_at,
+            assets: assets.iter().map(|(t, amount)| Asset { id: id(*t), amount: *amount }).collect(), ..Default::default() };
+        let mut w = WalletFile::new("kept for the app's tests".into(), "9abc".into());
+        w.boxes.insert(id('1'), boxed(1_500_000_000, Some(100), 105, &[('a', 700)]));
+        w.boxes.insert(id('2'), boxed(2_000_000_001, Some(101), 106, &[('a', 300), ('b', i64::MAX as u64)]));
+        // proven only in a block one node has shown: beside the balance, not in it
+        w.boxes.insert(id('3'), boxed(900_000_000, None, 107, &[('a', 5)]));
+        w.boxes.insert(id('4'), boxed(1_000_000, Some(102), 106, &[('b', i64::MAX as u64)]));
+        w.expect = vec![id('e')];
+        w.void = vec![id('f')];
+        let seen: u64 = w.boxes.values().filter(|b| b.confirmed_at.is_none()).map(|b| b.value).sum();
+        assert_eq!((w.nanoerg() - seen, seen), (3_501_000_001, 900_000_000));
+        assert_eq!(w.confirmed_tokens().into_iter().collect::<Vec<_>>(), vec![(id('a'), 1_000), (id('b'), 2 * (i64::MAX as u64))]);
+        let file = format!("{}/../../vectors/app/wallet-file.json", env!("CARGO_MANIFEST_DIR"));
+        let written = text(&w).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap_or_default().trim(), written.trim(), "{file} is not what this build writes:\n{written}");
+    }
+
     /// A file as builds before the version number wrote it, with everything a used wallet accumulates.
     const OLD: &str = r#"{ "name": "Savings", "address": "9abc", "address_list": ["9abc", "9def"], "addresses": 2, "birthday": 1900000, "restored": true,
         "secret": { "cipherText": "00", "salt": "11", "iv": "22", "authTag": "33", "cipherParams": { "prf": "HmacSHA256", "c": 128000, "dkLen": 256 }, "usePre1627KeyDerivation": false },

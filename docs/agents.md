@@ -86,7 +86,8 @@ block), `timeout`, `node_refused`, `outcome_unknown`, `misuse`, `failed`.
   seconds a round). Any one request to a node, in every command, ends within two minutes.
 - `setup`: `{"created":…,"address":…,"network":…,"sealed":…,"can_pay":…,"note":…}`. `history`:
   `{"address":…,"sent":[{"tx":…,"result":…}],"expecting":[…],"payments_log":[…]}`, as the last sync left them.
-- Token payments: `--token ID --token-amount RAW` in place of `--erg` (raw units, no decimals). The
+- Token payments: `--token ID --token-amount RAW` in place of `--erg` (raw units, no decimals), or beside it: with
+  both, the box that carries the token carries that much ERG; with the token alone, the least a box may hold. The
   policy must allow the token and set its limits.
 - `pay --dry-run` answers what would leave the wallet (`would_leave_wallet_nanoerg`, fee included)
   or why it would be refused, and signs nothing. On a sealed wallet given no password it still answers: it previews
@@ -109,6 +110,8 @@ the wallet, read off the transaction itself: what its boxes put in, less what co
   of these addresses. A fee paid in a token (`--babel`) puts the offer box it takes ERG from back under the
   offer's own script; that box is part of the fee, like the network fee, not a payee (its tokens still count
   under `token_limits`).
+- These five names and no other. A file that names anything else (a rule misspelt, a note) is refused whole, and
+  nothing is signed while it is there: `allowed_payee` read as no list of payees would let anyone be paid.
 - `allow_tokens` and `token_limits`: a token leaves the wallet (paid, burned, or paid as a fee) only
   if `allow_tokens` is true and the token has its own `per_payment` and `per_day`, in raw units.
 - `DIR/payments.log` must exist: create an empty one beside the policy. A missing log is a refusal,
@@ -144,6 +147,9 @@ command. A second line follows with the transaction id and the receipt; it count
 `--purpose` is the place to say why.
 
 ## Limits to know
+- Commands that write one wallet take turns: each waits for the one before it (a lock on `DIR/wallet.lock`), in
+  one process or several. A `pay` started while a `balance` is still syncing waits for it and then reads what it
+  left; `wait --timeout` counts the waiting.
 - Every node used sees the addresses looked up and the payments sent. A node can hide a box or drop a payment; it
   cannot invent a box (each is proven against the tip the peers agree on).
 - The seed phrase is sealed in `DIR/wallet.json` only if a password was given when the wallet was made

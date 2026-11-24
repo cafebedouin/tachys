@@ -30,7 +30,8 @@ More: `docs/agents.md`. The fields of every answer: `docs/json.md`.
 
 ## If you are working on this repository
 
-- `cargo test --workspace` must pass (no network needed), and
+- `cargo test --workspace` must pass (no network needed; four of the vendored codec's tests go by the clock and fail
+  on a busy machine, so if only those fail, run them alone: `cargo test -p ergo-p2p --lib`), and
   `cargo clippy -p tachys -p tachys-verify -p tachys-net -p tachys-c --all-targets -- -D warnings` must be clean. The
   vendored codec under `vendor/` is kept as upstream wrote it: do not reformat or lint it.
 - The code is written in long lines on purpose and is not rustfmt-formatted. Do not run `cargo fmt`.

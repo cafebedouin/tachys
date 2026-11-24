@@ -144,4 +144,9 @@ instead, which as far as we know is new for Ergo:
   `vectors/` and with the reference node on two index-0 headers; once a sigma-rust release carries the fix, it can go
   back to the library. The research module `miller` still reads levels through the library's `max_level_of`, on
   the repository's vectors only.
-- `balance` formats `erg` through a float and loses digits above about nine million ERG; `nanoerg` is exact.
+- One command at a time writes a wallet (finding 70). The chain a state directory keeps (`tips`) is several files,
+  each written whole but not as a set: two `tips` at once on one directory are not kept from mixing them. The app
+  runs one at a time; the command line does not stop two.
+- Every call starts a runtime with a thread for each core and ends it, as each run of the program did. An outside
+  reviewer took that for waste on an old phone (finding 70); not measured, so not changed.
+- The CI job that builds the phone libraries (`phone-core`, finding 70) was written and has not run.

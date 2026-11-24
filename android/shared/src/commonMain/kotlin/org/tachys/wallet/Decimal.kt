@@ -31,9 +31,10 @@ fun shown(units: Long, decimals: Int): String = shown(units.toString(), decimals
 /** The same with exactly `places` digits after the point, the rest cut off (never rounded up): a balance for show. */
 fun shownFixed(units: Long, decimals: Int, places: Int): String {
     val (negative, digits) = digitsOf(units.toString())
-    val padded = digits.padStart(decimals + 1, '0')
-    val whole = padded.dropLast(decimals)
-    val part = padded.takeLast(decimals).padEnd(places, '0').take(places)
+    // (no places, or fewer than none: the number is that many places larger, as `shown` has it, and nothing is after the point)
+    val padded = if (decimals <= 0) digits.ifEmpty { "0" } + "0".repeat(-decimals) else digits.padStart(decimals + 1, '0')
+    val whole = if (decimals <= 0) padded else padded.dropLast(decimals)
+    val part = (if (decimals <= 0) "" else padded.takeLast(decimals)).padEnd(places, '0').take(places)
     val text = if (places == 0) whole else "$whole.$part"
     return if (negative && (whole + part).any { it != '0' }) "-$text" else text
 }

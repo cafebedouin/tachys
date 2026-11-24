@@ -1,0 +1,32 @@
+==== the reviews
+A first read of the whole repository by Claude (Fable 5.2) in this session, with the tests and clippy run first; then two
+reviews the maintainer pasted in, by other models, of the same tree. Their texts are not kept here. Each claim was
+checked against the code before anything was changed (finding 70 says which held).
+
+==== before: two commands at once on one wallet (target/debug/tachys, testnet, a throwaway wallet under /tmp)
+40 rounds of `wallet address --add` and `wallet name --name nN` started together on one state directory:
+  one command failed: 40/40; both said ok but one write was lost: 0/40
+  {"command":"wallet name","error":"could not write …/race/wallet.json","exit":1,"ok":false,"v":1}
+cargo test --workspace, first run on a busy machine: 295 passed, 4 failed in ergo-p2p
+  (concurrent_readers_over_budget_all_complete, concurrent_readers_over_budget_deadlock_without_slot_pool,
+   read_frame_body_slow_trickle_beats_the_idle_deadline, read_frame_body_steady_slow_sender_survives_many_deadlines:
+   FrameStalled { got: 2097152, want: 3145741, after: 30s }), and cargo stopped there: none of the tachys crates' tests ran
+cargo test -p ergo-p2p --lib, alone: 299 passed
+cargo test --workspace --no-fail-fast, again: 1001 passed, 0 failed, 7 ignored
+
+==== after
+the same 40 rounds: one command failed: 0/40; a write lost: 0/40   (the directory now holds wallet.json and wallet.lock)
+cargo clippy -p tachys -p tachys-verify -p tachys-net -p tachys-c --all-targets -- -D warnings: clean
+cargo test --workspace --locked --no-fail-fast: 1009 passed, 0 failed, 7 ignored (840 of them the vendored codec's; 169 the four crates')
+android/build-core.sh: aarch64 6013848 bytes, armv7 3797420 bytes, no build-machine paths, the JNI entry in both
+TACHYS_HOST_CORE=…/target/debug ./gradlew :shared:compileCommonMainKotlinMetadata :shared:cleanDesktopTest :shared:desktopTest assembleDebug:
+  BUILD SUCCESSFUL; 39 tests, 0 skipped, 0 failed (ViewTest 5, CodesTest 8, DecimalTest 8, AnswersTest 9, JsonTest 3, NativeTest 5, ScreensTest 1)
+  app-arm64-v8a-debug.apk 14260743 bytes, app-armeabi-v7a-debug.apk 13456627 bytes
+the workflows: both parse as YAML (python yaml.safe_load); neither has run since the change
+
+==== the commits the actions are named by (gh api repos/OWNER/REPO/commits/TAG --jq .sha, 2026-11-24)
+actions/checkout v4 (v4.4.0)             11d5960a326750d5838078e36cf38b85af677262
+actions/setup-java v4 (v4.9.1)           cf277c60eb25467037889841efdb72551f06f6c3
+actions/attest-build-provenance v2       e8998f949152b193b063cb0ec769d69d929409be
+Swatinem/rust-cache v2 (v2.9.3)          d1527c8f67ef9af357290475d4af4b0fab8f12e0
+dtolnay/rust-toolchain master            df2a88e9fe4098bad09cb42c3dec7187f15861fc

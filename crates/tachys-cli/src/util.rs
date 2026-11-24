@@ -103,19 +103,102 @@ pub(crate) fn write_private(path: &str, bytes: &[u8]) -> std::io::Result<()> {
     f.sync_all()
 }
 /// Write a file beside its place and move it in, so a crash or a full disk leaves the old file, not half a new one.
+/// The file beside it has a name of this write's own: two commands that write the same file at once (two `tips` on
+/// one chain directory) each move in a whole file, where with one name between them the second found its file
+/// already moved and failed. The directory is then synced, so that the move itself is on the disk.
 pub(crate) fn write_whole(path: &str, bytes: &[u8]) -> std::io::Result<()> {
-    let tmp = format!("{path}.tmp");
-    write_private(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, path)).inspect_err(|_| { let _ = std::fs::remove_file(&tmp); })
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let tmp = format!("{path}.{}-{}.tmp", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    write_private(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, path)).inspect_err(|_| { let _ = std::fs::remove_file(&tmp); })?;
+    // (a directory cannot be opened for this everywhere; where it cannot, the move is as durable as it was before)
+    #[cfg(unix)] if let Some(dir) = std::path::Path::new(path).parent() { let _ = std::fs::File::open(if dir.as_os_str().is_empty() { std::path::Path::new(".") } else { dir }).and_then(|d| d.sync_all()); }
+    Ok(())
 }
-/// Make a state directory if it is not there yet, for its owner only. One that exists is left as its owner set it.
+/// Make a state directory if it is not there yet, for its owner only: made with that mode, not made and then closed.
+/// One that exists is left as its owner set it.
 pub(crate) fn private_dir(dir: &str) {
     if std::path::Path::new(dir).exists() { return }
-    let _ = std::fs::create_dir_all(dir);
-    #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)); }
+    let mut b = std::fs::DirBuilder::new();
+    b.recursive(true);
+    #[cfg(unix)] { use std::os::unix::fs::DirBuilderExt; b.mode(0o700); }
+    let _ = b.create(dir);
 }
+
+/// A command's turn at a wallet: while it is held, no other command writes that wallet's file (`turn`).
+pub(crate) struct Turn(String);
+impl Drop for Turn {
+    fn drop(&mut self) {
+        let own = crate::own::own();
+        let mut held = own.turns.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(t) = held.get_mut(&self.0) { t.1 -= 1; if t.1 == 0 { held.remove(&self.0); } }
+    }
+}
+/// Takes this call's turn at the wallet in `state`, waiting for any other command that has it: a lock on
+/// `DIR/wallet.lock`, as the payments log is locked (`policy::reserve`). A command reads the wallet file, works (a sync
+/// talks to nodes for seconds) and writes it back whole; two at once, in two processes or on two threads of one, and
+/// the one that wrote last undid what the other had written: a payment noted as waiting, a phrase just sealed. Held
+/// from before the file is read until the command ends. A command run inside another (`pay` runs `wallet send`) is the
+/// same call and shares its turn. The wait ends with the call's deadline, if it has one (`tachys wait --timeout`).
+pub(crate) fn turn(state: &str) -> Result<Turn, String> {
+    let own = crate::own::own();
+    let mut held = own.turns.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(t) = held.get_mut(state) { t.1 += 1; return Ok(Turn(state.to_string())) }
+    let path = format!("{state}/wallet.lock");
+    let mut o = std::fs::OpenOptions::new();
+    o.read(true).append(true).create(true);
+    #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; o.mode(0o600); }
+    let f = o.open(&path).map_err(|e| format!("{path} cannot be opened ({e}): a command that writes the wallet needs it, to keep two from writing at once"))?;
+    loop {
+        match f.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if Deadline::left().is_some_and(|l| l.is_zero()) { return Err("the time given ran out while another command was at work on this wallet".into()) }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(std::fs::TryLockError::Error(e)) => return Err(format!("{path} cannot be locked ({e})")),
+        }
+    }
+    held.insert(state.to_string(), (f, 1));
+    Ok(Turn(state.to_string()))
+}
+
+/// nanoERG as ERG with all nine places, from the whole number: never through a float, which cannot hold every
+/// nanoERG above about nine million ERG.
+pub(crate) fn erg(nano: u64) -> String { format!("{}.{:09}", nano / 1_000_000_000, nano % 1_000_000_000) }
 
 /// "1 token", "3 tokens", "no tokens".
 pub(crate) fn count(n: usize, what: &str) -> String { match n { 0 => format!("no {what}s"), 1 => format!("1 {what}"), n => format!("{n} {what}s") } }
 
 /// A line of input: a password or a seed phrase, never an argument or a file. From the caller if this is a library call, else stdin.
 pub(crate) fn stdin_line() -> String { crate::out::read_line() }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn erg_is_written_from_the_whole_number_and_agrees_with_it_at_any_size() {
+        assert_eq!(erg(0), "0.000000000");
+        assert_eq!(erg(564_200_000), "0.564200000");
+        assert_eq!(erg(1_000_000_001), "1.000000001");
+        // above 2^53 a float no longer holds every whole number: this one came out as 9007199.254740992
+        assert_eq!(erg(9_007_199_254_740_993), "9007199.254740993");
+        assert_eq!(erg(u64::MAX), "18446744073.709551615");
+    }
+
+    #[test]
+    fn two_writers_of_one_file_each_move_in_a_whole_file() {
+        let dir = std::env::temp_dir().join(format!("tachys-util-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        private_dir(&dir.to_string_lossy());
+        #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700, "made for its owner only"); }
+        let path = dir.join("f").to_string_lossy().to_string();
+        let go = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let writers: Vec<_> = (0..4u8).map(|i| { let (path, go) = (path.clone(), go.clone()); std::thread::spawn(move || { go.wait(); (0..4).all(|_| write_whole(&path, &[b'a' + i; 4096]).is_ok()) }) }).collect();
+        assert!(writers.into_iter().all(|t| t.join().unwrap()), "with one name for the file beside it, a writer found its own already moved in and failed");
+        let left = std::fs::read(&path).unwrap();
+        assert!(left.len() == 4096 && left.iter().all(|b| *b == left[0]), "one writer's file, whole");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "and nothing left beside it");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

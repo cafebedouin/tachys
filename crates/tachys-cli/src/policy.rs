@@ -8,6 +8,8 @@
 //!   { "max_per_payment_nanoerg": N, "max_per_day_nanoerg": N, "allowed_payees": ["addr", ...],
 //!     "allow_tokens": false, "token_limits": { "<token id>": { "per_payment": RAW, "per_day": RAW } } }
 //!
+//! Those five names and no other: a file that names anything else is refused whole (a rule misspelt is not a rule left out).
+//!
 //! Where this holds: against a caller that asks tachys for too much through a wallet directory it
 //! cannot read or copy. It is not a wall against a program running as the wallet's own user. That
 //! program can read the wallet file and the password, so it can copy the wallet to a directory with
@@ -34,9 +36,15 @@ pub fn path(state: &str) -> String { format!("{state}/policy.json") }
 pub fn log_path(state: &str) -> String { format!("{state}/payments.log") }
 pub fn present(state: &str) -> bool { std::path::Path::new(&path(state)).exists() }
 
+/// The rules a policy file may name.
+const KEYS: &[&str] = &["max_per_payment_nanoerg", "max_per_day_nanoerg", "allowed_payees", "allow_tokens", "token_limits"];
+
 /// The limits applied to one request, given the log so far. Nothing is read or written here.
 pub fn check(policy: &serde_json::Value, log: &str, ask: &Ask, now_s: u64) -> Result<(), String> {
-    if !policy.is_object() { return Err("the policy file is not a JSON object".into()) }
+    let Some(named) = policy.as_object() else { return Err("the policy file is not a JSON object".into()) };
+    // a name this build does not know is a slip or a rule it cannot keep: `allowed_payee` for `allowed_payees` would
+    // otherwise be a policy with no list of payees, which is one that lets anyone be paid
+    if let Some(k) = named.keys().find(|k| !KEYS.contains(&k.as_str())) { return Err(format!("the policy names \"{}\", which is not a rule this build knows ({}); nothing is signed while it is there", crate::util::clip(k, 40), KEYS.join(", "))) }
     let limit = |k: &str| -> Result<u64, String> {
         match &policy[k] { serde_json::Value::Null => Ok(0), v => v.as_u64().ok_or(format!("the policy's {k} is not a whole number")) }
     };
@@ -174,6 +182,22 @@ mod tests {
         assert!(check(&serde_json::json!({}), "", &ask(1), NOW).is_err());
         assert!(check(&serde_json::json!({ "max_per_payment_nanoerg": "lots" }), "", &ask(1), NOW).is_err());
         assert!(check(&serde_json::json!([]), "", &ask(1), NOW).is_err());
+    }
+
+    #[test]
+    fn a_policy_that_names_a_rule_this_build_does_not_know_allows_nothing() {
+        // the list of payees under a name one letter short: read as no list, it let anyone be paid
+        let mut p = policy();
+        p.as_object_mut().unwrap().remove("allowed_payees");
+        p["allowed_payee"] = serde_json::json!(["9friend"]);
+        let e = check(&p, "", &ask(1_000_000), NOW).unwrap_err();
+        assert!(e.contains("allowed_payee\"") && e.contains("not a rule"), "{e}");
+        // and so for any other name, whatever it holds
+        let mut p = policy(); p["note"] = serde_json::json!("for the bot");
+        assert!(check(&p, "", &ask(1_000_000), NOW).unwrap_err().contains("not a rule"));
+        // every rule there is, named, is still a policy
+        let mut p = policy(); p["token_limits"] = serde_json::json!({});
+        assert!(check(&p, "", &ask(1_000_000), NOW).is_ok());
     }
 
     #[test]

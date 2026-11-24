@@ -124,8 +124,10 @@ let a: tachys::Answer = tachys::call(&["tachys".into(), "balance".into(), "--sta
 `args` are as on the command line, the program's name first. `input` are the lines a command reads where the
 program would read stdin: the password for `--pass-stdin`, then a seed phrase for `--mnemonic-file -`. Each call
 chooses its own network and leaves nothing for the next; nothing is written to the process's stdout. Calls from
-several threads run at the same time, each with its own network and answer (two that write one state directory are
-two runs of the program on it). Do not call it from inside an async runtime: it runs its own.
+several threads run at the same time, each with its own network and answer. Two that write one wallet, like two
+runs of the program on one state directory, take turns: each takes a lock on `DIR/wallet.lock` before it reads
+the wallet file and keeps it until it ends, so the second waits for the first (a command that only reads the
+wallet, `wallet address`, `mnemonic`, `pubkey`, waits for no one). Do not call it from inside an async runtime: it runs its own.
 
 ## From C, or anything that can call C
 
