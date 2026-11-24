@@ -31,16 +31,25 @@ impl ChainParams {
     }
 }
 
-pub fn difficulty(h: &Header) -> BigInt { decode_compact_bits(h.n_bits) }
+pub fn difficulty(h: &Header) -> BigInt {
+    decode_compact_bits(h.n_bits)
+}
 
-fn normalize(d: &BigInt) -> BigInt { decode_compact_bits(encode_compact_bits(d) as u32) }
+fn normalize(d: &BigInt) -> BigInt {
+    decode_compact_bits(encode_compact_bits(d) as u32)
+}
 
 /// The height at which the difficulty is next recalculated after `height`: the first height of the next epoch. `None`
 /// when that is past the largest height a header can carry (heights from 4,294,967,169 up, with 128-block epochs):
 /// computed in `u32`, it wrapped to 1 in a release build, and a debug build panicked.
 pub fn next_recalculation_height(height: u32, epoch: u32) -> Option<u32> {
     let (h, e) = (u64::from(height), u64::from(epoch));
-    u32::try_from(if h % e == 0 { h + 1 } else { (h / e + 1) * e + 1 }).ok()
+    u32::try_from(if h % e == 0 {
+        h + 1
+    } else {
+        (h / e + 1) * e + 1
+    })
+    .ok()
 }
 
 /// Heights whose headers are needed to compute the difficulty of `height`.
@@ -48,7 +57,11 @@ pub fn previous_heights_required(height: u32, epoch: u32, use_last_epochs: u32) 
     let h = height as i64 - 1;
     let e = epoch as i64;
     if h % e == 0 && (epoch > 1 || height > epoch * use_last_epochs) {
-        let mut v: Vec<u32> = (0..=use_last_epochs as i64).map(|i| h - i * e).filter(|x| *x >= 0).map(|x| x as u32).collect();
+        let mut v: Vec<u32> = (0..=use_last_epochs as i64)
+            .map(|i| h - i * e)
+            .filter(|x| *x >= 0)
+            .map(|x| x as u32)
+            .collect();
         v.reverse();
         v
     } else {
@@ -58,26 +71,44 @@ pub fn previous_heights_required(height: u32, epoch: u32, use_last_epochs: u32) 
 
 /// `None` when there is no next recalculation height (`next_recalculation_height`).
 pub fn heights_for_next_recalculation(height: u32, p: &ChainParams) -> Option<Vec<u32>> {
-    next_recalculation_height(height, p.epoch_length).map(|n| previous_heights_required(n, p.epoch_length, p.use_last_epochs))
+    next_recalculation_height(height, p.epoch_length)
+        .map(|n| previous_heights_required(n, p.epoch_length, p.use_last_epochs))
 }
 
 fn interval_diff(start: &Header, end: &Header, p: &ChainParams) -> Option<BigInt> {
     let dt = end.timestamp as i128 - start.timestamp as i128;
-    if dt == 0 { return None }
-    Some(difficulty(end) * BigInt::from(p.block_interval_ms) * BigInt::from(p.epoch_length) / BigInt::from(dt))
+    if dt == 0 {
+        return None;
+    }
+    Some(
+        difficulty(end) * BigInt::from(p.block_interval_ms) * BigInt::from(p.epoch_length)
+            / BigInt::from(dt),
+    )
 }
 
 fn interpolate(data: &[(u32, BigInt)], epoch: u32) -> Option<BigInt> {
-    if data.len() == 1 { return Some(data[0].1.clone()) }
+    if data.len() == 1 {
+        return Some(data[0].1.clone());
+    }
     let n = BigInt::from(data.len());
     let prec = BigInt::from(PRECISION);
-    let (mut xy, mut x, mut x2, mut y) = (BigInt::from(0), BigInt::from(0), BigInt::from(0), BigInt::from(0));
+    let (mut xy, mut x, mut x2, mut y) = (
+        BigInt::from(0),
+        BigInt::from(0),
+        BigInt::from(0),
+        BigInt::from(0),
+    );
     for (h, d) in data {
         let hb = BigInt::from(*h);
-        xy += &hb * d; x += &hb; x2 += &hb * &hb; y += d;
+        xy += &hb * d;
+        x += &hb;
+        x2 += &hb * &hb;
+        y += d;
     }
     let den = &x2 * &n - &x * &x;
-    if den == BigInt::from(0) { return None }
+    if den == BigInt::from(0) {
+        return None;
+    }
     let b = (&xy * &n - &x * &y) * &prec / den;
     let a = (&y * &prec - &b * &x) / &n / &prec;
     let point = BigInt::from(data.iter().map(|d| d.0).max()?) + epoch;
@@ -91,11 +122,17 @@ fn predictive(hs: &[Header], p: &ChainParams) -> Option<BigInt> {
     } else {
         let mut data = vec![];
         for w in hs.windows(2) {
-            if w[1].height - w[0].height != p.epoch_length { return None }
+            if w[1].height - w[0].height != p.epoch_length {
+                return None;
+            }
             data.push((w[1].height, interval_diff(&w[0], &w[1], p)?));
         }
         let d = interpolate(&data, p.epoch_length)?;
-        if d >= BigInt::one() { d } else { p.initial_difficulty.clone() }
+        if d >= BigInt::one() {
+            d
+        } else {
+            p.initial_difficulty.clone()
+        }
     };
     Some(normalize(&d))
 }
@@ -103,17 +140,27 @@ fn predictive(hs: &[Header], p: &ChainParams) -> Option<BigInt> {
 /// The difficulty of the block after `hs.last()` by the rule this network uses. `hs` are the epoch-boundary
 /// headers the rule reads, oldest first.
 pub fn required_after(hs: &[Header], p: &ChainParams) -> Option<BigInt> {
-    if p.earlier_rule.is_some() { predictive(hs, p) } else { eip37_calculate(hs, p) }
+    if p.earlier_rule.is_some() {
+        predictive(hs, p)
+    } else {
+        eip37_calculate(hs, p)
+    }
 }
 
 /// The node's `eip37Calculate`: difficulty for the block after `hs.last()`.
 pub fn eip37_calculate(hs: &[Header], p: &ChainParams) -> Option<BigInt> {
-    if hs.len() < 2 { return None }
+    if hs.len() < 2 {
+        return None;
+    }
     let last = difficulty(&hs[hs.len() - 1]);
     let hi: BigInt = &last * 3 / 2;
     let lo: BigInt = &last / 2;
     let pred = predictive(hs, p)?;
-    let limited = if pred > last { pred.min(hi.clone()) } else { pred.max(lo.clone()) };
+    let limited = if pred > last {
+        pred.min(hi.clone())
+    } else {
+        pred.max(lo.clone())
+    };
     let classic = interval_diff(&hs[hs.len() - 2], &hs[hs.len() - 1], p)?;
     let avg: BigInt = (classic + limited) / 2;
     let out = if avg > last { avg.min(hi) } else { avg.max(lo) };

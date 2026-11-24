@@ -12,7 +12,8 @@ use ergo_nipopow::{NipopowAlgos, NipopowProof};
 use sigma_ser::ScorexSerializable;
 
 fn real() -> NipopowProof {
-    NipopowProof::scorex_parse_bytes(include_bytes!("../../../vectors/mainnet-1915810.bin")).unwrap()
+    NipopowProof::scorex_parse_bytes(include_bytes!("../../../vectors/mainnet-1915810.bin"))
+        .unwrap()
 }
 
 #[test]
@@ -26,14 +27,21 @@ fn real_superblock_levels_follow_the_geometric_law_at_the_top() {
     let mut levels: Vec<i32> = vec![];
     let non_genesis = p.prefix.iter().filter(|x| x.header.height != 1).count();
     for ph in p.prefix.iter().filter(|x| x.header.height != 1) {
-        levels.push(algos.max_level_of(&ph.header).expect("max_level_of runs on a real header"));
+        levels.push(
+            algos
+                .max_level_of(&ph.header)
+                .expect("max_level_of runs on a real header"),
+        );
     }
     assert_eq!(levels.len(), non_genesis, "every real header got a level");
 
     let max = *levels.iter().max().unwrap();
     let ge = |mu: i32| levels.iter().filter(|&&l| l >= mu).count();
 
-    eprintln!("tip height {tip}, ⌊log2⌋={log2_tip}; {} prefix levels", levels.len());
+    eprintln!(
+        "tip height {tip}, ⌊log2⌋={log2_tip}; {} prefix levels",
+        levels.len()
+    );
     eprintln!(" µ   count(≥µ)   |C|/2^µ   obs/exp");
     for mu in 0..=max {
         let c = ge(mu);

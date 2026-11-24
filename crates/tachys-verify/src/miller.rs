@@ -160,7 +160,11 @@ pub fn compress(chain: &[Blk], k_sampling: u32, chi: u32, k_unstable: u32) -> Mi
 
     // Too short to compress: D[0] = all of C⋆.
     if cstar.len() < two_k {
-        return MillerProof { d: cstar.to_vec(), x, omega };
+        return MillerProof {
+            d: cstar.to_vec(),
+            x,
+            omega,
+        };
     }
 
     let up = |mu: u32| -> Vec<&Blk> { cstar.iter().filter(|b| b.level >= mu).collect() };
@@ -195,7 +199,11 @@ pub fn compress(chain: &[Blk], k_sampling: u32, chi: u32, k_unstable: u32) -> Mi
             }
         }
     }
-    let d: Vec<Blk> = cstar.iter().filter(|b| keep.contains(&b.id)).cloned().collect();
+    let d: Vec<Blk> = cstar
+        .iter()
+        .filter(|b| keep.contains(&b.id))
+        .cloned()
+        .collect();
     MillerProof { d, x, omega }
 }
 
@@ -236,8 +244,16 @@ pub fn compare(a: &MillerProof, b: &MillerProof, k: u32) -> (Ordering, bool) {
     };
     let after = anchor
         .map(|id| {
-            let ca = a.blocks().skip_while(|x| x.id != id).count().saturating_sub(1);
-            let cb = b.blocks().skip_while(|x| x.id != id).count().saturating_sub(1);
+            let ca = a
+                .blocks()
+                .skip_while(|x| x.id != id)
+                .count()
+                .saturating_sub(1);
+            let cb = b
+                .blocks()
+                .skip_while(|x| x.id != id)
+                .count()
+                .saturating_sub(1);
             ca.min(cb)
         })
         .unwrap_or_else(|| a.len().min(b.len()));

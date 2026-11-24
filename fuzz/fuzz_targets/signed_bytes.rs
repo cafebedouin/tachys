@@ -8,10 +8,18 @@ use ergotree_ir::serialization::SigmaSerializable;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    let Some((which, body)) = data.split_first() else { return };
+    let Some((which, body)) = data.split_first() else {
+        return;
+    };
     match which % 3 {
-        0 => { let _ = Transaction::sigma_parse_bytes(body); }
-        1 => { let _ = ErgoBox::sigma_parse_bytes(body); }
-        _ => { let _ = ReducedTransaction::sigma_parse_bytes(body); }
+        0 => {
+            let _ = Transaction::sigma_parse_bytes(body);
+        }
+        1 => {
+            let _ = ErgoBox::sigma_parse_bytes(body);
+        }
+        _ => {
+            let _ = ReducedTransaction::sigma_parse_bytes(body);
+        }
     }
 });

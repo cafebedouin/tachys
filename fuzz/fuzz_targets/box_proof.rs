@@ -10,8 +10,13 @@ use honest_box_proof::{KEYS, ROOT};
 
 fuzz_target!(|proof: &[u8]| {
     static HONEST: std::sync::OnceLock<Option<Vec<Option<Vec<u8>>>>> = std::sync::OnceLock::new();
-    let honest = HONEST.get_or_init(|| tachys::fuzzing::box_proof(&ROOT, include_bytes!("../seeds/box_proof/honest"), &KEYS));
+    let honest = HONEST.get_or_init(|| {
+        tachys::fuzzing::box_proof(&ROOT, include_bytes!("../seeds/box_proof/honest"), &KEYS)
+    });
     assert!(honest.is_some(), "the honest proof is read");
     let got = tachys::fuzzing::box_proof(&ROOT, proof, &KEYS);
-    assert!(got.is_none() || &got == honest, "a proof that is accepted says what the honest one says");
+    assert!(
+        got.is_none() || &got == honest,
+        "a proof that is accepted says what the honest one says"
+    );
 });

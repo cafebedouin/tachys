@@ -22,20 +22,32 @@ pub struct Cluster {
 }
 
 impl Cluster {
-    pub fn tip(&self) -> &Header { self.chain.values().next_back().expect("non-empty cluster") }
+    pub fn tip(&self) -> &Header {
+        self.chain.values().next_back().expect("non-empty cluster")
+    }
     fn relation(&self, v: &PeerView) -> Relation {
         let mut shared = 0;
         for h in &v.suffix {
             if let Some(mine) = self.chain.get(&h.height) {
-                if mine.id != h.id { return Relation::Conflict }
+                if mine.id != h.id {
+                    return Relation::Conflict;
+                }
                 shared += 1;
             }
         }
-        if shared > 0 { Relation::Consistent } else { Relation::Unrelated }
+        if shared > 0 {
+            Relation::Consistent
+        } else {
+            Relation::Unrelated
+        }
     }
 }
 
-enum Relation { Consistent, Conflict, Unrelated }
+enum Relation {
+    Consistent,
+    Conflict,
+    Unrelated,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Verdict {
@@ -57,7 +69,10 @@ pub struct Decision {
 
 impl Decision {
     pub fn tip(&self) -> Option<&Header> {
-        match self.verdict { Verdict::NoQuorum => None, _ => self.clusters.first().map(|c| c.tip()) }
+        match self.verdict {
+            Verdict::NoQuorum => None,
+            _ => self.clusters.first().map(|c| c.tip()),
+        }
     }
 }
 
@@ -67,12 +82,23 @@ pub fn decide(views: &[PeerView], quorum_groups: usize) -> Decision {
     let mut order: Vec<&PeerView> = views.iter().filter(|v| !v.suffix.is_empty()).collect();
     order.sort_by_key(|v| std::cmp::Reverse(v.suffix.iter().map(|h| h.height).max()));
     for v in order {
-        let home = clusters.iter().position(|c| matches!(c.relation(v), Relation::Consistent));
+        let home = clusters
+            .iter()
+            .position(|c| matches!(c.relation(v), Relation::Consistent));
         let c = match home {
             Some(i) => &mut clusters[i],
-            None => { clusters.push(Cluster { chain: BTreeMap::new(), peers: vec![], groups: BTreeSet::new() }); clusters.last_mut().expect("just pushed") }
+            None => {
+                clusters.push(Cluster {
+                    chain: BTreeMap::new(),
+                    peers: vec![],
+                    groups: BTreeSet::new(),
+                });
+                clusters.last_mut().expect("just pushed")
+            }
         };
-        for h in &v.suffix { c.chain.entry(h.height).or_insert_with(|| h.clone()); }
+        for h in &v.suffix {
+            c.chain.entry(h.height).or_insert_with(|| h.clone());
+        }
         c.peers.push(v.peer.clone());
         c.groups.insert(v.group.clone());
     }
@@ -82,17 +108,32 @@ pub fn decide(views: &[PeerView], quorum_groups: usize) -> Decision {
         for j in i + 1..clusters.len() {
             for (h, a) in &clusters[i].chain {
                 if let Some(b) = clusters[j].chain.get(h) {
-                    if a.id != b.id { conflicts.push((*h, a.id, b.id)); break }
+                    if a.id != b.id {
+                        conflicts.push((*h, a.id, b.id));
+                        break;
+                    }
                 }
             }
         }
     }
     let verdict = match clusters.first() {
         Some(c) if c.groups.len() >= quorum_groups => {
-            let best_has_conflict = clusters.iter().skip(1).any(|o| o.chain.iter().any(|(h, x)| clusters[0].chain.get(h).is_some_and(|m| m.id != x.id)));
-            if best_has_conflict { Verdict::AgreedWithDissent } else { Verdict::Agreed }
+            let best_has_conflict = clusters.iter().skip(1).any(|o| {
+                o.chain
+                    .iter()
+                    .any(|(h, x)| clusters[0].chain.get(h).is_some_and(|m| m.id != x.id))
+            });
+            if best_has_conflict {
+                Verdict::AgreedWithDissent
+            } else {
+                Verdict::Agreed
+            }
         }
         _ => Verdict::NoQuorum,
     };
-    Decision { verdict, clusters, conflicts }
+    Decision {
+        verdict,
+        clusters,
+        conflicts,
+    }
 }

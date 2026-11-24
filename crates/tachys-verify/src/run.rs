@@ -58,42 +58,104 @@ pub fn run_length_for(tip_height: u32, p: &ChainParams) -> u32 {
 /// `None` when the headers are not consecutive by height and parent id.
 pub fn check_run(headers: &[Header], p: &ChainParams) -> Option<RunReport> {
     let (first, last) = (headers.first()?, headers.last()?);
-    if headers.windows(2).any(|w| w[1].parent_id != w[0].id || w[0].height.checked_add(1) != Some(w[1].height)) { return None; }
+    if headers
+        .windows(2)
+        .any(|w| w[1].parent_id != w[0].id || w[0].height.checked_add(1) != Some(w[1].height))
+    {
+        return None;
+    }
     let by_height: BTreeMap<u32, &Header> = headers.iter().map(|h| (h.height, h)).collect();
-    let mut r = RunReport { first_height: first.height, last_height: last.height, recomputed: 0, as_parent: 0, within_bounds: 0, unchecked: 0,
-        wrong: vec![], exact_from: None, work: headers.iter().map(difficulty).sum(), work_exact: BigInt::from(0) };
+    let mut r = RunReport {
+        first_height: first.height,
+        last_height: last.height,
+        recomputed: 0,
+        as_parent: 0,
+        within_bounds: 0,
+        unchecked: 0,
+        wrong: vec![],
+        exact_from: None,
+        work: headers.iter().map(difficulty).sum(),
+        work_exact: BigInt::from(0),
+    };
     for w in headers.windows(2) {
         let (parent, h) = (&w[0], &w[1]);
         // there is no header at height 0: near the start of a chain the earlier rule reads the boundaries that exist
-        let inputs: Vec<u32> = previous_heights_required(h.height, p.epoch_length, p.use_last_epochs).into_iter().filter(|x| *x >= 1).collect();
-        let enough = if p.earlier_rule.is_some() { !inputs.is_empty() } else { inputs.len() == p.use_last_epochs as usize + 1 };
-        let at_v2 = parent.height == p.v2_activation_height || parent.height.checked_add(1) == Some(p.v2_activation_height);
+        let inputs: Vec<u32> =
+            previous_heights_required(h.height, p.epoch_length, p.use_last_epochs)
+                .into_iter()
+                .filter(|x| *x >= 1)
+                .collect();
+        let enough = if p.earlier_rule.is_some() {
+            !inputs.is_empty()
+        } else {
+            inputs.len() == p.use_last_epochs as usize + 1
+        };
+        let at_v2 = parent.height == p.v2_activation_height
+            || parent.height.checked_add(1) == Some(p.v2_activation_height);
         let standing = if let Some(d) = p.earlier_rule.as_ref().filter(|_| at_v2) {
-            if difficulty(h) == *d { Declared::Recomputed } else { Declared::Wrong }
-        } else if inputs.len() == 1 && inputs[0] + 1 == h.height && !(h.height - 1).is_multiple_of(p.epoch_length) {
-            if h.n_bits == parent.n_bits { Declared::AsParent } else { Declared::Wrong }
+            if difficulty(h) == *d {
+                Declared::Recomputed
+            } else {
+                Declared::Wrong
+            }
+        } else if inputs.len() == 1
+            && inputs[0] + 1 == h.height
+            && !(h.height - 1).is_multiple_of(p.epoch_length)
+        {
+            if h.n_bits == parent.n_bits {
+                Declared::AsParent
+            } else {
+                Declared::Wrong
+            }
         } else if enough && inputs.iter().all(|x| by_height.contains_key(x)) {
             let hs: Vec<Header> = inputs.iter().map(|x| (*by_height[x]).clone()).collect();
-            if required_after(&hs, p) == Some(difficulty(h)) { Declared::Recomputed } else { Declared::Wrong }
+            if required_after(&hs, p) == Some(difficulty(h)) {
+                Declared::Recomputed
+            } else {
+                Declared::Wrong
+            }
         } else if p.earlier_rule.is_some() {
             Declared::Unchecked
         } else {
             let (d, dp) = (difficulty(h), difficulty(parent));
             let lo = ergo_chain_types::autolykos_pow_scheme::decode_compact_bits(
-                ergo_chain_types::autolykos_pow_scheme::encode_compact_bits(&(&dp / 2)) as u32);
-            if d > &dp * 3 / 2 || d < lo { Declared::Wrong } else { Declared::WithinBounds }
+                ergo_chain_types::autolykos_pow_scheme::encode_compact_bits(&(&dp / 2)) as u32,
+            );
+            if d > &dp * 3 / 2 || d < lo {
+                Declared::Wrong
+            } else {
+                Declared::WithinBounds
+            }
         };
         match standing {
-            Declared::Recomputed => { r.recomputed += 1; if r.exact_from.is_none() { r.exact_from = Some(h.height); } }
+            Declared::Recomputed => {
+                r.recomputed += 1;
+                if r.exact_from.is_none() {
+                    r.exact_from = Some(h.height);
+                }
+            }
             Declared::AsParent => r.as_parent += 1,
-            Declared::WithinBounds => { r.within_bounds += 1; r.exact_from = None; }
-            Declared::Unchecked => { r.unchecked += 1; r.exact_from = None; }
-            Declared::Wrong => { r.wrong.push(h.height); r.exact_from = None; }
+            Declared::WithinBounds => {
+                r.within_bounds += 1;
+                r.exact_from = None;
+            }
+            Declared::Unchecked => {
+                r.unchecked += 1;
+                r.exact_from = None;
+            }
+            Declared::Wrong => {
+                r.wrong.push(h.height);
+                r.exact_from = None;
+            }
             Declared::Start => {}
         }
     }
     if let Some(from) = r.exact_from {
-        r.work_exact = headers.iter().filter(|h| h.height >= from).map(difficulty).sum();
+        r.work_exact = headers
+            .iter()
+            .filter(|h| h.height >= from)
+            .map(difficulty)
+            .sum();
     }
     Some(r)
 }

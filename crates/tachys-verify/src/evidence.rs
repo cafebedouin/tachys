@@ -57,36 +57,90 @@ pub enum Refused {
 /// `settled` names the proof headers whose interlinks an Extension section showed to be the committed ones.
 /// `run` is empty when none was fetched. `genesis` is the id of the network's first header, when the caller
 /// has it: every result accepted with it shares that header, so any two of them can be compared.
-pub fn assemble(proof: &NipopowProof, settled: &HashSet<BlockId>, run: &[Header], p: &ChainParams, genesis: Option<&BlockId>) -> Result<Evidence, Refused> {
-    let suffix: Vec<&Header> = std::iter::once(&proof.suffix_head.header).chain(proof.suffix_tail.iter()).collect();
-    let all: Vec<&Header> = proof.prefix.iter().map(|x| &x.header).chain(suffix.iter().copied()).collect();
-    if let Some(w) = all.windows(2).find(|w| w[0].height >= w[1].height) { return Err(Refused::ProofShape(w[1].height)) }
-    if let Some(w) = suffix.windows(2).find(|w| w[1].parent_id != w[0].id || w[0].height.checked_add(1) != Some(w[1].height)) {
+pub fn assemble(
+    proof: &NipopowProof,
+    settled: &HashSet<BlockId>,
+    run: &[Header],
+    p: &ChainParams,
+    genesis: Option<&BlockId>,
+) -> Result<Evidence, Refused> {
+    let suffix: Vec<&Header> = std::iter::once(&proof.suffix_head.header)
+        .chain(proof.suffix_tail.iter())
+        .collect();
+    let all: Vec<&Header> = proof
+        .prefix
+        .iter()
+        .map(|x| &x.header)
+        .chain(suffix.iter().copied())
+        .collect();
+    if let Some(w) = all.windows(2).find(|w| w[0].height >= w[1].height) {
+        return Err(Refused::ProofShape(w[1].height));
+    }
+    if let Some(w) = suffix
+        .windows(2)
+        .find(|w| w[1].parent_id != w[0].id || w[0].height.checked_add(1) != Some(w[1].height))
+    {
         return Err(Refused::ProofShape(w[1].height));
     }
     let before_v2 = |h: &Header| h.height < p.v2_activation_height;
-    let work_ok = |h: &Header| before_v2(h) || (h.version != 1 && matches!(crate::pow::pow_ok(h), Ok(true)));
-    if let Some(h) = all.iter().copied().chain(run.iter()).find(|h| !work_ok(h)) { return Err(Refused::InvalidWork(h.height)) }
+    let work_ok =
+        |h: &Header| before_v2(h) || (h.version != 1 && matches!(crate::pow::pow_ok(h), Ok(true)));
+    if let Some(h) = all.iter().copied().chain(run.iter()).find(|h| !work_ok(h)) {
+        return Err(Refused::InvalidWork(h.height));
+    }
 
     let reach = reach_with(proof, settled);
     let reached: HashSet<u32> = reach.reached.iter().copied().collect();
-    let mut tied: BTreeMap<u32, Header> = proof.prefix.iter().map(|x| &x.header).filter(|h| reached.contains(&h.height))
-        .chain(suffix.iter().copied()).map(|h| (h.height, h.clone())).collect();
-    if genesis.is_some_and(|g| all[0].id != *g) { return Err(Refused::OtherGenesis) }
-    if !tied.get(&all[0].height).is_some_and(|h| h.id == all[0].id) { return Err(Refused::NotTiedFromStart) }
+    let mut tied: BTreeMap<u32, Header> = proof
+        .prefix
+        .iter()
+        .map(|x| &x.header)
+        .filter(|h| reached.contains(&h.height))
+        .chain(suffix.iter().copied())
+        .map(|h| (h.height, h.clone()))
+        .collect();
+    if genesis.is_some_and(|g| all[0].id != *g) {
+        return Err(Refused::OtherGenesis);
+    }
+    if !tied.get(&all[0].height).is_some_and(|h| h.id == all[0].id) {
+        return Err(Refused::NotTiedFromStart);
+    }
     let mut report = None;
     if let Some(first) = run.first() {
         let r = check_run(run, p).ok_or(Refused::NotOneRun)?;
-        if !r.wrong.is_empty() { return Err(Refused::WrongDifficulty(r.wrong)) }
-        if !tied.get(&first.height.wrapping_sub(1)).is_some_and(|h| h.id == first.parent_id) { return Err(Refused::RunNotTied) }
-        if let Some(h) = run.iter().find(|h| tied.get(&h.height).is_some_and(|t| t.id != h.id)) { return Err(Refused::RunLeavesProof(h.height)) }
+        if !r.wrong.is_empty() {
+            return Err(Refused::WrongDifficulty(r.wrong));
+        }
+        if !tied
+            .get(&first.height.wrapping_sub(1))
+            .is_some_and(|h| h.id == first.parent_id)
+        {
+            return Err(Refused::RunNotTied);
+        }
+        if let Some(h) = run
+            .iter()
+            .find(|h| tied.get(&h.height).is_some_and(|t| t.id != h.id))
+        {
+            return Err(Refused::RunLeavesProof(h.height));
+        }
         tied.extend(run.iter().map(|h| (h.height, h.clone())));
         report = Some(r);
     }
-    let tip = tied.values().next_back().cloned().ok_or(Refused::ProofShape(0))?;
+    let tip = tied
+        .values()
+        .next_back()
+        .cloned()
+        .ok_or(Refused::ProofShape(0))?;
     let work_unchecked = tied.values().filter(|h| before_v2(h)).count();
-    Ok(Evidence { tied, tip, run: report, unbound_on_path: reach.unbound, unreached: reach.unreached, work_unchecked,
-        work_checked_from: p.v2_activation_height })
+    Ok(Evidence {
+        tied,
+        tip,
+        run: report,
+        unbound_on_path: reach.unbound,
+        unreached: reach.unreached,
+        work_unchecked,
+        work_checked_from: p.v2_activation_height,
+    })
 }
 
 /// How two results were weighed.
@@ -123,33 +177,82 @@ pub struct Comparison {
 /// not be more than the sample the proofs were asked for.
 pub fn compare(a: &Evidence, b: &Evidence, k: usize) -> Comparison {
     let zero = || BigInt::from(0);
-    let common = a.tied.iter().rev().find(|(h, x)| b.tied.get(*h).is_some_and(|y| y.id == x.id)).map(|(h, _)| *h);
+    let common = a
+        .tied
+        .iter()
+        .rev()
+        .find(|(h, x)| b.tied.get(*h).is_some_and(|y| y.id == x.id))
+        .map(|(h, _)| *h);
     let Some(c) = common else {
-        return Comparison { common: None, basis: Basis::NoCommonHeader, ours: zero(), theirs: zero(), better: Ordering::Equal };
+        return Comparison {
+            common: None,
+            basis: Basis::NoCommonHeader,
+            ours: zero(),
+            theirs: zero(),
+            better: Ordering::Equal,
+        };
     };
-    let above = |e: &Evidence| -> Vec<Header> { e.tied.range(c + 1..).map(|(_, h)| h.clone()).collect() };
+    let above =
+        |e: &Evidence| -> Vec<Header> { e.tied.range(c + 1..).map(|(_, h)| h.clone()).collect() };
     let (ours, theirs) = (above(a), above(b));
     // a side holds every header above the common one when its run starts at or below the next height and ends at its tip
-    let in_run = |e: &Evidence| e.run.as_ref().is_some_and(|r| r.first_height <= c + 1 && r.last_height == e.tip.height);
+    let in_run = |e: &Evidence| {
+        e.run
+            .as_ref()
+            .is_some_and(|r| r.first_height <= c + 1 && r.last_height == e.tip.height)
+    };
     if ours.is_empty() || theirs.is_empty() {
         // One tip is the common header. The result that goes on from it is ahead only if what it adds is in its
         // run: headers a proof shows above another's tip state a difficulty nobody has checked.
-        let (ahead, added_in_run) = if ours.is_empty() { (theirs.len().cmp(&ours.len()).reverse(), in_run(b)) } else { (Ordering::Greater, in_run(a)) };
-        return if ours.is_empty() && theirs.is_empty() || added_in_run {
-            Comparison { common, basis: Basis::SameChain, ours: zero(), theirs: zero(), better: ahead }
+        let (ahead, added_in_run) = if ours.is_empty() {
+            (theirs.len().cmp(&ours.len()).reverse(), in_run(b))
         } else {
-            Comparison { common, basis: Basis::Undecided, ours: zero(), theirs: zero(), better: Ordering::Equal }
+            (Ordering::Greater, in_run(a))
+        };
+        return if ours.is_empty() && theirs.is_empty() || added_in_run {
+            Comparison {
+                common,
+                basis: Basis::SameChain,
+                ours: zero(),
+                theirs: zero(),
+                better: ahead,
+            }
+        } else {
+            Comparison {
+                common,
+                basis: Basis::Undecided,
+                ours: zero(),
+                theirs: zero(),
+                better: Ordering::Equal,
+            }
         };
     }
     // only headers whose work was checked are weighed
-    let weighed = |e: &Evidence, hs: Vec<Header>| -> Vec<Header> { hs.into_iter().filter(|h| h.height >= e.work_checked_from).collect() };
+    let weighed = |e: &Evidence, hs: Vec<Header>| -> Vec<Header> {
+        hs.into_iter()
+            .filter(|h| h.height >= e.work_checked_from)
+            .collect()
+    };
     let all_weighed = |e: &Evidence| c + 1 >= e.work_checked_from;
     let (ours, theirs) = (weighed(a, ours), weighed(b, theirs));
     if in_run(a) && in_run(b) && all_weighed(a) && all_weighed(b) {
         let sum = |hs: &[Header]| -> BigInt { hs.iter().map(difficulty).sum() };
-        let exact = |e: &Evidence| e.run.as_ref().and_then(|r| r.exact_from).is_some_and(|f| f <= c + 1);
+        let exact = |e: &Evidence| {
+            e.run
+                .as_ref()
+                .and_then(|r| r.exact_from)
+                .is_some_and(|f| f <= c + 1)
+        };
         let (x, y) = (sum(&ours), sum(&theirs));
-        return Comparison { common, basis: Basis::Run { exact: exact(a) && exact(b) }, better: x.cmp(&y), ours: x, theirs: y };
+        return Comparison {
+            common,
+            basis: Basis::Run {
+                exact: exact(a) && exact(b),
+            },
+            better: x.cmp(&y),
+            ours: x,
+            theirs: y,
+        };
     }
     let score = |hs: &[Header]| -> Option<BigInt> {
         let levels: Vec<u32> = hs.iter().filter_map(threshold::level).collect();
@@ -158,8 +261,20 @@ pub fn compare(a: &Evidence, b: &Evidence, k: usize) -> Comparison {
     // A count stands only with k headers under one threshold. A side with fewer has shown too little for its work
     // to be weighed: it neither wins nor loses, whatever the other side shows.
     match (score(&ours), score(&theirs)) {
-        (Some(x), Some(y)) => Comparison { common, basis: Basis::Count, better: x.cmp(&y), ours: x, theirs: y },
-        (x, y) => Comparison { common, basis: Basis::Undecided, ours: x.unwrap_or_else(zero), theirs: y.unwrap_or_else(zero), better: Ordering::Equal },
+        (Some(x), Some(y)) => Comparison {
+            common,
+            basis: Basis::Count,
+            better: x.cmp(&y),
+            ours: x,
+            theirs: y,
+        },
+        (x, y) => Comparison {
+            common,
+            basis: Basis::Undecided,
+            ours: x.unwrap_or_else(zero),
+            theirs: y.unwrap_or_else(zero),
+            better: Ordering::Equal,
+        },
     }
 }
 
@@ -169,13 +284,26 @@ pub fn compare(a: &Evidence, b: &Evidence, k: usize) -> Comparison {
 /// whenever some pair could not be decided. A result that nothing could be weighed against is not picked for
 /// having come first.
 pub fn pick(all: &[Evidence], k: usize) -> Option<(usize, Vec<Comparison>)> {
-    if all.is_empty() { return None }
+    if all.is_empty() {
+        return None;
+    }
     let mut best = 0;
     for i in 1..all.len() {
-        if compare(&all[i], &all[best], k).better == Ordering::Greater { best = i }
+        if compare(&all[i], &all[best], k).better == Ordering::Greater {
+            best = i
+        }
     }
     let against: Vec<Comparison> = all.iter().map(|e| compare(&all[best], e, k)).collect();
-    let ahead = |c: &Comparison| c.better == Ordering::Greater || (c.basis == Basis::SameChain && c.better == Ordering::Equal);
-    if against.iter().enumerate().any(|(i, c)| i != best && !ahead(c)) { return None }
+    let ahead = |c: &Comparison| {
+        c.better == Ordering::Greater
+            || (c.basis == Basis::SameChain && c.better == Ordering::Equal)
+    };
+    if against
+        .iter()
+        .enumerate()
+        .any(|(i, c)| i != best && !ahead(c))
+    {
+        return None;
+    }
     Some((best, against))
 }

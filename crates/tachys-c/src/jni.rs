@@ -32,7 +32,11 @@ unsafe fn function<F: Copy>(env: Env, place: usize) -> Option<F> {
     // SAFETY: the table a JVM hands over holds every place the specification names
     let entry: *const c_void = unsafe { *(*env).add(place) };
     // SAFETY: not null, and the caller's word for its type
-    if entry.is_null() { None } else { Some(unsafe { std::mem::transmute_copy::<*const c_void, F>(&entry) }) }
+    if entry.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute_copy::<*const c_void, F>(&entry) })
+    }
 }
 
 /// The bytes of a Java array, or `None` if the JVM would not hand them over.
@@ -40,9 +44,16 @@ unsafe fn function<F: Copy>(env: Env, place: usize) -> Option<F> {
 /// # Safety
 /// `env` is the JNI environment of the calling thread and `array` a live `byte[]` (or null).
 unsafe fn bytes(env: Env, array: Array) -> Option<Vec<u8>> {
-    if array.is_null() { return Some(vec![]) }
+    if array.is_null() {
+        return Some(vec![]);
+    }
     // SAFETY: the places and the types are the specification's
-    let (length, region) = unsafe { (function::<GetArrayLength>(env, GET_ARRAY_LENGTH)?, function::<GetByteArrayRegion>(env, GET_BYTE_ARRAY_REGION)?) };
+    let (length, region) = unsafe {
+        (
+            function::<GetArrayLength>(env, GET_ARRAY_LENGTH)?,
+            function::<GetByteArrayRegion>(env, GET_BYTE_ARRAY_REGION)?,
+        )
+    };
     // SAFETY: `array` is live for this call
     let n = unsafe { length(env, array) };
     let mut b = vec![0u8; usize::try_from(n).ok()?];
@@ -56,10 +67,19 @@ fn list(mut b: Vec<u8>) -> Option<Vec<String>> {
     let mut all = Vec::new();
     let mut good = true;
     for s in b.split_inclusive(|&c| c == 0) {
-        match std::str::from_utf8(s.strip_suffix(&[0]).unwrap_or(s)) { Ok(t) => all.push(t.to_string()), Err(_) => { good = false; break } }
+        match std::str::from_utf8(s.strip_suffix(&[0]).unwrap_or(s)) {
+            Ok(t) => all.push(t.to_string()),
+            Err(_) => {
+                good = false;
+                break;
+            }
+        }
     }
     b.zeroize();
-    if !good { all.iter_mut().for_each(Zeroize::zeroize); return None }
+    if !good {
+        all.iter_mut().for_each(Zeroize::zeroize);
+        return None;
+    }
     Some(all)
 }
 /// An answer as it crosses back.
@@ -70,7 +90,8 @@ fn packed(a: tachys::Answer) -> Vec<u8> {
     b.extend_from_slice(a.out.as_bytes());
     b.extend_from_slice(a.err.as_bytes());
     let (mut out, mut err) = (a.out, a.err);
-    out.zeroize(); err.zeroize();
+    out.zeroize();
+    err.zeroize();
     b
 }
 
@@ -79,21 +100,47 @@ fn packed(a: tachys::Answer) -> Vec<u8> {
 /// # Safety
 /// Called by a JVM as the native method it is declared as.
 #[no_mangle]
-pub unsafe extern "system" fn Java_org_tachys_wallet_Native_call(env: Env, _class: *mut c_void, args: Array, input: Array) -> Array {
+pub unsafe extern "system" fn Java_org_tachys_wallet_Native_call(
+    env: Env,
+    _class: *mut c_void,
+    args: Array,
+    input: Array,
+) -> Array {
     // nothing may unwind into the JVM
     let answer = std::panic::catch_unwind(|| {
         // SAFETY: `env` and the arrays are the JVM's own, live for this call
         let (args, input) = unsafe { (bytes(env, args), bytes(env, input)) };
         match (args.and_then(list), input.and_then(list)) {
             (Some(args), Some(input)) => crate::call(args, input),
-            (_, read) => { if let Some(mut lines) = read { lines.iter_mut().for_each(Zeroize::zeroize); } crate::failed(2, "the arguments or the input lines are not UTF-8") }
+            (_, read) => {
+                if let Some(mut lines) = read {
+                    lines.iter_mut().for_each(Zeroize::zeroize);
+                }
+                crate::failed(2, "the arguments or the input lines are not UTF-8")
+            }
         }
-    }).unwrap_or_else(|_| crate::failed(70, "the call panicked: a fault in tachys, not in what was asked"));
+    })
+    .unwrap_or_else(|_| {
+        crate::failed(
+            70,
+            "the call panicked: a fault in tachys, not in what was asked",
+        )
+    });
     let mut b = packed(answer);
     // SAFETY: as above; a null from `NewByteArray` is an OutOfMemoryError already raised in the JVM
     let made = unsafe {
-        match (function::<NewByteArray>(env, NEW_BYTE_ARRAY), function::<SetByteArrayRegion>(env, SET_BYTE_ARRAY_REGION), i32::try_from(b.len())) {
-            (Some(new), Some(set), Ok(n)) => { let array = new(env, n); if !array.is_null() { set(env, array, 0, n, b.as_ptr() as *const i8); } array }
+        match (
+            function::<NewByteArray>(env, NEW_BYTE_ARRAY),
+            function::<SetByteArrayRegion>(env, SET_BYTE_ARRAY_REGION),
+            i32::try_from(b.len()),
+        ) {
+            (Some(new), Some(set), Ok(n)) => {
+                let array = new(env, n);
+                if !array.is_null() {
+                    set(env, array, 0, n, b.as_ptr() as *const i8);
+                }
+                array
+            }
             _ => std::ptr::null_mut(),
         }
     };

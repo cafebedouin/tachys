@@ -23,7 +23,8 @@ sentence. This page says how.
 
    Both must be clean. CI runs the same, with the phone build and `cargo audit`.
 3. Keep to how the code is written (`AGENTS.md`, "If you are working on this repository", is the full list):
-   - long lines, on purpose; do not run `cargo fmt`;
+   - formatted with rustfmt, which CI checks: `cargo fmt -p tachys -p tachys-verify -p tachys-net -p tachys-c`
+     (never a bare `cargo fmt`: it would rewrite `vendor/`);
    - a command never ends the process, prints through `say!`/`complain!`, and reports through fields: a caller
      must never have to read a sentence to decide anything;
    - tests are named as sentences, need no network, and write only under the system's temporary directory;

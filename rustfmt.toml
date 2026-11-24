@@ -1,2 +1,4 @@
-# The code is written in long lines on purpose (AGENTS.md). This keeps a format-on-save from rewriting every file.
-disable_all_formatting = true
+# rustfmt's defaults, for the four tachys crates and the fuzz targets. The vendored codec under vendor/ is kept as
+# upstream wrote it and is never formatted: name the packages (`cargo fmt -p tachys -p tachys-verify -p tachys-net
+# -p tachys-c`), as CI does; a bare `cargo fmt` would rewrite vendor/ too.
+edition = "2021"

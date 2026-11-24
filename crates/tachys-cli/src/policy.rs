@@ -32,29 +32,57 @@ pub struct Ask {
     pub what: String,
 }
 
-pub fn path(state: &str) -> String { format!("{state}/policy.json") }
-pub fn log_path(state: &str) -> String { format!("{state}/payments.log") }
-pub fn present(state: &str) -> bool { std::path::Path::new(&path(state)).exists() }
+pub fn path(state: &str) -> String {
+    format!("{state}/policy.json")
+}
+pub fn log_path(state: &str) -> String {
+    format!("{state}/payments.log")
+}
+pub fn present(state: &str) -> bool {
+    std::path::Path::new(&path(state)).exists()
+}
 
 /// The rules a policy file may name.
-const KEYS: &[&str] = &["max_per_payment_nanoerg", "max_per_day_nanoerg", "allowed_payees", "allow_tokens", "token_limits"];
+const KEYS: &[&str] = &[
+    "max_per_payment_nanoerg",
+    "max_per_day_nanoerg",
+    "allowed_payees",
+    "allow_tokens",
+    "token_limits",
+];
 
 /// The limits applied to one request, given the log so far. Nothing is read or written here.
 pub fn check(policy: &serde_json::Value, log: &str, ask: &Ask, now_s: u64) -> Result<(), String> {
-    let Some(named) = policy.as_object() else { return Err("the policy file is not a JSON object".into()) };
+    let Some(named) = policy.as_object() else {
+        return Err("the policy file is not a JSON object".into());
+    };
     // a name this build does not know is a slip or a rule it cannot keep: `allowed_payee` for `allowed_payees` would
     // otherwise be a policy with no list of payees, which is one that lets anyone be paid
-    if let Some(k) = named.keys().find(|k| !KEYS.contains(&k.as_str())) { return Err(format!("the policy names \"{}\", which is not a rule this build knows ({}); nothing is signed while it is there", crate::util::clip(k, 40), KEYS.join(", "))) }
+    if let Some(k) = named.keys().find(|k| !KEYS.contains(&k.as_str())) {
+        return Err(format!("the policy names \"{}\", which is not a rule this build knows ({}); nothing is signed while it is there", crate::util::clip(k, 40), KEYS.join(", ")));
+    }
     let limit = |k: &str| -> Result<u64, String> {
-        match &policy[k] { serde_json::Value::Null => Ok(0), v => v.as_u64().ok_or(format!("the policy's {k} is not a whole number")) }
+        match &policy[k] {
+            serde_json::Value::Null => Ok(0),
+            v => v
+                .as_u64()
+                .ok_or(format!("the policy's {k} is not a whole number")),
+        }
     };
-    let (per_payment, per_day) = (limit("max_per_payment_nanoerg")?, limit("max_per_day_nanoerg")?);
+    let (per_payment, per_day) = (
+        limit("max_per_payment_nanoerg")?,
+        limit("max_per_day_nanoerg")?,
+    );
     // who may be paid
     match &policy["allowed_payees"] {
         serde_json::Value::Null => {}
         serde_json::Value::Array(list) => {
             if !list.is_empty() {
-                if let Some(p) = ask.payees.iter().find(|p| !list.iter().any(|a| a.as_str() == Some(p.as_str()))) {
+                if let Some(p) = ask
+                    .payees
+                    .iter()
+                    .find(|p| !list.iter().any(|a| a.as_str() == Some(p.as_str())))
+                {
                     return Err(format!("{p} is not on the policy's list of payees"));
                 }
             }
@@ -64,45 +92,77 @@ pub fn check(policy: &serde_json::Value, log: &str, ask: &Ask, now_s: u64) -> Re
     // what has left in the last 24 hours, from the log: a line that cannot be read is a reason to stop, not to count as nothing
     let (mut today, mut tokens_today): (u64, BTreeMap<String, u64>) = (0, BTreeMap::new());
     for line in log.lines().filter(|l| !l.trim().is_empty()) {
-        let e: serde_json::Value = serde_json::from_str(line).map_err(|_| "the payments log has a line that cannot be read; the daily limit cannot be checked".to_string())?;
-        let at = e["at"].as_u64().ok_or("the payments log has an entry with no time; the daily limit cannot be checked")?;
-        if now_s.saturating_sub(at) >= 86_400 { continue }
+        let e: serde_json::Value = serde_json::from_str(line).map_err(|_| {
+            "the payments log has a line that cannot be read; the daily limit cannot be checked"
+                .to_string()
+        })?;
+        let at = e["at"].as_u64().ok_or(
+            "the payments log has an entry with no time; the daily limit cannot be checked",
+        )?;
+        if now_s.saturating_sub(at) >= 86_400 {
+            continue;
+        }
         // an amount that is there and is not a whole number is a line that cannot be read, not a payment of nothing
         // (the second line a signature writes, with the transaction id, carries no amount and counts for nothing)
         today = today.saturating_add(match e.get("nanoerg") { None => 0, Some(n) => n.as_u64().ok_or("the payments log has an entry whose amount cannot be read; the daily limit cannot be checked")? });
         // as for nanoERG: tokens that are there and cannot be read (not a list, an entry with no id or no whole amount)
         // are a line that cannot be read, not a payment of no tokens
         const UNREAD: &str = "the payments log has an entry whose tokens cannot be read; the daily limit cannot be checked";
-        let listed = match e.get("tokens") { None | Some(serde_json::Value::Null) => &[][..], Some(serde_json::Value::Array(a)) => a.as_slice(), Some(_) => return Err(UNREAD.into()) };
+        let listed = match e.get("tokens") {
+            None | Some(serde_json::Value::Null) => &[][..],
+            Some(serde_json::Value::Array(a)) => a.as_slice(),
+            Some(_) => return Err(UNREAD.into()),
+        };
         for t in listed {
-            let (Some(id), Some(amount)) = (t["id"].as_str(), t["amount"].as_u64()) else { return Err(UNREAD.into()) };
+            let (Some(id), Some(amount)) = (t["id"].as_str(), t["amount"].as_u64()) else {
+                return Err(UNREAD.into());
+            };
             let n = tokens_today.entry(id.to_string()).or_default();
             *n = n.saturating_add(amount);
         }
     }
-    if ask.nano > per_payment { return Err(format!("over the per-payment limit: {} nanoERG would leave the wallet (fee included), {per_payment} allowed", ask.nano)) }
-    if today.saturating_add(ask.nano) > per_day { return Err(format!("over the daily limit: {today} nanoERG left in the last 24 h, {} asked, {per_day} allowed", ask.nano)) }
-    if !ask.tokens.is_empty() && policy["allow_tokens"].as_bool() != Some(true) { return Err("the policy does not allow tokens to leave the wallet".into()) }
+    if ask.nano > per_payment {
+        return Err(format!("over the per-payment limit: {} nanoERG would leave the wallet (fee included), {per_payment} allowed", ask.nano));
+    }
+    if today.saturating_add(ask.nano) > per_day {
+        return Err(format!("over the daily limit: {today} nanoERG left in the last 24 h, {} asked, {per_day} allowed", ask.nano));
+    }
+    if !ask.tokens.is_empty() && policy["allow_tokens"].as_bool() != Some(true) {
+        return Err("the policy does not allow tokens to leave the wallet".into());
+    }
     for (id, amount) in &ask.tokens {
         let l = &policy["token_limits"][id.as_str()];
         let (Some(pp), Some(pd)) = (l["per_payment"].as_u64(), l["per_day"].as_u64()) else {
             return Err(format!("the policy sets no limit for token {id}: add it to token_limits with per_payment and per_day, in raw units"));
         };
-        if *amount > pp { return Err(format!("over the per-payment limit for token {id}: {amount} units would leave the wallet, {pp} allowed")) }
+        if *amount > pp {
+            return Err(format!("over the per-payment limit for token {id}: {amount} units would leave the wallet, {pp} allowed"));
+        }
         let had = tokens_today.get(id).copied().unwrap_or(0);
-        if had.saturating_add(*amount) > pd { return Err(format!("over the daily limit for token {id}: {had} units left in the last 24 h, {amount} asked, {pd} allowed")) }
+        if had.saturating_add(*amount) > pd {
+            return Err(format!("over the daily limit for token {id}: {had} units left in the last 24 h, {amount} asked, {pd} allowed"));
+        }
     }
     Ok(())
 }
 
-fn now_s() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) }
+fn now_s() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 /// Hold a signature to the policy, if the wallet has one. `Ok(false)`: no policy file, nothing to hold it to.
 /// `Ok(true)`: within the limits, and (unless `dry`) written to the log, so it counts from now on whether or
 /// not the payment goes through. The log must already exist: a missing log is not an empty one.
 pub fn reserve(state: &str, ask: &Ask, dry: bool) -> Result<bool, String> {
-    if !present(state) { return Ok(false) }
-    let policy: serde_json::Value = std::fs::read_to_string(path(state)).ok().and_then(|t| serde_json::from_str(&t).ok())
+    if !present(state) {
+        return Ok(false);
+    }
+    let policy: serde_json::Value = std::fs::read_to_string(path(state))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
         .ok_or("the policy file cannot be read; nothing is signed while it is in that state")?;
     let lp = log_path(state);
     let mut f = std::fs::OpenOptions::new().read(true).append(true).open(&lp)
@@ -110,23 +170,44 @@ pub fn reserve(state: &str, ask: &Ask, dry: bool) -> Result<bool, String> {
     // one signer at a time: the total is read and the new entry written under the same lock
     f.lock().map_err(|e| format!("payments log: {e}"))?;
     let mut log = String::new();
-    f.seek(SeekFrom::Start(0)).and_then(|_| f.read_to_string(&mut log)).map_err(|e| format!("payments log: {e}"))?;
+    f.seek(SeekFrom::Start(0))
+        .and_then(|_| f.read_to_string(&mut log))
+        .map_err(|e| format!("payments log: {e}"))?;
     let now = now_s();
     check(&policy, &log, ask, now)?;
     if !dry {
         let entry = serde_json::json!({ "at": now, "nanoerg": ask.nano, "to": ask.payees, "purpose": ask.purpose, "what": ask.what,
             "tokens": ask.tokens.iter().map(|(id, amount)| serde_json::json!({ "id": id, "amount": amount })).collect::<Vec<_>>() });
-        let lead = if log.is_empty() || log.ends_with('\n') { "" } else { "\n" };
-        f.write_all(format!("{lead}{entry}\n").as_bytes()).and_then(|_| f.sync_all()).map_err(|e| format!("the payment could not be written to the log, so it is not made: {e}"))?;
+        let lead = if log.is_empty() || log.ends_with('\n') {
+            ""
+        } else {
+            "\n"
+        };
+        f.write_all(format!("{lead}{entry}\n").as_bytes())
+            .and_then(|_| f.sync_all())
+            .map_err(|e| {
+                format!("the payment could not be written to the log, so it is not made: {e}")
+            })?;
     }
     Ok(true)
 }
 
 /// A line for the record that counts for nothing: which transaction a reserved entry became.
 pub fn note(state: &str, tx: &str, receipt: &str) {
-    if !present(state) { return }
-    if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(log_path(state)) {
-        if f.lock().is_ok() { let _ = writeln!(f, "{}", serde_json::json!({ "at": now_s(), "nanoerg": 0, "signed": tx, "receipt": receipt })); }
+    if !present(state) {
+        return;
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .append(true)
+        .open(log_path(state))
+    {
+        if f.lock().is_ok() {
+            let _ = writeln!(
+                f,
+                "{}",
+                serde_json::json!({ "at": now_s(), "nanoerg": 0, "signed": tx, "receipt": receipt })
+            );
+        }
     }
 }
 
@@ -138,28 +219,70 @@ mod tests {
     fn policy() -> serde_json::Value {
         serde_json::json!({ "max_per_payment_nanoerg": 50_000_000u64, "max_per_day_nanoerg": 100_000_000u64, "allowed_payees": [], "allow_tokens": false })
     }
-    fn ask(nano: u64) -> Ask { Ask { nano, payees: vec!["9payee".into()], ..Default::default() } }
-    fn line(ago: u64, nano: u64) -> String { format!("{}\n", serde_json::json!({ "at": NOW - ago, "nanoerg": nano })) }
+    fn ask(nano: u64) -> Ask {
+        Ask {
+            nano,
+            payees: vec!["9payee".into()],
+            ..Default::default()
+        }
+    }
+    fn line(ago: u64, nano: u64) -> String {
+        format!(
+            "{}\n",
+            serde_json::json!({ "at": NOW - ago, "nanoerg": nano })
+        )
+    }
 
     #[test]
     fn two_signers_at_once_cannot_both_pass_on_the_same_daily_total() {
         // 60 of the day's 100 are spent; each of two payments of 30 fits alone, both do not. Started together, each reads
         // the log and writes its entry under the log's lock, so exactly one passes, every time
         for round in 0..20 {
-            let st = std::env::temp_dir().join(format!("tachys-policy-{}-{round}", std::process::id()));
+            let st =
+                std::env::temp_dir().join(format!("tachys-policy-{}-{round}", std::process::id()));
             let _ = std::fs::remove_dir_all(&st);
             std::fs::create_dir_all(&st).unwrap();
             let st = st.to_string_lossy().to_string();
             std::fs::write(path(&st), policy().to_string()).unwrap();
-            std::fs::write(log_path(&st), format!("{}\n", serde_json::json!({ "at": now_s(), "nanoerg": 60_000_000u64 }))).unwrap();
+            std::fs::write(
+                log_path(&st),
+                format!(
+                    "{}\n",
+                    serde_json::json!({ "at": now_s(), "nanoerg": 60_000_000u64 })
+                ),
+            )
+            .unwrap();
             let go = std::sync::Arc::new(std::sync::Barrier::new(2));
-            let signers: Vec<_> = (0..2).map(|_| { let (st, go) = (st.clone(), go.clone()); std::thread::spawn(move || { go.wait(); reserve(&st, &ask(30_000_000), false) }) }).collect();
-            let results: Vec<Result<bool, String>> = signers.into_iter().map(|t| t.join().unwrap()).collect();
+            let signers: Vec<_> = (0..2)
+                .map(|_| {
+                    let (st, go) = (st.clone(), go.clone());
+                    std::thread::spawn(move || {
+                        go.wait();
+                        reserve(&st, &ask(30_000_000), false)
+                    })
+                })
+                .collect();
+            let results: Vec<Result<bool, String>> =
+                signers.into_iter().map(|t| t.join().unwrap()).collect();
             let passed = results.iter().filter(|r| matches!(r, Ok(true))).count();
-            assert_eq!(passed, 1, "round {round}: exactly one of two signers passes: {results:?}");
-            assert!(results.iter().any(|r| r.as_ref().is_err_and(|e| e.contains("daily"))), "round {round}: the other is over the daily limit: {results:?}");
-            let entries = std::fs::read_to_string(log_path(&st)).unwrap().lines().count();
-            assert_eq!(entries, 2, "round {round}: one entry written, beside the one before");
+            assert_eq!(
+                passed, 1,
+                "round {round}: exactly one of two signers passes: {results:?}"
+            );
+            assert!(
+                results
+                    .iter()
+                    .any(|r| r.as_ref().is_err_and(|e| e.contains("daily"))),
+                "round {round}: the other is over the daily limit: {results:?}"
+            );
+            let entries = std::fs::read_to_string(log_path(&st))
+                .unwrap()
+                .lines()
+                .count();
+            assert_eq!(
+                entries, 2,
+                "round {round}: one entry written, beside the one before"
+            );
             let _ = std::fs::remove_dir_all(&st);
         }
     }
@@ -168,10 +291,14 @@ mod tests {
     fn erg_limits_count_the_fee_and_the_day() {
         let p = policy();
         assert!(check(&p, "", &ask(50_000_000), NOW).is_ok());
-        assert!(check(&p, "", &ask(50_000_001), NOW).unwrap_err().contains("per-payment"));
+        assert!(check(&p, "", &ask(50_000_001), NOW)
+            .unwrap_err()
+            .contains("per-payment"));
         let log = line(3600, 40_000_000) + &line(7200, 40_000_000);
         assert!(check(&p, &log, &ask(20_000_000), NOW).is_ok());
-        assert!(check(&p, &log, &ask(20_000_001), NOW).unwrap_err().contains("daily"));
+        assert!(check(&p, &log, &ask(20_000_001), NOW)
+            .unwrap_err()
+            .contains("daily"));
         // what left more than a day ago no longer counts
         let old = line(86_400, 90_000_000);
         assert!(check(&p, &old, &ask(50_000_000), NOW).is_ok());
@@ -180,7 +307,13 @@ mod tests {
     #[test]
     fn a_policy_with_no_limits_allows_nothing() {
         assert!(check(&serde_json::json!({}), "", &ask(1), NOW).is_err());
-        assert!(check(&serde_json::json!({ "max_per_payment_nanoerg": "lots" }), "", &ask(1), NOW).is_err());
+        assert!(check(
+            &serde_json::json!({ "max_per_payment_nanoerg": "lots" }),
+            "",
+            &ask(1),
+            NOW
+        )
+        .is_err());
         assert!(check(&serde_json::json!([]), "", &ask(1), NOW).is_err());
     }
 
@@ -191,23 +324,36 @@ mod tests {
         p.as_object_mut().unwrap().remove("allowed_payees");
         p["allowed_payee"] = serde_json::json!(["9friend"]);
         let e = check(&p, "", &ask(1_000_000), NOW).unwrap_err();
-        assert!(e.contains("allowed_payee\"") && e.contains("not a rule"), "{e}");
+        assert!(
+            e.contains("allowed_payee\"") && e.contains("not a rule"),
+            "{e}"
+        );
         // and so for any other name, whatever it holds
-        let mut p = policy(); p["note"] = serde_json::json!("for the bot");
-        assert!(check(&p, "", &ask(1_000_000), NOW).unwrap_err().contains("not a rule"));
+        let mut p = policy();
+        p["note"] = serde_json::json!("for the bot");
+        assert!(check(&p, "", &ask(1_000_000), NOW)
+            .unwrap_err()
+            .contains("not a rule"));
         // every rule there is, named, is still a policy
-        let mut p = policy(); p["token_limits"] = serde_json::json!({});
+        let mut p = policy();
+        p["token_limits"] = serde_json::json!({});
         assert!(check(&p, "", &ask(1_000_000), NOW).is_ok());
     }
 
     #[test]
     fn a_log_that_cannot_be_read_stops_payments() {
         let p = policy();
-        assert!(check(&p, "not json\n", &ask(1), NOW).unwrap_err().contains("cannot be read"));
-        assert!(check(&p, "{\"nanoerg\":5}\n", &ask(1), NOW).unwrap_err().contains("no time"));
+        assert!(check(&p, "not json\n", &ask(1), NOW)
+            .unwrap_err()
+            .contains("cannot be read"));
+        assert!(check(&p, "{\"nanoerg\":5}\n", &ask(1), NOW)
+            .unwrap_err()
+            .contains("no time"));
         // sums that would wrap are held at the top, not wrapped round to nothing
         let huge = line(10, u64::MAX) + &line(20, u64::MAX);
-        assert!(check(&p, &huge, &ask(1), NOW).unwrap_err().contains("daily"));
+        assert!(check(&p, &huge, &ask(1), NOW)
+            .unwrap_err()
+            .contains("daily"));
     }
 
     #[test]
@@ -215,16 +361,41 @@ mod tests {
         let mut p = policy();
         p["allow_tokens"] = serde_json::json!(true);
         p["token_limits"] = serde_json::json!({ T: { "per_payment": 500, "per_day": 800 } });
-        let mut a = ask(2_100_000); a.tokens.insert(T.into(), 400);
-        let entry = |tokens: serde_json::Value| format!("{}\n", serde_json::json!({ "at": NOW - 60, "nanoerg": 2_100_000, "tokens": tokens }));
+        let mut a = ask(2_100_000);
+        a.tokens.insert(T.into(), 400);
+        let entry = |tokens: serde_json::Value| {
+            format!(
+                "{}\n",
+                serde_json::json!({ "at": NOW - 60, "nanoerg": 2_100_000, "tokens": tokens })
+            )
+        };
         // 700 of the day's 800 left an hour ago: 400 more is over. Read as nothing, that entry would let them through
-        assert!(check(&p, &entry(serde_json::json!([{ "id": T, "amount": 700 }])), &a, NOW).unwrap_err().contains("daily limit for token"));
-        for unread in [serde_json::json!([{ "id": T, "amount": "700" }]), serde_json::json!([{ "id": T, "amount": -1 }]), serde_json::json!([{ "id": T }]),
-            serde_json::json!([{ "amount": 700 }]), serde_json::json!([700]), serde_json::json!("700"), serde_json::json!({ T: 700 })] {
+        assert!(check(
+            &p,
+            &entry(serde_json::json!([{ "id": T, "amount": 700 }])),
+            &a,
+            NOW
+        )
+        .unwrap_err()
+        .contains("daily limit for token"));
+        for unread in [
+            serde_json::json!([{ "id": T, "amount": "700" }]),
+            serde_json::json!([{ "id": T, "amount": -1 }]),
+            serde_json::json!([{ "id": T }]),
+            serde_json::json!([{ "amount": 700 }]),
+            serde_json::json!([700]),
+            serde_json::json!("700"),
+            serde_json::json!({ T: 700 }),
+        ] {
             let e = check(&p, &entry(unread.clone()), &a, NOW).unwrap_err();
             assert!(e.contains("tokens cannot be read"), "{unread}: {e}");
             // and it stops a payment of ERG alone as well: the line is one that cannot be read
-            assert!(check(&p, &entry(unread.clone()), &ask(1_000_000), NOW).unwrap_err().contains("tokens cannot be read"), "{unread}");
+            assert!(
+                check(&p, &entry(unread.clone()), &ask(1_000_000), NOW)
+                    .unwrap_err()
+                    .contains("tokens cannot be read"),
+                "{unread}"
+            );
         }
         // an entry with no tokens, or the transaction-id line a signature adds, still counts for none
         assert!(check(&p, &entry(serde_json::json!([])), &a, NOW).is_ok());
@@ -236,11 +407,17 @@ mod tests {
     fn payees_are_held_to_the_list() {
         let mut p = policy();
         p["allowed_payees"] = serde_json::json!(["9friend"]);
-        assert!(check(&p, "", &ask(1_000_000), NOW).unwrap_err().contains("not on the policy's list"));
-        let mut a = ask(1_000_000); a.payees = vec!["9friend".into()];
+        assert!(check(&p, "", &ask(1_000_000), NOW)
+            .unwrap_err()
+            .contains("not on the policy's list"));
+        let mut a = ask(1_000_000);
+        a.payees = vec!["9friend".into()];
         assert!(check(&p, "", &a, NOW).is_ok());
         a.payees.push("9stranger".into());
-        assert!(check(&p, "", &a, NOW).is_err(), "every payee of a payment must be listed");
+        assert!(
+            check(&p, "", &a, NOW).is_err(),
+            "every payee of a payment must be listed"
+        );
         p["allowed_payees"] = serde_json::json!("9friend");
         assert!(check(&p, "", &a, NOW).unwrap_err().contains("not a list"));
     }
@@ -248,16 +425,28 @@ mod tests {
     #[test]
     fn tokens_need_leave_and_a_limit_of_their_own() {
         let mut p = policy();
-        let mut a = ask(2_100_000); a.tokens.insert(T.into(), 900_000_000_000_000_000);
-        assert!(check(&p, "", &a, NOW).unwrap_err().contains("does not allow tokens"));
+        let mut a = ask(2_100_000);
+        a.tokens.insert(T.into(), 900_000_000_000_000_000);
+        assert!(check(&p, "", &a, NOW)
+            .unwrap_err()
+            .contains("does not allow tokens"));
         p["allow_tokens"] = serde_json::json!(true);
-        assert!(check(&p, "", &a, NOW).unwrap_err().contains("sets no limit for token"));
+        assert!(check(&p, "", &a, NOW)
+            .unwrap_err()
+            .contains("sets no limit for token"));
         p["token_limits"] = serde_json::json!({ T: { "per_payment": 500, "per_day": 800 } });
-        assert!(check(&p, "", &a, NOW).unwrap_err().contains("per-payment limit for token"));
+        assert!(check(&p, "", &a, NOW)
+            .unwrap_err()
+            .contains("per-payment limit for token"));
         a.tokens.insert(T.into(), 500);
         assert!(check(&p, "", &a, NOW).is_ok());
-        let log = format!("{}\n", serde_json::json!({ "at": NOW - 60, "nanoerg": 2_100_000, "tokens": [{ "id": T, "amount": 400 }] }));
-        assert!(check(&p, &log, &a, NOW).unwrap_err().contains("daily limit for token"));
+        let log = format!(
+            "{}\n",
+            serde_json::json!({ "at": NOW - 60, "nanoerg": 2_100_000, "tokens": [{ "id": T, "amount": 400 }] })
+        );
+        assert!(check(&p, &log, &a, NOW)
+            .unwrap_err()
+            .contains("daily limit for token"));
         a.tokens.insert(T.into(), 400);
         assert!(check(&p, &log, &a, NOW).is_ok());
     }
@@ -268,18 +457,41 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let state = dir.to_string_lossy().to_string();
-        assert_eq!(reserve(&state, &ask(1), false), Ok(false), "no policy file: nothing to hold it to");
+        assert_eq!(
+            reserve(&state, &ask(1), false),
+            Ok(false),
+            "no policy file: nothing to hold it to"
+        );
         std::fs::write(path(&state), policy().to_string()).unwrap();
-        assert!(reserve(&state, &ask(1), false).unwrap_err().contains("no payments log"));
+        assert!(reserve(&state, &ask(1), false)
+            .unwrap_err()
+            .contains("no payments log"));
         std::fs::write(log_path(&state), "").unwrap();
         assert_eq!(reserve(&state, &ask(40_000_000), true), Ok(true));
-        assert_eq!(std::fs::read_to_string(log_path(&state)).unwrap(), "", "a dry run writes nothing");
+        assert_eq!(
+            std::fs::read_to_string(log_path(&state)).unwrap(),
+            "",
+            "a dry run writes nothing"
+        );
         assert_eq!(reserve(&state, &ask(40_000_000), false), Ok(true));
         assert_eq!(reserve(&state, &ask(40_000_000), false), Ok(true));
-        assert!(reserve(&state, &ask(40_000_000), false).unwrap_err().contains("daily"), "the third would pass 100000000 in a day");
-        assert_eq!(std::fs::read_to_string(log_path(&state)).unwrap().lines().count(), 2);
+        assert!(
+            reserve(&state, &ask(40_000_000), false)
+                .unwrap_err()
+                .contains("daily"),
+            "the third would pass 100000000 in a day"
+        );
+        assert_eq!(
+            std::fs::read_to_string(log_path(&state))
+                .unwrap()
+                .lines()
+                .count(),
+            2
+        );
         std::fs::write(path(&state), "{ not json").unwrap();
-        assert!(reserve(&state, &ask(1), false).unwrap_err().contains("cannot be read"));
+        assert!(reserve(&state, &ask(1), false)
+            .unwrap_err()
+            .contains("cannot be read"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

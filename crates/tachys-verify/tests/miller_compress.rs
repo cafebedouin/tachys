@@ -6,7 +6,9 @@
 //! ground truth comes separately from a real mainnet proof (`tests/miller_real_levels.rs`).
 
 use num_bigint::BigInt;
-use tachys_verify::miller::{compress, nipopow_level, Blk, CHI_UNCOMPRESSED, K_SAMPLING, K_UNSTABLE};
+use tachys_verify::miller::{
+    compress, nipopow_level, Blk, CHI_UNCOMPRESSED, K_SAMPLING, K_UNSTABLE,
+};
 
 /// splitmix64 — a uniform 64-bit value from the height. Its trailing-zero count is geometric(1/2): half
 /// of blocks reach level ≥1, a quarter ≥2, …, as PoW hits distribute. Deterministic, so runs reproduce.
@@ -21,7 +23,13 @@ fn mix(h: u32) -> u64 {
 /// unit; the size property is about block counts per level, not work.
 fn chain(n: u32) -> Vec<Blk> {
     let mut c = Vec::with_capacity(n as usize + 1);
-    c.push(Blk { id: 0, parent: 0, height: 0, level: 40, difficulty: BigInt::from(0) });
+    c.push(Blk {
+        id: 0,
+        parent: 0,
+        height: 0,
+        level: 40,
+        difficulty: BigInt::from(0),
+    });
     for h in 1..=n {
         c.push(Blk {
             id: h as u64,
@@ -51,11 +59,12 @@ fn proof_size_grows_with_log_not_length() {
 
     let two_k = 2 * K_SAMPLING as usize;
     for (n, d, _total) in &rows {
-        let compressible = (*n as usize).saturating_sub(CHI_UNCOMPRESSED as usize + K_UNSTABLE as usize);
+        let compressible =
+            (*n as usize).saturating_sub(CHI_UNCOMPRESSED as usize + K_UNSTABLE as usize);
         let ell = nipopow_level(compressible, K_SAMPLING) as usize;
         let levels = ell + 1; // levels 0..=ℓ
-        // The sampled part stays in the paper's envelope: ≥ 2K, and ≤ ~3K per level plus top-level slack
-        // (D[ℓ] keeps *all* ℓ-blocks, up to ~4K).
+                              // The sampled part stays in the paper's envelope: ≥ 2K, and ≤ ~3K per level plus top-level slack
+                              // (D[ℓ] keeps *all* ℓ-blocks, up to ~4K).
         assert!(*d >= two_k, "|D|={d} should be ≥ 2K={two_k}");
         assert!(
             *d <= 3 * K_SAMPLING as usize * levels + 4 * K_SAMPLING as usize,
@@ -74,12 +83,18 @@ fn proof_size_grows_with_log_not_length() {
             increment <= 3 * K_SAMPLING as usize + two_k,
             "doubling |C| {n0}→{n1} grew |D| by {increment}, more than one level (~2K–3K): not O(log)"
         );
-        assert!(d1 < d0 * 2, "|D| nearly doubled ({d0}→{d1}): that is O(|C|), not O(log|C|)");
+        assert!(
+            d1 < d0 * 2,
+            "|D| nearly doubled ({d0}→{d1}): that is O(|C|), not O(log|C|)"
+        );
     }
 
     // Succinctness is asymptotic: at the largest length the whole proof is two orders below the chain.
     let (n_big, _, total_big) = *rows.last().unwrap();
-    assert!(total_big * 50 < n_big as usize, "at |C|={n_big} the proof {total_big} should be « |C|");
+    assert!(
+        total_big * 50 < n_big as usize,
+        "at |C|={n_big} the proof {total_big} should be « |C|"
+    );
 }
 
 #[test]
@@ -98,6 +113,13 @@ fn compress_is_succinct_at_mainnet_height() {
     );
     // ℓ ≈ ⌊log2(|C⋆|/416)⌋ ≈ 12 (sampled levels 0..=ℓ); proof ~10k–15k headers vs a 1.9M-block chain.
     assert!((10..=13).contains(&ell), "ℓ={ell} off expected ~12");
-    assert!(p.len() < 20_000, "proof {} should be well under 20k headers", p.len());
-    assert!(p.len() * 100 < 1_918_185, "proof must be two orders below the chain");
+    assert!(
+        p.len() < 20_000,
+        "proof {} should be well under 20k headers",
+        p.len()
+    );
+    assert!(
+        p.len() * 100 < 1_918_185,
+        "proof must be two orders below the chain"
+    );
 }

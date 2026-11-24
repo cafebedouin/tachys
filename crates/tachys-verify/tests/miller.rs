@@ -9,8 +9,8 @@
 //! - `compare` (Miller, accumulated difficulty): prefers the HONEST chain. Right.
 
 use num_bigint::BigInt;
-use tachys_verify::miller::{compare, Blk, MillerProof, K_UNSTABLE};
 use std::cmp::Ordering;
+use tachys_verify::miller::{compare, Blk, MillerProof, K_UNSTABLE};
 
 /// Superblock level of the i-th block (1-based), from the rarity of its PoW hit: half of blocks reach
 /// level ≥1, a quarter level ≥2, and so on. Modelled deterministically as the trailing-zero count, which
@@ -22,7 +22,13 @@ fn level(i_1based: u32) -> u32 {
 /// A branch of `n` blocks each at difficulty `diff`, all children of the shared genesis (id 0), with
 /// ids in a private range so the two branches share only the genesis.
 fn branch(n: u32, diff: u64, id_base: u64) -> MillerProof {
-    let genesis = Blk { id: 0, parent: 0, height: 0, level: 0, difficulty: BigInt::from(0) };
+    let genesis = Blk {
+        id: 0,
+        parent: 0,
+        height: 0,
+        level: 0,
+        difficulty: BigInt::from(0),
+    };
     let mut d = vec![genesis];
     for i in 1..=n {
         d.push(Blk {
@@ -33,7 +39,11 @@ fn branch(n: u32, diff: u64, id_base: u64) -> MillerProof {
             difficulty: BigInt::from(diff),
         });
     }
-    MillerProof { d, x: vec![], omega: vec![] }
+    MillerProof {
+        d,
+        x: vec![],
+        omega: vec![],
+    }
 }
 
 #[test]
@@ -54,7 +64,11 @@ fn count_and_work_disagree_and_miller_picks_work() {
 
     // Miller's comparator prefers the honest chain. (Greater = first arg is the heavier chain.)
     let (ord, _enough) = compare(&honest, &adversary, 0);
-    assert_eq!(ord, Ordering::Greater, "Miller must rank the heavier-work honest chain first");
+    assert_eq!(
+        ord,
+        Ordering::Greater,
+        "Miller must rank the heavier-work honest chain first"
+    );
 
     // And it is antisymmetric: swapping the arguments flips the verdict.
     let (ord_rev, _) = compare(&adversary, &honest, 0);
@@ -84,12 +98,26 @@ fn k_depth_flag_reflects_post_lca_block_count() {
 #[test]
 fn a_block_at_level_sixty_four_or_more_is_weighed_without_overflow() {
     // `2^µ` was a shift of a u64, which overflows from level 64 (a panic in a debug build, a wrong weight in a release one)
-    let blk = |id: u64, level: u32| Blk { id, parent: id.saturating_sub(1), height: id as u32, level, difficulty: BigInt::from(1) };
-    let p = MillerProof { d: vec![blk(0, 0), blk(1, 64), blk(2, 70)], x: vec![], omega: vec![] };
+    let blk = |id: u64, level: u32| Blk {
+        id,
+        parent: id.saturating_sub(1),
+        height: id as u32,
+        level,
+        difficulty: BigInt::from(1),
+    };
+    let p = MillerProof {
+        d: vec![blk(0, 0), blk(1, 64), blk(2, 70)],
+        x: vec![],
+        omega: vec![],
+    };
     // level 70 holds one block: 2^70 · 1, the largest of the levels
     assert_eq!(p.best_arg(), BigInt::from(1u64) << 70usize);
     // with m = 1 every level up to 70 has a block: the same
     assert_eq!(p.best_arg_m(1), BigInt::from(1u64) << 70usize);
-    let at64 = MillerProof { d: vec![blk(0, 64)], x: vec![], omega: vec![] };
+    let at64 = MillerProof {
+        d: vec![blk(0, 64)],
+        x: vec![],
+        omega: vec![],
+    };
     assert_eq!(at64.best_arg(), BigInt::from(1u64) << 64usize);
 }

@@ -20,28 +20,55 @@ pub(crate) struct Own {
     pub(crate) turns: Mutex<std::collections::HashMap<String, (std::fs::File, usize)>>,
 }
 impl Own {
-    pub(crate) fn new() -> Arc<Own> { Arc::new(Own { calls: Mutex::new(Vec::new()), net: RwLock::new(&crate::network::MAINNET), wire: tachys_net::Own::default(), http: OnceLock::new(), http_quick: OnceLock::new(), turns: Mutex::new(std::collections::HashMap::new()) }) }
+    pub(crate) fn new() -> Arc<Own> {
+        Arc::new(Own {
+            calls: Mutex::new(Vec::new()),
+            net: RwLock::new(&crate::network::MAINNET),
+            wire: tachys_net::Own::default(),
+            http: OnceLock::new(),
+            http_quick: OnceLock::new(),
+            turns: Mutex::new(std::collections::HashMap::new()),
+        })
+    }
 }
 static SHARED: LazyLock<Arc<Own>> = LazyLock::new(Own::new);
 thread_local! { static OWN: RefCell<Option<Arc<Own>>> = const { RefCell::new(None) }; }
 
 /// The call this thread works for.
-pub(crate) fn own() -> Arc<Own> { OWN.with(|o| o.borrow().clone()).unwrap_or_else(|| SHARED.clone()) }
+pub(crate) fn own() -> Arc<Own> {
+    OWN.with(|o| o.borrow().clone())
+        .unwrap_or_else(|| SHARED.clone())
+}
 
 /// This thread works for `own` from here on: a thread of the call's runtime, which ends with the call.
-pub(crate) fn join(own: &Arc<Own>) { own.wire.enter(); OWN.with(|o| *o.borrow_mut() = Some(own.clone())); }
+pub(crate) fn join(own: &Arc<Own>) {
+    own.wire.enter();
+    OWN.with(|o| *o.borrow_mut() = Some(own.clone()));
+}
 
 /// The calling thread works for `own` until this is dropped, and then for what it worked for before.
 pub(crate) struct Entered(Option<Arc<Own>>, Option<tachys_net::Own>);
-pub(crate) fn enter(own: &Arc<Own>) -> Entered { let wire = own.wire.enter(); Entered(OWN.with(|o| o.replace(Some(own.clone()))), wire) }
-impl Drop for Entered { fn drop(&mut self) { OWN.with(|o| *o.borrow_mut() = self.0.take()); tachys_net::Own::leave(self.1.take()); } }
+pub(crate) fn enter(own: &Arc<Own>) -> Entered {
+    let wire = own.wire.enter();
+    Entered(OWN.with(|o| o.replace(Some(own.clone()))), wire)
+}
+impl Drop for Entered {
+    fn drop(&mut self) {
+        OWN.with(|o| *o.borrow_mut() = self.0.take());
+        tachys_net::Own::leave(self.1.take());
+    }
+}
 
 /// For a test that runs a command's parts on a runtime it makes: one whose threads work for a call of their own, as
 /// the threads of `crate::call`'s do, so that two such tests side by side do not write one answer.
 #[cfg(test)]
 pub(crate) fn runtime_of_its_own() -> tokio::runtime::Runtime {
     let own = Own::new();
-    tokio::runtime::Builder::new_multi_thread().enable_all().on_thread_start(move || join(&own)).build().unwrap()
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .on_thread_start(move || join(&own))
+        .build()
+        .unwrap()
 }
 
 #[cfg(test)]
@@ -55,7 +82,11 @@ mod tests {
     fn a_thread_the_runtime_keeps_for_blocking_work_belongs_to_the_call_too() {
         let mine = Own::new();
         let theirs = mine.clone();
-        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().on_thread_start(move || join(&theirs)).build().unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .on_thread_start(move || join(&theirs))
+            .build()
+            .unwrap();
         let (on_worker, on_blocking) = rt.block_on(async {
             let w = tokio::spawn(async { own() }).await.unwrap();
             let b = tokio::task::spawn_blocking(own).await.unwrap();
@@ -63,6 +94,9 @@ mod tests {
         });
         assert!(Arc::ptr_eq(&on_worker, &mine), "a worker thread");
         assert!(Arc::ptr_eq(&on_blocking, &mine), "a blocking-pool thread");
-        assert!(!Arc::ptr_eq(&own(), &mine), "and not a thread the call never had");
+        assert!(
+            !Arc::ptr_eq(&own(), &mine),
+            "and not a thread the call never had"
+        );
     }
 }

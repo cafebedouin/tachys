@@ -34,7 +34,9 @@ More: `docs/agents.md`. The fields of every answer: `docs/json.md`.
   on a busy machine, so if only those fail, run them alone: `cargo test -p ergo-p2p --lib`), and
   `cargo clippy -p tachys -p tachys-verify -p tachys-net -p tachys-c --all-targets -- -D warnings` must be clean. The
   vendored codec under `vendor/` is kept as upstream wrote it: do not reformat or lint it.
-- The code is written in long lines on purpose and is not rustfmt-formatted. Do not run `cargo fmt`.
+- The four tachys crates are rustfmt-formatted, and CI checks it: run
+  `cargo fmt -p tachys -p tachys-verify -p tachys-net -p tachys-c` before a commit. Never a bare `cargo fmt`, which
+  would rewrite `vendor/` too.
 - A command never ends the process, prints through `say!`/`complain!` (never `println!`), and reports through
   fields (`out::set`). A caller must never have to read a sentence to decide anything.
 - A new option is known as soon as some command reads it (`build.rs` gathers them); there is no list to update.
