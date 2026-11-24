@@ -67,7 +67,7 @@ sigma-rust or the codec.
 
 - **The answers the app reads** are kept in `vectors/app/`, and held from both sides: the core's tests make each
   again and fail if a field of one is renamed, retyped or gone (`crates/tachys-cli/tests/cli.rs`), and the app's
-  tests read them as the app does (`android/app/src/test`, `./gradlew testDebugUnitTest`). If the core's test fails on
+  tests read them as the app does (`android/shared/src/desktopTest`, `./gradlew :shared:desktopTest`). If the core's test fails on
   a change that is meant, it prints the new answer: put it in the file, and make the app's tests pass on it.
 - **JSON answers** carry `v` (now 1). Adding a field is free. Renaming, retyping or removing one, or changing what
   a `code` means, is a new `v`: say so in a finding, change `out::V`, and keep the test that holds the agent

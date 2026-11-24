@@ -1,4 +1,4 @@
-//! The same call for a JVM: `org.tachys.wallet.Native.call(args, input)` (`android/app/src/main/kotlin/…/Native.kt`).
+//! The same call for a JVM: `org.tachys.wallet.Native.call(args, input)` (`android/shared/src/jvmShared/kotlin/…/Native.kt`).
 //!
 //! Only arrays of bytes cross. Strings are UTF-8 and each ends with a 0 byte, so a list is its strings one after
 //! another and an empty list is no bytes. (The JNI's own strings are a modified UTF-8 that is not UTF-8 for every

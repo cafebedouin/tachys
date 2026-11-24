@@ -5,7 +5,9 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <application android:label="tachys" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="false"
         android:theme="@android:style/Theme.Material.NoActionBar">
-        <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
+        <!-- configChanges: turning the phone or folding it redraws the screens; the activity is not made again, which would drop a form half filled -->
+        <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|uiMode|density">
             <!-- a signing request opened from a web page or another app -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

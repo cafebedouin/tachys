@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 // to the ZXing QR reader a few times a second. Reports the first code it reads.
 
 @Composable
-fun Scanner(prompt: String, onResult: (String) -> Unit, onCancel: () -> Unit) {
+fun CameraScanner(prompt: String, onResult: (String) -> Unit, onCancel: () -> Unit) {
     val ctx = LocalContext.current
     var granted by remember { mutableStateOf(ctx.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
@@ -95,29 +95,3 @@ fun Scanner(prompt: String, onResult: (String) -> Unit, onCancel: () -> Unit) {
         Pill("Cancel", Bg, Color.White, Modifier.fillMaxWidth(), onClick = onCancel)
     }
 }
-
-/** What a scanned code means for a field that wants an address: plain, or an `ergo:` payment link. */
-fun addressFromCode(code: String): String = payRequestFromCode(code).address
-
-/** What a scanned code asks to be paid: an address, and perhaps an amount of ERG and a note. `tokens` = the request also names tokens. */
-class PayRequest(val address: String, val erg: String = "", val note: String = "", val tokens: Boolean = false)
-
-/**
- * Reads a bare address, an `ergo:ADDRESS?amount=…` link, or the payment request other Ergo wallets show
- * (`https://explorer.ergoplatform.com/payment-request?address=…&amount=…&description=…`, tokens as `token-ID=…`).
- */
-fun payRequestFromCode(code: String): PayRequest {
-    val c = code.trim()
-    val query = c.substringAfter('?', "")
-    val params = query.split('&').filter { it.contains('=') }.associate { it.substringBefore('=') to try { java.net.URLDecoder.decode(it.substringAfter('='), "UTF-8") } catch (e: Exception) { "" } }
-    val address = (if (c.startsWith("http://") || c.startsWith("https://")) params["address"] ?: "" else c.removePrefix("ergo:").substringBefore('?')).filter { it.isLetterOrDigit() }
-    val erg = (params["amount"] ?: "").filter { it.isDigit() || it == '.' }.takeIf { (it.toBigDecimalOrNull() ?: java.math.BigDecimal.ZERO).signum() > 0 } ?: ""
-    return PayRequest(address, erg, (params["description"] ?: "").take(80), params.keys.any { it.startsWith("token-") })
-}
-
-/** What a scanned code means for a field that wants a box id: the code itself if it is one (64 hex characters, either
- *  case), and nothing otherwise. A receipt's link form is read by `Receipt.parse`, which gives this its `box`. */
-fun boxIdFromCode(code: String): String = code.trim().lowercase().takeIf { it.length == 64 && it.all { c -> c in '0'..'9' || c in 'a'..'f' } } ?: ""
-
-/** What is typed or pasted into a box-id field, as it is typed: its hex characters, at most 64. */
-fun boxIdTyped(text: String): String = text.lowercase().filter { it in '0'..'9' || it in 'a'..'f' }.take(64)

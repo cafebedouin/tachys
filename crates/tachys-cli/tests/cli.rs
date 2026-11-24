@@ -770,7 +770,7 @@ fn shape(v: &Value) -> Value {
 
 #[test]
 fn the_answers_the_app_reads_keep_the_fields_and_types_of_the_ones_it_is_tested_on() {
-    // `vectors/app/` holds answers of the core that the app's own tests read (android/app/src/test). Each is made
+    // `vectors/app/` holds answers of the core that the app's own tests read (android/shared/src/desktopTest). Each is made
     // again here, and must have the same fields with the same types: a field renamed, retyped or dropped fails this
     // test before it reaches a phone. (Values differ from run to run, and are not compared.)
     let with = |args: &[&str], pass: Option<&str>, input: &str| -> Ran {

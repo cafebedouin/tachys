@@ -2,7 +2,6 @@ package org.tachys.wallet
 
 import java.io.File
 import java.nio.ByteBuffer
-import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

@@ -44,7 +44,10 @@ More: `docs/agents.md`. The fields of every answer: `docs/json.md`.
 - Tests are named as sentences, need no network, and write only under the system's temporary directory.
 - Contributions are taken under the project's dedication (CC0); `vendor/` is not ours to change. `anchors/`, the
   seed lists and the node list are refreshed by the maintainer alone (`docs/maintaining.md`).
-- The phone app is `android/`; after a change to the core run `android/build-core.sh` before building it. The app
+- The app is `android/`: its screens and wallet logic once in `android/shared/src/commonMain` (Compose Multiplatform; nothing of the JVM or
+  of any one system may be used there, and `./gradlew :shared:compileCommonMainKotlinMetadata` says if it is), the Android
+  app around them in `android/app`, and the same screens in a window on a computer (`docs/platforms.md`). Its tests are
+  `./gradlew :shared:desktopTest`. After a change to the core run `android/build-core.sh` before building for a phone. The app
   runs the core in its own process through `crates/tachys-c` (a C interface, `tachys.h`, and the JNI entry): a
   command may run beside another, so nothing a command sets may outlive it or be seen by another (`own.rs`).
 - Wallet state directories, seed phrases and anything else private live in `private/` or `state*/`, both ignored.

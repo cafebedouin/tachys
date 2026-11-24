@@ -1205,3 +1205,92 @@ the funded address.
 **Not run:** a signing request or a consolidation from such a wallet, and the dialog over those; a payment in a
 token, or with the fee in a token. A wallet turned from one guard to the other by restoring. A wallet guarded by
 the screen lock, since the change. Testnet (finding 64). The arm64 build, the Pixel 6.
+
+
+## 66. The app's screens are shared code, and run on a computer
+
+**What was wrong.** The app was one Android program: its screens and wallet logic sat in one file with the
+activity, the keystore, the camera and Android's own preferences, link and base64 classes. Nothing of it could run
+anywhere else, and nothing tested a screen.
+
+**What changed.** `android/shared` is a Compose Multiplatform module with two targets, Android and the JVM. The
+screens and the wallet logic moved there unchanged in behaviour (`App.kt`, `Answers.kt`, `Native.kt`, `Codes.kt`),
+and reach the machine only through `Platform` (files, settings, shipped files, clipboard, back button, screen
+capture, scanner, and whether there is a screen lock or a camera). `android/app` is what is left of Android: the
+activity, the keystore vault, the camera, and its `Platform`. `Main.kt` is the same screens in a window on a
+computer, loading the core through the same JNI entry; with no screen lock there, every wallet has a password of
+its own, and there is no camera or app lock. Receipts were coded with Android's `Uri` and `Base64`; they are now
+coded by `Codes.kt`, held by tests to the same bytes. A payment's time in the history is formatted by Java's
+classes in place of Android's. The app's tests moved to `shared/src/desktopTest` (`./gradlew :shared:desktopTest`),
+and CI runs them there. What an iPhone would still need is in `docs/platforms.md`: the shared code is written
+against the JVM, so it is shared between Android and a computer, not yet with iOS.
+
+**Tests:** `CodesTest` (six: a purpose coded as Android coded it and read back; a link's query; base64 for links
+against Java's own for every length to 70; a receipt with and without its payment; a payment request).
+`ScreensTest`: `onAComputerAWalletIsMadeWithAPasswordOfItsOwnAndOpenedOnlyByIt` drives the real screens with the
+core loaded and no window: a mismatched password refused beside the button and nothing made, a wallet made, its
+twelve words shown, the file sealed and marked, the words refused to a wrong password and shown to the right one.
+It lists one peer, a closed port of the same machine, so it reaches no network.
+**Run** (`runs/2026-11-23-shared-screens.txt`): the 21 tests of the shared module, none skipped, with a display and
+without one; `assembleDebug` and the release build of the copy that installs beside the app (its 32-bit APK
+3739496 bytes, 3737888 before; `libtachys_c.so`, the three shipped files and the names `Native` and `call` in it);
+the desktop app started in a window under WSL (its drawing fell back from OpenGL with a warning), where it made
+its directory for the owner alone, loaded the core and agreed a mainnet tip; that release build installed over
+the copy on the Galaxy Note 2 (finding 65's, with its two wallets), and there, on mainnet: both wallets shown as
+before, with their balances; Receive with its QR code and Copy; the back button from Receive, Pending and Details;
+Scan asking for the camera and showing the scanner; 0.01 ERG sent with a memo from one wallet to the other after
+the password dialog, the receipt's box id checked from the payee's Receive ("Accepted: proven unspent at block
+1923547 ..."), and the 0.0089 ERG left sent back; afterwards the paying wallet read 20.…… ERG, two fees less
+than before.
+**Not run:** on the phone since the move: a code read by the camera, a receipt read from its QR code (so the
+purpose a receipt carries was coded there but not read back), a signing request, the app lock, anything behind the
+screen lock. A window looked at by a person. Windows and macOS, at all. A payment from a
+computer. The arm64 build. The workflow as changed.
+
+## 67. The shared code uses nothing of the JVM; the app names the machine it is on
+
+**What was wrong.** After finding 66 the screens and the wallet logic were shared between Android and a computer,
+but written against the JVM (`java.io.File`, `org.json`, `java.math.BigDecimal`, `String.format`, Java's clock,
+threads and locks), which an iPhone does not have: nothing stood ready for one. On a computer the sentences said
+"this phone", and there was no way to run the app without the source tree. On a phone, turning the screen made the
+activity again and dropped whatever form was open (seen on the Note 2, finding 66); and in a wallet's settings the
+reason something was refused was written at the foot of the page, which could be off the screen (finding 65).
+
+**What changed.**
+- The shared code is in `commonMain` and uses only what every platform has. Amounts are shown and read by
+  `Decimal.kt`, on the digits; JSON by `Json.kt`, two small classes with org.json's names over
+  `kotlinx.serialization`; files by `Files.kt` over okio. What differs by platform is four declarations
+  (`Machine.kt`: the call into the core, a background thread, a lock, the file system) and `Platform`. The build
+  declares the iPhone targets so that the common code is compiled against what an iPhone has
+  (`compileCommonMainKotlinMetadata`), and CI runs that. `iosMain/Ios.kt` is a first draft of the four for iOS and
+  has never been compiled.
+- One change in what is read: a field whose value is JSON's `null` now reads as absent. Android's own org.json read
+  it as the text "null"; the org.json the tests have always run against reads it as absent, as this does.
+- The sentences name the machine through `Platform.device`: "this phone", "this computer".
+- `./gradlew :shared:createDistributable` makes an app for a computer with its own Java and the core inside
+  (`Native.kt` loads the library from the app's resources when it is there).
+- On Android the activity is no longer made again when the screen turns (`configChanges` in the manifest).
+- In a wallet's settings a refusal is scrolled into view when it appears.
+
+**Tests:** `DecimalTest` (five: what is shown, a balance cut to six places, what is typed, the two as inverses, an
+amount more than nothing; the first three against `BigDecimal` on 20000 random amounts each and the edges).
+`JsonTest` (three: every field of every answer in `vectors/app/` read by every method the app uses, against
+org.json; what is written read back, a Long exact; what is missing or not JSON). `ScreensTest` now also holds that
+no sentence on the screens it passes says "phone" on a computer. `CodesTest` as before, on the common code.
+**Run** (`runs/2026-11-24-common-code.txt`): `compileCommonMainKotlinMetadata`, which first named three uses of a
+platform (`Math.abs`, okio's `FileSystem.SYSTEM`, a nullable setting) and passed once they were gone; the 29 tests
+of the shared module, none skipped; `assembleDebug` and the release build of the copy beside the app (32-bit APK
+3782604 bytes, 3739496 before); the packaged app for Linux built and run for 70 s under WSL: it loaded the core
+from its own resources and agreed a mainnet tip.
+**Run on the phone** (the same log, its last part; the Galaxy Note 2, mainnet, the copy beside the app with the
+two wallets of finding 65): both wallets and the token amounts on the cards read as before the change (to the digit; the figures
+are left out of this file, as they name the maintainer's wallet); a Send form half filled, the screen turned and turned back: the address and amount still
+there; a wrong password over Send refused; 0.01 ERG typed and sent, then the 0.0089 ERG left sent back, each
+signed after the password dialog. In between, both wallets showed the coins as "seen in a block only one node has
+shown yet" for some syncs, with the amounts exact (0.01 and 20.…… ERG), until the peers reached the block:
+the state the roadmap's item 6 describes, not this change. Afterwards the paying wallet read 20.…… ERG, two
+fees less. In a wallet's settings, Add an address (at the top of the page) with a wrong password: the page moved
+and the refusal was on the screen.
+**Not run:** on the phone: a token sent, the fee paid in a token, a signing request, the history's times, the
+camera, anything behind the screen lock. Anything for an iPhone, including whether `iosMain` compiles. The
+packaged app on Windows or macOS, and any installer. A window looked at by a person. A payment from a computer.

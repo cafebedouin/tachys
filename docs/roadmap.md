@@ -117,8 +117,10 @@ instead, which as far as we know is new for Ergo:
   the phone's lock; a wallet's guard is changed only by restoring it.
 - Testnet's difficulty fell to 1 (seen 2026-11-24 UTC), under the floor a wallet that had synced there remembers:
   such a wallet takes no header from testnet's peers. Not looked into further.
-- An Apple app. The C interface it would call is here and tested (`crates/tachys-c/tachys.h`); nothing has been
-  built for an Apple target, and there are no screens.
+- The app on other platforms (`platforms.md`, finding 66). The screens are shared code and run on Linux; Windows and
+  macOS are the same code and untried. For an iPhone the shared code is ready (finding 67) and there is a draft of its
+  hooks that has never been compiled; there is no app, and nothing has been built for an Apple target. On a computer:
+  no installer tried, no camera, and nobody has looked at the window.
 - The app's main source file is too long. (`wallet send` and the sync were, and are split into their steps: finding 61.)
   What the app makes of the core's answers is tested for a payment's outcome, a derived address and a wrong password
   (`vectors/app/`, finding 61); what it reads of a sync, a receipt, an offer list and the wallet file is not.

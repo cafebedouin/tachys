@@ -3,8 +3,6 @@ package org.tachys.wallet
 // The core, in this process: the Rust library `crates/tachys-c` (libtachys_c.so), whose one call is the `tachys`
 // program's command line. Nothing of Android is used here, so the tests run it on the build machine too.
 
-/** One run of the core: the code it ended with, what the program would have written to its output, and to its error stream. */
-class Ran(val code: Int, val out: String, val err: String)
 
 /**
  * A list of strings as it crosses to the core: UTF-8, each ended by a 0 byte, so an empty list is no bytes. Only arrays
@@ -28,7 +26,11 @@ fun unpacked(b: ByteArray?): Ran {
 }
 
 object Native {
-    init { System.loadLibrary("tachys_c") }
+    init {
+        // a packaged app for a computer carries the library among its resources; otherwise it is found as the system finds libraries (a phone's own, or java.library.path)
+        val packed = System.getProperty("compose.application.resources.dir")?.let { java.io.File(it, System.mapLibraryName("tachys_c")) }
+        if (packed != null && packed.exists()) System.load(packed.absolutePath) else System.loadLibrary("tachys_c")
+    }
     /** `Java_org_tachys_wallet_Native_call` in `crates/tachys-c/src/jni.rs`. */
     @JvmStatic private external fun call(args: ByteArray, input: ByteArray): ByteArray?
 

@@ -21,7 +21,7 @@ for itself and says where; without `TACHYS_HOST_CORE` those tests are skipped:
 
 ```
 cargo build -p tachys-c --features jni
-cd android && TACHYS_HOST_CORE=$PWD/../target/debug ./gradlew testDebugUnitTest
+cd android && TACHYS_HOST_CORE=$PWD/../target/debug ./gradlew :shared:desktopTest
 ```
 
 `assembleRelease` needs a signing key and is refused without one: name your own (the comment in

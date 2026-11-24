@@ -1,0 +1,46 @@
+==== the shared module's tests (cd android; TACHYS_HOST_CORE=../target/debug ./gradlew :shared:desktopTest)
+BUILD SUCCESSFUL
+AnswersTest[desktop]: 9 tests, 0 skipped, 0 failures, 0 errors
+CodesTest[desktop]:   6 tests, 0 skipped, 0 failures, 0 errors
+NativeTest[desktop]:  5 tests, 0 skipped, 0 failures, 0 errors
+ScreensTest[desktop]: 1 test,  0 skipped, 0 failures, 0 errors
+the same with DISPLAY and WAYLAND_DISPLAY unset (:shared:cleanDesktopTest :shared:desktopTest): the same four lines
+
+==== the Android app (./gradlew assembleDebug assembleRelease -PtachysIdSuffix=.test)
+BUILD SUCCESSFUL in 11m 19s (the first build with the new plugins)
+app-arm64-v8a-release.apk 4490192 bytes, app-armeabi-v7a-release.apk 3739496 bytes
+in the 32-bit APK: lib/armeabi-v7a/libtachys_c.so 3789452, assets/seeds-mainnet.txt 1584, assets/seeds-testnet.txt 136,
+  assets/tokens.json 6543, classes.dex 2049780
+strings of classes.dex: Lorg/tachys/wallet/Native; , call , tachys_c
+
+==== the app on a computer (WSL2, TACHYS_APP_DIR an empty temporary directory, ./gradlew :shared:run, 85 s)
+[SKIKO] warn: Fallback to next API
+org.jetbrains.skiko.RenderException: Cannot create Linux GL context
+the process org.tachys.wallet.MainKt running throughout
+its directory: drwx------ ; seeds-mainnet.txt (1584 bytes); chain-mainnet/ with agreed-chain.bin, agreed-tip.bin,
+  behind-header.bin, nodes.json
+(no wallet was made there, so no settings.json; the window was not looked at: this machine has no tool to capture it)
+
+==== on the Galaxy Note 2 (adb install -r of the 32-bit release copy, over the copy with two wallets in it)
+Success
+ActivityManager: Start proc ...:org.tachys.wallet.test ... ; Displayed org.tachys.wallet.test/org.tachys.wallet.MainActivity: +951ms
+no FATAL, AndroidRuntime crash or UnsatisfiedLinkError in the log
+the phone showed its lock screen (mCurrentFocus=StatusBar): no screen of the app was read then
+
+==== the same build on the phone once it was unlocked (mainnet, 2026-11-24 about 05:45 to 06:10 UTC)
+the wallet list after a sync: both wallets of finding 65's run, one empty, one 20.…… ERG in 2 boxes; the Scan tab present
+Receive: "Receive to", the QR code drawn (screenshot), the address; Copy address: "Copied to the clipboard"
+back button from Receive: the wallet list
+Scan: the system asks "Allow tachys to take pictures and record video?"; allowed: "Scan an address, a payment request or a request to sign"
+turning the screen upright while on Receive put the app back on the wallet list
+Send from the funded wallet: the other's address, 0.01 ERG, a memo with a space and a plus sign; the password dialog; 
+  "Sent 0.01 ERG. Fee 0.0011 ERG. ..."; receipt 2cefe942… (the rest left out: it names the maintainer's wallet)
+the other wallet after a sync: 0.010000 ERG, "proven at height 1923547 · 1 box"
+its Receive, that box id, Check receipt: "Accepted: proven unspent at block 1923547 under the tip the peers agree on,
+  and it pays this wallet. Confirmations: at least 1. ..."
+Send from it: the funded wallet's address, Max (0.0089), the password: "Sent 0.0089 ERG. Fee 0.0011 ERG. ...";
+  receipt 26e6949d… (the rest left out: it names the maintainer's wallet)
+its Details, Pending ("Pending payments"); back button: Details, then the wallet list
+no block for about nine minutes (a node's last header 7 minutes old at 1923548); then, after a sync:
+  the funded wallet 20.…… ERG, "proven at height 1923550 · 2 boxes"; the other 0.000000 ERG
+pidof org.tachys.wallet.test: one process

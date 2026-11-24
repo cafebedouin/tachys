@@ -58,8 +58,8 @@ jobs:
           java-version: 21
       - run: cargo build --locked -p tachys-c --features jni
       # what the app makes of the core's answers, on the answers kept in vectors/app/ (which the core's tests hold it to),
-      # and the core itself called in the tests' own process (NativeTest.kt: skipped, not passed, without TACHYS_HOST_CORE)
-      - run: TACHYS_HOST_CORE="$GITHUB_WORKSPACE/target/debug" ./gradlew testDebugUnitTest assembleDebug
+      # and the core itself called in the tests' own process (NativeTest.kt, ScreensTest.kt: skipped, not passed, without TACHYS_HOST_CORE)
+      - run: TACHYS_HOST_CORE="$GITHUB_WORKSPACE/target/debug" ./gradlew :shared:compileCommonMainKotlinMetadata :shared:desktopTest assembleDebug
         working-directory: android
-      - run: grep -L 'skipped="0"' app/build/test-results/testDebugUnitTest/*.xml | grep . && exit 1 || echo "no test was skipped"
+      - run: grep -L 'skipped="0"' shared/build/test-results/desktopTest/*.xml | grep . && exit 1 || echo "no test was skipped"
         working-directory: android

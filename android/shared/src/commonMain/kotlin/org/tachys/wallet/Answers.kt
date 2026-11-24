@@ -1,8 +1,7 @@
 package org.tachys.wallet
 
-import org.json.JSONObject
 
-// What the app makes of the core's answers. Nothing of Android is used here, so that the tests can run every reading
+// What the app makes of the core's answers. Nothing of any platform is used here, so that the tests can run every reading
 // on the build machine against the answers the core is held to (`vectors/app/`, which the core's own tests check it
 // still gives). What the app decides a tip, a restore or a payment on is read here.
 

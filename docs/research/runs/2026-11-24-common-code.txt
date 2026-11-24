@@ -1,0 +1,50 @@
+==== the common code against what every platform has (cd android; ./gradlew :shared:compileCommonMainKotlinMetadata)
+first run, FAILED:
+  App.kt:311 Unresolved reference 'Math'.
+  App.kt:339 Argument type mismatch: actual type is 'String?', but 'String' was expected.
+  Files.kt: Unresolved reference 'SYSTEM' (okio's FileSystem.SYSTEM, in every use)
+after those three: BUILD SUCCESSFUL
+
+==== the shared module's tests (TACHYS_HOST_CORE=../target/release ./gradlew :shared:desktopTest)
+AnswersTest[desktop]: 9 tests, 0 skipped, 0 failures, 0 errors
+CodesTest[desktop]:   6 tests, 0 skipped, 0 failures, 0 errors
+DecimalTest[desktop]: 5 tests, 0 skipped, 0 failures, 0 errors
+JsonTest[desktop]:    3 tests, 0 skipped, 0 failures, 0 errors
+NativeTest[desktop]:  5 tests, 0 skipped, 0 failures, 0 errors
+ScreensTest[desktop]: 1 test,  0 skipped, 0 failures, 0 errors
+
+==== the Android app (./gradlew assembleDebug assembleRelease -PtachysIdSuffix=.test)
+BUILD SUCCESSFUL
+app-arm64-v8a-release.apk 4533300 bytes, app-armeabi-v7a-release.apk 3782604 bytes
+w: Native task 'iosSimulatorArm64Test' is disabled ... cannot run on the current host (linux-x86_64)
+  (since silenced: kotlin.native.ignoreDisabledTargets in gradle.properties)
+
+==== the packaged app for a computer (cargo build --release -p tachys-c --features jni; ./gradlew :shared:createDistributable)
+BUILD SUCCESSFUL
+shared/build/compose/binaries/main/app/tachys/bin/tachys, .../lib/app/resources/libtachys_c.so; 148M in all
+run for 70 s under WSL2 with TACHYS_APP_DIR an empty directory, and no java.library.path given:
+  [SKIKO] warn: Fallback to next API / org.jetbrains.skiko.RenderException: Cannot create Linux GL context
+  still running at 70 s
+  its directory drwx------ : seeds-mainnet.txt, chain-mainnet/ (agreed-chain.bin agreed-tip.bin behind-header.bin nodes.json)
+
+==== on the Galaxy Note 2
+adb install -r of the 32-bit release copy: Success
+mCurrentFocus=StatusBar (the phone's lock screen): nothing of the app was read then
+
+==== the same build on the phone once unlocked (mainnet, 2026-11-24 about 07:30 to 08:00 UTC; screen held upright except as said)
+after a sync: one wallet 0.000000 ERG, no boxes yet; the other 20.…… ERG, "proven at height 1923588 · 2 boxes", 6 tokens:
+  the four token amounts shown on its card the same as in the run of finding 64 (left out here, with the balance's digits)
+Send, an address and 0.01 typed; user_rotation 1 (the screen turned): "Send from ...", the address, 0.01 still in the form;
+  user_rotation 0: the same
+the paying wallet changed with the form open ("Paying from ... ▾"): the address and amount kept, "Available: 20.…… ERG"
+Send, a wrong password: "That is not this wallet's password."
+Send, the right one: "Sent 0.01 ERG. Fee 0.0011 ERG. ..."; receipt c32ebe16… (the rest left out: it names the maintainer's wallet)
+five syncs with the payee at "no boxes yet"; a node then gave the box's inclusionHeight as 1923590, its own height 1923593
+the list then: payee "nothing confirmed yet", "+ 0.01 ERG seen in a block only one node has shown yet: not counted ...";
+  payer 0.008900 ERG "proven at height 1923592 · 2 boxes", "+ 20.…… ERG seen in a block only one node has shown yet ..."
+one more sync: payee 0.010000 ERG "proven at height 1923593 · 1 box"; payer 20.…… ERG "proven at height 1923593 · 2 boxes"
+Send from the payee: the other address, Max (0.0089), the password: "Sent 0.0089 ERG. Fee 0.0011 ERG. ...";
+  receipt 9e917b45… (the rest left out: it names the maintainer's wallet)
+its settings, Add an address (y 590) with a wrong password: afterwards "That is not this wallet's password." at y 1121 of 1280,
+  Add an address no longer on the screen (the page had moved)
+after two blocks: the first wallet 20.…… ERG, "proven at height 1923597 · 3 boxes"; the other 0.000000 ERG

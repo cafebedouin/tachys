@@ -153,7 +153,7 @@ route. `.github/workflows/ci.yml` runs the tests and clippy.
 | `crates/tachys-c` | that entry for other languages: a C interface (`tachys.h`), and the JNI method the phone app calls |
 | `crates/tachys-verify` | checks on a NiPoPoW proof; the rule for choosing a tip by work; the node's difficulty rule |
 | `crates/tachys-net` | the smallest peer client that will do: handshake, hear a tip, fetch headers by id, serve |
-| `android/` | the phone app |
+| `android/` | the app: shared screens (`shared/`), the Android app (`app/`), and the same on a computer (`docs/platforms.md`) |
 | `rig/`, `node-patches/` | test recipes; the prototype node change for box proofs over the peer protocol |
 | `fuzz/` | fuzz targets for the bytes nodes and peers choose (`cargo +nightly fuzz run box_proof`; `docs/maintaining.md`) |
 | `build-linux.sh`, `refresh-anchors.sh` | build the Linux program a release carries, as the release workflow does; fetch and cross-check a new checkpoint |

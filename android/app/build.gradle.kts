@@ -51,22 +51,14 @@ android {
     // when the app is installed, as it was while the core was a program that had to be unpacked to be run: the way
     // every phone this has been tried on has had it.
     packaging { jniLibs { useLegacyPackaging = true } }
-    // The tests call the core through the JNI when the build machine has the library and says where (NativeTest.kt):
-    // TACHYS_HOST_CORE is the directory holding libtachys_c.so, built with `cargo build -p tachys-c --features jni`.
-    testOptions { unitTests.all { test -> System.getenv("TACHYS_HOST_CORE")?.let { test.systemProperty("java.library.path", it) } } }
     splits { abi { isEnable = true; reset(); include("arm64-v8a", "armeabi-v7a"); isUniversalApk = false } }
 }
 
 dependencies {
-    implementation(platform("androidx.compose:compose-bom:2026.09.00"))
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.foundation:foundation")
-    implementation("androidx.compose.material:material")
+    // the screens and the wallet logic (with Compose, which it passes on); their tests are there too: ./gradlew :shared:desktopTest
+    implementation(project(":shared"))
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("com.google.zxing:core:3.5.4") // QR reading; QR drawing comes from the Rust core
-    // the tests of what the app makes of the core's answers (src/test), run on the build machine: ./gradlew testDebugUnitTest
-    testImplementation("junit:junit:4.13.2")
-    testImplementation("org.json:json:20240303") // a phone has its own; the build machine's Android stub has none that works
 }
 
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }

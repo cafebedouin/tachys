@@ -1,0 +1,4 @@
+# The core's C interface (crates/tachys-c/tachys.h), for the iPhone targets. The static library itself
+# (libtachys_c.a, built for the target with cargo) is linked by whatever builds the app.
+headers = tachys.h
+package = org.tachys.core
