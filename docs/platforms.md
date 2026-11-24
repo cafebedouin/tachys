@@ -44,8 +44,17 @@ cd android && TACHYS_HOST_CORE=$PWD/../target/release ./gradlew :shared:createDi
 It is a folder under `android/shared/build/compose/binaries/main/app/` (148 MB on Linux), started by `tachys/bin/tachys`.
 An installer for a system (`packageDeb`, `packageMsi`, `packageDmg`) is the same plugin's work and has not been tried.
 
-On macOS and Windows this is the same code and should need only the two commands above, since the screens and the
-JNI entry are the ones that run on Linux. Nobody has tried it: if you do, an issue saying what happened is welcome.
+On macOS this is the same code and should need only the commands above, since the screens and the JNI entry are the
+ones that run on Linux. On Windows the same, written for its shell (PowerShell):
+
+```
+cargo build --release -p tachys-c --features jni
+cd android
+$env:TACHYS_HOST_CORE = "$PWD\..\target\release"
+.\gradlew.bat :shared:run
+```
+
+Nobody has tried either: if you do, an issue saying what happened is welcome.
 
 ## iPhone and iPad
 
@@ -55,23 +64,34 @@ There is no iPhone app. What is there:
   through okio, JSON through `Json.kt` (on `kotlinx.serialization`), amounts through `Decimal.kt` (exact, on the
   digits). The build declares the iPhone targets, so `./gradlew :shared:compileCommonMainKotlinMetadata` fails, on
   any machine, if something of one platform creeps back in. CI runs it.
-- **A first draft of the three things the wallet logic needs of iOS** (`android/shared/src/iosMain/Ios.kt`): the
-  call into the core through `tachys.h`, a background thread, a lock, the file system. It has **never been
+- **A first draft of the four things the wallet logic needs of iOS**
+  (`android/shared/src/iosMain/kotlin/org/tachys/wallet/Ios.kt`): the call into the core through `tachys.h`, a
+  background thread, a lock, the file system. It has **never been
   compiled**: nothing for an iPhone can be built on Linux, where the project is developed. Expect to correct it.
 
-What someone with a Mac and Xcode would still do:
+What someone with a Mac and Xcode would still do (an Apple-silicon Mac: only the arm64 targets are declared; on an
+Intel Mac the simulator needs `iosX64()` added beside them and the core built for `x86_64-apple-ios`):
 
 1. Build the core for the targets: `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`, then
-   `cargo build --release -p tachys-c --target …` for each, which gives `libtachys_c.a`. Not tried; some
-   dependency may not build there.
-2. Get `iosMain` through the compiler (`./gradlew :shared:compileKotlinIosSimulatorArm64`).
-3. Write a `Platform` for iOS, as `Phone` (in `android/app`) and `Computer` (in `desktopMain`) are: the app's
-   documents directory, `NSUserDefaults`, the pasteboard, a date formatter; `lock = false` to begin with, which makes
-   every wallet one with a password of its own. To offer the screen lock as a guard, the Keychain with Face ID or
-   the passcode would play the part the Android keystore plays in `MainActivity.kt`.
-4. An Xcode project that shows the shared `App` (Compose Multiplatform's `ComposeUIViewController`) and links
-   `libtachys_c.a`.
-5. A scanner, if codes are to be read by the camera.
+   `cargo build --release -p tachys-c --target aarch64-apple-ios` and the same for `aarch64-apple-ios-sim`, which
+   give `target/<target>/release/libtachys_c.a`. Not tried; some dependency may not build there.
+2. Get `iosMain` through the compiler (`./gradlew :shared:compileKotlinIosSimulatorArm64`). The common-code check
+   above does not do this: it compiles `commonMain` only.
+3. Declare the framework Xcode will use, which the build file does not yet do, and link the core into it: for each
+   iPhone target in `android/shared/build.gradle.kts`, `binaries.framework { baseName = "shared"; isStatic = true;
+   linkerOpts("-L<path to that target's libtachys_c.a>", "-ltachys_c") }`. The cinterop there only reads the header;
+   without this the link ends with `tachys_call` undefined. (Static, so that the app's own link can also see the
+   core; a dynamic framework would have to link it itself.)
+4. Write a `Platform` for iOS, as `Phone` (in `android/app`) and `Computer` (in `desktopMain`) are, with every
+   member of the interface (`Platform.kt`): `files` (the app's documents directory), `prefs` (`NSUserDefaults`),
+   `asset` (the shipped `seeds-*.txt` and `tokens.json`, from the app's bundle: the app cannot start without them),
+   `device = "phone"`, `time` (a date formatter), `copy` (the pasteboard), `Back`, `Secure` and `Scanner` (which may
+   do nothing to begin with), `camera = false` and `lock = false` to begin with, which makes every wallet one with
+   a password of its own. To offer the screen lock as a guard, the Keychain with Face ID or the passcode would
+   play the part the Android keystore plays in `MainActivity.kt`.
+5. An Xcode project that shows the shared `App` (Compose Multiplatform's `ComposeUIViewController`) from that
+   framework.
+6. A scanner, if codes are to be read by the camera.
 
-Step 3 is perhaps a hundred lines; the rest is building and correcting. If you do it, a pull request is welcome on
+Step 4 is perhaps a hundred lines; the rest is building and correcting. If you do it, a pull request is welcome on
 the usual terms (`CONTRIBUTING.md`).

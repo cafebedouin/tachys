@@ -17,7 +17,7 @@ class PayRequest(val address: String, val erg: String = "", val note: String = "
 fun payRequestFromCode(code: String): PayRequest {
     val c = code.trim()
     val query = c.substringAfter('?', "")
-    val params = query.split('&').filter { it.contains('=') }.associate { it.substringBefore('=') to percentDecoded(it.substringAfter('=')) }
+    val params = query.split('&').filter { it.contains('=') }.associate { it.substringBefore('=') to (percentDecodedStrictly(it.substringAfter('=')) ?: "") }
     val address = (if (c.startsWith("http://") || c.startsWith("https://")) params["address"] ?: "" else c.removePrefix("ergo:").substringBefore('?')).filter { it.isLetterOrDigit() }
     val erg = (params["amount"] ?: "").filter { it.isDigit() || it == '.' }.takeIf { positive(it) } ?: ""
     return PayRequest(address, erg, (params["description"] ?: "").take(80), params.keys.any { it.startsWith("token-") })
@@ -55,6 +55,23 @@ fun percentDecoded(text: String): String {
         }
     }
     return out.toByteArray().decodeToString()
+}
+
+/**
+ * The same, refusing what is not well formed: null if a % starts no byte or the bytes are not UTF-8. For a payment link,
+ * where a value read wrongly could become an amount: a parameter that cannot be read is dropped, as it was when Java's
+ * URLDecoder read these.
+ */
+fun percentDecodedStrictly(text: String): String? {
+    fun hex(c: Char) = c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F'
+    var i = 0
+    while (i < text.length) {
+        if (text[i] != '%') { i++; continue }
+        if (i + 2 > text.length - 1 || !hex(text[i + 1]) || !hex(text[i + 2])) return null
+        i += 3
+    }
+    // bytes that are not UTF-8 decode to the replacement character: if one appears that was not written, they were not
+    return percentDecoded(text).takeIf { '\uFFFD' !in it || '\uFFFD' in text }
 }
 
 /** A byte as two hex digits, lower case. */

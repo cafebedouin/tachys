@@ -22,8 +22,10 @@ class FileAt private constructor(private val path: Path) {
     fun writeText(text: String) { disk.write(path) { writeUtf8(text) } }
     /** Copies this file's bytes to `target`, over whatever is there. */
     fun copyTo(target: FileAt) { disk.copy(path, target.path) }
-    fun mkdirs() { disk.createDirectories(path) }
-    fun delete() { disk.delete(path, mustExist = false) }
-    fun deleteRecursively() { disk.deleteRecursively(path, mustExist = false) }
+    // These three say whether it was done and never fail, as java.io.File's did: the callers go on either way (a wallet
+    // folder that cannot be made is refused by the core in its own words; one that cannot be deleted is still listed).
+    fun mkdirs(): Boolean = try { disk.createDirectories(path); true } catch (e: Exception) { false }
+    fun delete(): Boolean = try { disk.delete(path, mustExist = false); true } catch (e: Exception) { false }
+    fun deleteRecursively(): Boolean = try { disk.deleteRecursively(path, mustExist = false); true } catch (e: Exception) { false }
     override fun toString() = absolutePath
 }

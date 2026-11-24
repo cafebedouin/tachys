@@ -26,6 +26,26 @@ pub(crate) struct Call {
     /// lines to read in place of the process's stdin (a password, a seed phrase)
     input: Option<std::collections::VecDeque<String>>,
 }
+/// An answer may be a seed phrase (`wallet mnemonic`) and a line read may be a password: what a call held of either is
+/// wiped when the call is done with, not left in freed memory. (What is handed back to the caller is the caller's to wipe.)
+impl Drop for Call {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        fn wipe(v: &mut serde_json::Value) {
+            match v {
+                serde_json::Value::String(s) => s.zeroize(),
+                serde_json::Value::Array(a) => a.iter_mut().for_each(wipe),
+                serde_json::Value::Object(o) => o.iter_mut().for_each(|(_, v)| wipe(v)),
+                _ => {}
+            }
+        }
+        self.report.iter_mut().for_each(|(_, v)| wipe(v));
+        if let Some(s) = self.complaint.as_mut() { s.zeroize() }
+        if let Some(s) = self.sentence.as_mut() { s.zeroize() }
+        if let Some((out, err)) = self.capture.as_mut() { out.zeroize(); err.zeroize() }
+        if let Some(q) = self.input.as_mut() { q.iter_mut().for_each(|l| l.zeroize()) }
+    }
+}
 /// The calls under way (`Own::calls`): the last is the current one. A command that runs another (`balance` runs
 /// `tips` and `wallet status`) puts a call on top for it and takes it off when it ends.
 fn now<R>(f: impl FnOnce(&mut Call) -> R) -> R {
@@ -40,7 +60,11 @@ fn command_of(args: &[String]) -> String { args.iter().skip(1).take_while(|a| !a
 /// Called first: a new call, of which command, answering how. `capture`: keep what it writes instead of printing it.
 /// `input`: lines it reads instead of stdin.
 pub(crate) fn start(args: &[String], capture: bool, input: Option<Vec<String>>) {
-    let mut c = Call { json: args.iter().any(|a| a == "--json"), capture: capture.then(Default::default), input: input.map(Into::into), ..Default::default() };
+    // (field by field: a type that wipes itself when dropped cannot be made from another's parts)
+    let mut c = Call::default();
+    c.json = args.iter().any(|a| a == "--json");
+    c.capture = capture.then(Default::default);
+    c.input = input.map(Into::into);
     c.report.insert("command".into(), command_of(args).into());
     let own = crate::own::own();
     let mut g = own.calls.lock().unwrap_or_else(|p| p.into_inner());
@@ -53,7 +77,9 @@ pub(crate) fn written() -> (String, String) { now(|c| c.capture.clone().unwrap_o
 pub(crate) fn forget_input() { now(|c| if let Some(q) = c.input.as_mut() { q.iter_mut().for_each(zeroize::Zeroize::zeroize); q.clear(); }) }
 /// A call of another command from inside this one: its own answer, in JSON, its sentences kept.
 pub(crate) fn begin_inner(args: &[String]) {
-    let mut c = Call { json: true, capture: Some(Default::default()), ..Default::default() };
+    let mut c = Call::default();
+    c.json = true;
+    c.capture = Some(Default::default());
     c.report.insert("command".into(), command_of(args).into());
     crate::own::own().calls.lock().unwrap_or_else(|p| p.into_inner()).push(c);
 }
@@ -61,8 +87,8 @@ pub(crate) fn begin_inner(args: &[String]) {
 pub(crate) fn end_inner(code: i32) -> (serde_json::Value, String) {
     let own = now(|c| c.own_answer);
     let a = answer(code);
-    let c = crate::own::own().calls.lock().unwrap_or_else(|p| p.into_inner()).pop().unwrap_or_default();
-    let (out, err) = c.capture.unwrap_or_default();
+    let mut c = crate::own::own().calls.lock().unwrap_or_else(|p| p.into_inner()).pop().unwrap_or_default();
+    let (out, err) = c.capture.take().unwrap_or_default();
     (if own { serde_json::from_str(out.trim()).unwrap_or(serde_json::Value::Null) } else { a }, err)
 }
 pub(crate) fn json() -> bool { now(|c| c.json) }

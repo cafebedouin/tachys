@@ -15,12 +15,12 @@ mod jni;
 const STACK: usize = 8 << 20;
 
 /// One call on a thread of its own. The lines of `input` (a password, a seed phrase) are wiped when it has ended.
-pub fn call(args: Vec<String>, mut input: Vec<String>) -> tachys::Answer {
-    let ran = std::thread::Builder::new().name("tachys".into()).stack_size(STACK).spawn(move || {
-        let answer = tachys::call(&args, &input);
-        input.iter_mut().for_each(Zeroize::zeroize);
-        answer
-    });
+pub fn call(args: Vec<String>, input: Vec<String>) -> tachys::Answer {
+    // wiped when dropped, so on every way out: the command ended, it unwound, or no thread could be made for it
+    struct Lines(Vec<String>);
+    impl Drop for Lines { fn drop(&mut self) { self.0.iter_mut().for_each(Zeroize::zeroize) } }
+    let input = Lines(input);
+    let ran = std::thread::Builder::new().name("tachys".into()).stack_size(STACK).spawn(move || tachys::call(&args, &input.0));
     match ran.map(|thread| thread.join()) {
         Ok(Ok(answer)) => answer,
         // `tachys::call` catches a command's panic itself and answers 70; this is one outside the command

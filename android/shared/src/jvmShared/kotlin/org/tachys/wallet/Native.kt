@@ -11,9 +11,13 @@ package org.tachys.wallet
 fun packed(items: List<String>): ByteArray {
     // the program refused such an argument too: it cannot be told from the end of one
     require(items.none { '\u0000' in it }) { "a 0 character in an argument or an input line" }
-    val o = java.io.ByteArrayOutputStream()
-    items.forEach { val b = it.toByteArray(Charsets.UTF_8); o.write(b); o.write(0); b.fill(0) }
-    return o.toByteArray()
+    // into one array of exactly the size, with each item's own bytes wiped as it goes in: the caller wipes the array,
+    // and no other copy of a password's bytes is made here (the String it came in as is the caller's, and cannot be wiped)
+    val parts = items.map { it.toByteArray(Charsets.UTF_8) }
+    val all = ByteArray(parts.sumOf { it.size + 1 })
+    var at = 0
+    for (b in parts) { b.copyInto(all, at); at += b.size + 1; b.fill(0) }
+    return all
 }
 
 /** The core's answer as it crosses back: the code and the length of `out` (two big-endian 32-bit numbers), `out`, then `err`. */

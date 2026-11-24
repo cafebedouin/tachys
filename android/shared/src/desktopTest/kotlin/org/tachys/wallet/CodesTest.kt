@@ -64,4 +64,18 @@ class CodesTest {
         payRequestFromCode("ergo:9abc?amount=1.5&description=two%20words").let { assertEquals("9abc", it.address); assertEquals("1.5", it.erg); assertEquals("two words", it.note) }
         payRequestFromCode("https://explorer.ergoplatform.com/payment-request?address=9abc&amount=0&token-aa=3").let { assertEquals("9abc", it.address); assertEquals("", it.erg); assertEquals(true, it.tokens) }
     }
+
+    @Test fun aPaymentLinkThatCannotBeReadGivesNoAmountAndNoNote() {
+        // a % that starts no byte: the digits around it must not run together into an amount (1%2 is not 12)
+        payRequestFromCode("ergo:9abc?amount=1%2").let { assertEquals("9abc", it.address); assertEquals("", it.erg) }
+        payRequestFromCode("ergo:9abc?amount=1%zz5&description=fine").let { assertEquals("", it.erg); assertEquals("fine", it.note) }
+        // bytes that are not text
+        assertEquals("", payRequestFromCode("ergo:9abc?amount=2&description=%FF%FE").note)
+        assertEquals("2", payRequestFromCode("ergo:9abc?amount=2&description=%FF%FE").erg)
+        // and what Java's own decoder refused or took, this refuses or takes
+        for (v in listOf("1%2", "%", "%zz", "a%2", "%FF", "%C3%A9", "a+b", "1.5", "", "%E2%82%AC", "100%25")) {
+            val java = try { java.net.URLDecoder.decode(v, "UTF-8").takeIf { '\uFFFD' !in it } } catch (e: Exception) { null }
+            assertEquals(v, java, percentDecodedStrictly(v))
+        }
+    }
 }

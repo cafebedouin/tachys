@@ -176,8 +176,9 @@ class Core(val on: Platform) {
      * Whether a wallet's seed phrase is sealed with a password of its own, typed by whoever made it, and not with the
      * one the Vault keeps behind the screen lock. Marked by a file beside the wallet file, so it goes when the wallet does.
      */
-    fun own(dir: String = sel): Boolean = FileAt(path(dir), OWN).exists()
-    private fun mark(dir: String, own: Boolean) { FileAt(path(dir), OWN).let { f -> if (own) f.writeText("") else f.delete() } }
+    fun own(dir: String = sel): Boolean = !on.lock || FileAt(path(dir), OWN).exists() // (where there is no screen lock every wallet is one, marked or not: nothing else could guard it)
+    /** Whether the mark is now as asked. */
+    private fun mark(dir: String, own: Boolean): Boolean = FileAt(path(dir), OWN).let { f -> try { if (own) f.writeText("") else f.delete(); f.exists() == own } catch (e: Exception) { false } }
     /** Why the core did not do what was asked, in its words; a password that does not open the phrase is recognised by a field of its answer, not by those words. */
     private fun failed(a: Reply, own: Boolean = own()): String = if (!a.badPassword) a.error else if (own) WRONG else LOST
 
@@ -194,7 +195,9 @@ class Core(val on: Platform) {
     fun create(name: String, pass: String, own: Boolean = false): String {
         val d = fresh(); seedChain(d)
         val a = sealedAsk(pass, "wallet", "new", "--state", path(d), "--name", name.ifBlank { "Wallet" })
-        if (a.ok) { mark(d, own); sel = d } else FileAt(path(d)).deleteRecursively()
+        // a wallet whose guard could not be recorded would be asked for the wrong secret from then on: it is not kept
+        if (a.ok && !mark(d, own)) { FileAt(path(d)).deleteRecursively(); return "could not record how this wallet is guarded, so it was not kept" }
+        if (a.ok) sel = d else FileAt(path(d)).deleteRecursively()
         return if (a.ok) OK else failed(a, own)
     }
     /** A seed phrase becomes a wallet; if it is the phrase of a read-only wallet already here, that wallet gets its key. */
@@ -216,7 +219,10 @@ class Core(val on: Platform) {
         // the wallet file is written first and its boxes looked for after (by the next sync); `restored` says the file is there
         val a = ask(listOf(pass, line), "wallet", "restore", "--state", path(d), "--mnemonic-file", "-", "--embed", "--name", name.ifBlank { "Wallet" }, *(if (closed) arrayOf("--reseal") else arrayOf()), "--pass-stdin")
         val done = restored(a)
-        if (done) { mark(d, own); sel = d } else if (same == null) FileAt(path(d)).deleteRecursively()
+        if (done && !mark(d, own)) { if (same == null) FileAt(path(d)).deleteRecursively(); return "could not record how this wallet is guarded" + if (same == null) ", so it was not kept" else "; restore it again" }
+        // sealed again over a wallet that was here: the mark says what guards it only if the new password does open it
+        if (done && closed && !opens(pass, d)) return "the wallet was not sealed again with this password; it is as it was"
+        if (done) sel = d else if (same == null) FileAt(path(d)).deleteRecursively()
         return if (done) OK else failed(a, own)
     }
     fun rename(name: String) = run("wallet", "name", "--state", state, "--name", name.ifBlank { "Wallet" })
@@ -226,7 +232,7 @@ class Core(val on: Platform) {
     /** The seed phrase, or "! " and the reason it cannot be shown. */
     fun mnemonic(pass: String): String = sealedAsk(pass, "wallet", "mnemonic", "--state", state).let { a -> textOf(a, "mnemonic") ?: ("! " + failed(a)) }
     /** Whether this password opens the wallet's seed phrase. */
-    fun opens(pass: String): Boolean = textOf(sealedAsk(pass, "wallet", "mnemonic", "--state", state), "mnemonic") != null
+    fun opens(pass: String, dir: String = sel): Boolean = textOf(sealedAsk(pass, "wallet", "mnemonic", "--state", path(dir)), "mnemonic") != null
     fun remove() { val d = sel; FileAt(path(d)).deleteRecursively(); prefs.remove(payKey(d)) }
     fun tips(): Boolean = locked(this) { tipsNow() }
     private fun tipsNow(): Boolean {
@@ -919,9 +925,10 @@ fun Send(core: Core, w: WalletView, busy: Boolean, asked: PayRequest, send: (Str
     val chosen = remember(asked, w.dir) { mutableStateListOf<String>() }
     val amounts = remember(asked, w.dir) { mutableStateMapOf<String, String>() }
     var adding by remember(w.dir) { mutableStateOf(false) }
-    var result by remember { mutableStateOf("") }
-    var receiptQr by remember { mutableStateOf(listOf<String>()) }
-    var receipt by remember { mutableStateOf("") }
+    // (of the wallet that paid: gone when another is chosen to pay from)
+    var result by remember(w.dir) { mutableStateOf("") }
+    var receiptQr by remember(w.dir) { mutableStateOf(listOf<String>()) }
+    var receipt by remember(w.dir) { mutableStateOf("") }
     var scanning by remember { mutableStateOf(false) }
     val focus = LocalFocusManager.current
     if (scanning) { Scanner("Scan the recipient's address", { payRequestFromCode(it).let { r -> to = r.address; if (r.erg.isNotEmpty()) erg = r.erg; if (r.note.isNotEmpty()) purpose = r.note; alsoTokens = r.tokens }; scanning = false }, { scanning = false }); return }
@@ -935,6 +942,13 @@ fun Send(core: Core, w: WalletView, busy: Boolean, asked: PayRequest, send: (Str
     val spare = (w.nano - 1_100_000L - if (staying) 1_000_000L else 0L).coerceAtLeast(0L)
     val short = w.nano < 2_100_000L
     val feeToken = picked.firstOrNull()?.takeIf { short && feeInToken }
+    // the price is the price of the token the fee is paid in: asked for when the fee is switched to a token, and again
+    // if that token becomes another (the first one taken off the list with another still on it)
+    val feeId = feeToken?.id
+    LaunchedEffect(feeId) {
+        offer = -1L
+        if (feeId != null) offer = withContext(background) { core.babelPrice(feeId) }
+    }
     // the fee switched to a token, or its price just learnt, with more of that token typed than the fee leaves: the amount
     // comes down to what can be sent, whichever was done first
     LaunchedEffect(offer, feeInToken, short) {
@@ -976,8 +990,6 @@ fun Send(core: Core, w: WalletView, busy: Boolean, asked: PayRequest, send: (Str
             Spacer(Modifier.height(12.dp))
             Pill(if (feeInToken) "Fee: paid in ${first.name}  ▾" else "Fee: 0.0011 ERG  ▾", Bg, Color.White, Modifier.fillMaxWidth()) {
                 feeInToken = !feeInToken
-                // look up the price before anything is sent
-                if (feeInToken) { offer = -1L; scope.launch { offer = withContext(background) { core.babelPrice(first.id) } } }
             }
             if (feeInToken) Text(when {
                 offer == Core.UNPROVEN -> "The offers for ${first.name} could not be checked against the chain just now: the node and the peers were a block apart, or no node answered. Tap the fee button twice to ask again."

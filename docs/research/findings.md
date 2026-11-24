@@ -1338,3 +1338,74 @@ payment is the first on this build of a token sent, a fee paid in a token, a key
 code scanned.
 **Not run:** the amount coming down on the screen was not watched (the screen was read only after the payment).
 The retry when a node is a block ahead, on a phone. A signing request. `babel-offer`. Any of this on a computer.
+
+## 69. An outside model read findings 64 to 68; what held, and what changed
+
+**What was done.** The branch was given to an outside model with a long context (SubQ's `subq-savant-1.4`, through
+its API with retention off; no agent, no tools, nothing but the files), blind: told what the change set out to do
+and asked to find what is wrong, not told what we thought weak. One call over the whole change (the tree, the diff
+and findings 64 to 68, about 250000 tokens in) spent all of its 128000 tokens of output reasoning and answered
+nothing. Four calls over smaller slices, each with one question, answered: the C boundary and calls side by side;
+the code that replaced the JVM's classes, against the Android code before; the screens; the draft for an iPhone.
+They made 34 claims. Each was checked against the code here before anything was changed.
+
+**What held, and was changed.**
+- A payment link with a % that starts no byte read `amount=1%2` as 12 ERG, filled into Send: the Android code
+  before dropped such a parameter (Java's decoder refused it), and the replacement kept the stray % and the digits
+  ran together. A payment link's values are now decoded strictly, and one that cannot be read is dropped; bytes
+  that are not UTF-8 likewise. (Receipts are read leniently, as before.)
+- On a computer a wallet whose `own-password` mark was missing fell back to the screen-lock path, where the
+  desktop's guard says yes to everything: it could be removed with nothing asked. Where there is no screen lock
+  every wallet is now one with a password of its own, marked or not. A mark that cannot be written is no longer
+  ignored: the wallet just made is not kept. A wallet sealed again by restoring over it is checked to open with
+  the new password before its mark is changed.
+- The price of a fee paid in a token was asked for once, for the first token on the list, and kept when that token
+  was taken off with another still there: the screen then quoted and kept back the wrong token's price. It is now
+  asked for whenever the fee's token changes.
+- A token said to have fewer than no decimal places stopped the Send screen (`units` failed on it; `BigDecimal` had
+  not). Read as before now.
+- Removing a wallet, or making a folder, failed loudly where `java.io.File` had only said no (okio throws): a
+  wallet folder that could not be deleted would have stopped the app. They say no again.
+- What a call held of an answer or of its input was freed unwiped (the answer may be a seed phrase): a call's
+  report, sentences, captured output and unread input are now wiped when it is dropped. The input lines given to
+  `tachys_c::call` are wiped on every way out, not only when the command returns; the JNI entry wipes the strings
+  it had made when a later one is not UTF-8; the Kotlin side no longer leaves a copy of the input in a stream's
+  buffer.
+- A payment's result and receipt stayed on the Send screen when another wallet was chosen to pay from.
+- `tachys.h` said nothing is written to stderr; a panic's one line is. It says so.
+- `platforms.md`: the commands were for a POSIX shell only though Windows was named; the draft's path was wrong; it
+  did not say that the iPhone framework must be declared and the core linked into it, without which the link
+  fails; its list of what a `Platform` must give left out six members; it assumed an Apple-silicon Mac.
+- `JsonTest` did not compare the `get…` readings, which the app uses on wallet files. It does now.
+
+**What did not hold.**
+- That a thread tokio keeps for blocking work might not belong to the call, so that two calls could see each
+  other's network or a seed phrase could be written to the process's output: it does belong
+  (`a_thread_the_runtime_keeps_for_blocking_work_belongs_to_the_call_too`), and no command makes a thread outside
+  its runtime.
+- That the common-code check works with or without the iPhone targets, so that the docs' claim for it is wrong:
+  tried both ways with a JVM call planted in the common code. With the targets, `Unresolved reference 'java'`;
+  without them the task is skipped and the call compiles.
+- That every sync after the first fails because the chain files are copied without overwriting (okio's copy
+  overwrites; the reviewer did not have `Files.kt`). That the app lock is asked for through a wallet's password
+  (Settings is given the phone's guard). That the iPhone draft is outside any compiled source set (the slice
+  flattened its path).
+- That a receipt's purpose reads `+` as a space where Android did not: the reviewer reasoned from `Uri.decode`;
+  the app used `Uri.getQueryParameter`. Not settled here: Android's source was not at hand. Left as it is; the app
+  itself always writes a plus sign as %2B.
+
+**Known and left.** A seed phrase shown, and a password typed, are Kotlin strings, which cannot be wiped (finding
+65). JSON's null reads as absent (finding 67). `units` differs from `BigDecimal` on text no field can produce (a
+sign, a space, an exponent). The runtime's worker threads have tokio's default stack, as they had when the core was
+a program. On iOS one lock serves every `locked` block, which is its one use today.
+
+**Tests:** `aPaymentLinkThatCannotBeReadGivesNoAmountAndNoNote` (and the strict decoder against Java's on eleven
+values); `aTokenSaidToHaveFewerThanNoPlacesIsReadAsBigDecimalReadItAndStopsNothing`; `JsonTest` with the `get…`
+readings; `ScreensTest`: a wallet on a computer with its mark deleted is still one with a password of its own;
+`a_thread_the_runtime_keeps_for_blocking_work_belongs_to_the_call_too`.
+**Run** (`runs/2026-11-24-outside-review.txt`): clippy over the four crates; their tests, 161 passed; the shared
+module's, 32, none skipped; the common-code check; both phone libraries and the app built.
+**Not run:** this build on a phone. The fee's price asked again when its token changes, the result cleared on a
+change of wallet, the mark that cannot be written, and the reseal check have no test and were not tried by hand.
+The wiping was read, not observed. The reviewer's corrections to the iPhone draft's build were written into the
+docs as steps and not into the build, since nothing here can try them. No second reviewer, and no person.

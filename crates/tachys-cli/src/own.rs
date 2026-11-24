@@ -41,3 +41,26 @@ pub(crate) fn runtime_of_its_own() -> tokio::runtime::Runtime {
     let own = Own::new();
     tokio::runtime::Builder::new_multi_thread().enable_all().on_thread_start(move || join(&own)).build().unwrap()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A call's runtime has threads besides its workers: the ones tokio keeps for work that blocks (looking up a
+    /// name is done on one). Those belong to the call too, or what they said or set would go to the state every
+    /// unclaimed thread shares.
+    #[test]
+    fn a_thread_the_runtime_keeps_for_blocking_work_belongs_to_the_call_too() {
+        let mine = Own::new();
+        let theirs = mine.clone();
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().on_thread_start(move || join(&theirs)).build().unwrap();
+        let (on_worker, on_blocking) = rt.block_on(async {
+            let w = tokio::spawn(async { own() }).await.unwrap();
+            let b = tokio::task::spawn_blocking(own).await.unwrap();
+            (w, b)
+        });
+        assert!(Arc::ptr_eq(&on_worker, &mine), "a worker thread");
+        assert!(Arc::ptr_eq(&on_blocking, &mine), "a blocking-pool thread");
+        assert!(!Arc::ptr_eq(&own(), &mine), "and not a thread the call never had");
+    }
+}

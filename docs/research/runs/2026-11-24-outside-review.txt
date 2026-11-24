@@ -1,0 +1,28 @@
+==== the reviewer
+SubQ subq-savant-1.4 through its chat API (ergo_logic's tools/api-seat), store=false sent with each call; the files inline,
+no tools. The prompts and answers are kept out of the repository.
+
+call 0, the whole change (50 files, the diff, findings 64-68): prompt_tokens 249495, completion_tokens 128000 of which
+  reasoning 128000; finish_reason length; no answer
+call 1, the C boundary and calls side by side (14 files): prompt 35614, completion 68136 (reasoning 64942); stop; 9 findings
+call 2, the replaced JVM classes against the code before (14 files): prompt 84372, completion 94870 (reasoning 91671); stop; 9 findings
+call 3, the screens (10 files): prompt 83041, completion 53890 (reasoning 51668); stop; 7 findings
+call 4, the iPhone draft (14 files): prompt 10499, completion 71921 (reasoning 68058); stop; 9 findings
+
+==== two of its claims, tried
+the common-code check, with `fun probe(): String = java.io.File("x").name` planted in commonMain:
+  with the iPhone targets declared:  e: .../Probe.kt:2:23 Unresolved reference 'java'.  BUILD FAILED
+  with them taken out of the build file:  > Task :shared:compileCommonMainKotlinMetadata SKIPPED  BUILD SUCCESSFUL;
+    :shared:compileKotlinDesktop BUILD SUCCESSFUL
+  (both put back afterwards)
+threads made outside a call's runtime (grep for thread::spawn, thread::Builder, spawn_blocking in the three crates' src):
+  only in tests
+cargo test -p tachys --lib own:: : a_thread_the_runtime_keeps_for_blocking_work_belongs_to_the_call_too ... ok
+
+==== after the changes
+cargo clippy -p tachys -p tachys-verify -p tachys-net -p tachys-c --all-targets -- -D warnings: clean
+cargo test over the same four: 161 passed, 0 failed
+android/build-core.sh: aarch64 6003160 bytes, armv7 3790252 bytes, no build-machine paths
+./gradlew :shared:compileCommonMainKotlinMetadata :shared:cleanDesktopTest :shared:desktopTest assembleDebug assembleRelease -PtachysIdSuffix=.test:
+  BUILD SUCCESSFUL; 32 tests, 0 skipped, 0 failed
+  app-arm64-v8a-release.apk 4535436 bytes, app-armeabi-v7a-release.apk 3784796 bytes

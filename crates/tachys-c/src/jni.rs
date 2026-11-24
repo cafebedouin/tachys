@@ -52,9 +52,15 @@ unsafe fn bytes(env: Env, array: Array) -> Option<Vec<u8>> {
 }
 /// The strings of a list as it crosses: each ends with a 0 byte. `None` if one is not UTF-8.
 fn list(mut b: Vec<u8>) -> Option<Vec<String>> {
-    let all: Option<Vec<String>> = b.split_inclusive(|&c| c == 0).map(|s| std::str::from_utf8(s.strip_suffix(&[0]).unwrap_or(s)).ok().map(str::to_string)).collect();
+    // (built one at a time, so that the strings already made are wiped if a later one cannot be: one may be a password)
+    let mut all = Vec::new();
+    let mut good = true;
+    for s in b.split_inclusive(|&c| c == 0) {
+        match std::str::from_utf8(s.strip_suffix(&[0]).unwrap_or(s)) { Ok(t) => all.push(t.to_string()), Err(_) => { good = false; break } }
+    }
     b.zeroize();
-    all
+    if !good { all.iter_mut().for_each(Zeroize::zeroize); return None }
+    Some(all)
 }
 /// An answer as it crosses back.
 fn packed(a: tachys::Answer) -> Vec<u8> {

@@ -55,7 +55,8 @@ private fun typed(text: String): Triple<Boolean, String, String>? {
  */
 fun units(text: String?, decimals: Int): Long {
     val (negative, whole, part) = typed(text ?: "") ?: return 0L
-    val digits = (whole + part.padEnd(decimals, '0').take(decimals)).trimStart('0')
+    // (places below zero: the units are that many digits larger than one, so that many of the whole digits are cut off)
+    val digits = (if (decimals >= 0) whole + part.padEnd(decimals, '0').take(decimals) else whole.dropLast(-decimals)).trimStart('0')
     if (digits.isEmpty()) return 0L
     val n = if (digits.length > 19) null else digits.toLongOrNull()
     return when { n == null -> Long.MAX_VALUE; negative -> -n; else -> n }

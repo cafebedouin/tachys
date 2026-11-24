@@ -25,6 +25,12 @@ class JsonTest {
             if (o != null) same(ours.getJSONObject(k), o, at)
             else if (a != null) same(ours.optJSONArray(k)!!, a, at)
             else assertEquals(at, theirs.optString(k, "none"), ours.optString(k, "none"))
+            // the readings that fail when there is nothing to give: where org.json gives a value, the same value
+            fun <T> got(f: () -> T): T? = try { f() } catch (e: Exception) { null }
+            got { theirs.getString(k) }?.let { assertEquals(at, it, ours.getString(k)) }
+            got { theirs.getLong(k) }?.let { assertEquals(at, it, ours.getLong(k)) }
+            got { theirs.getInt(k) }?.let { assertEquals(at, it, ours.getInt(k)) }
+            got { theirs.getBoolean(k) }?.let { assertEquals(at, it, ours.getBoolean(k)) }
         }
     }
     private fun same(ours: JSONArray, theirs: org.json.JSONArray, where: String) {

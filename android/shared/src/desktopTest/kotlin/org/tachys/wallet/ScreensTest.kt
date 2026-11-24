@@ -93,6 +93,10 @@ class ScreensTest {
             screen.onNodeWithText("Open").performClick()
             words().assertCountEquals(12)
             assertEquals(1, core.dirs().size)
+            // with its mark gone the wallet is still one with a password of its own here: a computer has no screen lock
+            // to fall back to, so nothing may be asked of one (and Remove still asks for the password)
+            assertTrue(File(st, Core.OWN).delete())
+            assertTrue(core.own())
         } finally { dir.deleteRecursively() }
     }
 }

@@ -64,4 +64,10 @@ class DecimalTest {
         // no price known: nothing is kept
         assertEquals(135L, leftAfterFee(135L, 0L))
     }
+
+    @Test fun aTokenSaidToHaveFewerThanNoPlacesIsReadAsBigDecimalReadItAndStopsNothing() {
+        // (a node could report such a number for a token; the screen must not fail on it)
+        for (text in listOf("0", "1", "9", "12", "129", "1.5", "1234.5678", "", ".", "999999999999999999999")) for (d in listOf(-1, -2, -5, -30)) assertEquals("$text / $d", was(text, d), units(text, d))
+        assertEquals("120", shown(12L, -1))
+    }
 }

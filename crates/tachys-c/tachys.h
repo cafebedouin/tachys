@@ -8,8 +8,9 @@
  *     tachys_free(a);
  *
  * It blocks until the command has ended. It may be called from several threads at once; each call has its own
- * network and its own answer. Nothing is written to the process's stdout or stderr and the process is never ended:
- * a panic inside the wallet comes back as code 70. A stack overflow or an abort inside it would still end the
+ * network and its own answer. Nothing is written to the process's stdout, and the process is never ended: a panic
+ * inside the wallet (a fault in it) comes back as code 70, after Rust has written its one line about it to the
+ * process's stderr. A stack overflow or an abort inside it would still end the
  * process: nothing in a library can stop that.
  */
 #ifndef TACHYS_H
