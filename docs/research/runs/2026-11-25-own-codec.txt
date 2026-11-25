@@ -94,3 +94,10 @@ Send from agent2: the funded wallet's address, 0.0089 ERG (what is left of the 0
   is guarded by the screen lock, which was not given. Nothing was typed into it; CANCEL:
   "The phone's screen lock was not given, so the seed phrase stays closed.", the address and amount still in the form
 agent2 still 0.011000 ERG in 2 boxes; pidof org.tachys.wallet.test the same from the first screen to the last
+
+the payment back, made by the maintainer on the phone (the screen lock is theirs): from the build machine a few
+  blocks later, agent2's main address: balance 0.001000000 ERG in 1 boxes, proven at height 1924203;
+  "5313a970… gone", "c64ca943… gone", "fd8dbb84… 1000000 nanoERG, proven unspent at 1924203 (added)"
+  the transaction, as a public node gives it (697f4fb8…, height 1924203): in 5313a970… (0.001 ERG, 10 SigRSV) and
+  c64ca943… (0.01 ERG); out 0.0089 ERG with the 10 SigRSV to the funded wallet, 0.001 ERG back to agent2, fee 0.0011
+  (the token went with the payment; what was typed on the phone for it was not seen from here)

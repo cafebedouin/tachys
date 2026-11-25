@@ -1572,7 +1572,9 @@ seconds; the build machine and a public node gave the same tip.
 Then, the phone unlocked, the app itself on that Note 2 with the new core: a sync of two wallets, Details and
 Receive, a balance the build machine proved the same, and 0.01 ERG paid from one wallet to the other on mainnet,
 its receipt proven from the build machine a block later.
-**Not run:** the payment back. The wallet it had to come from is guarded by the phone's screen lock, which was not
-given; the app asked for it, was refused, said so and signed nothing. A signing request, and testnet, on the phone. The
+The payment back had to come from a wallet guarded by the phone's screen lock, which was not given: the app asked
+for it, was refused, said so and signed nothing. The maintainer then made it by hand, and the build machine proved
+the result (the coins gone from that wallet, 0.001 ERG left, in a block three later).
+**Not run:** a signing request, and testnet, on the phone. The
 vendored codec is the measure here, not the reference node: where the two differ, this one differs with it. The
 fuzzing was minutes, not days.
