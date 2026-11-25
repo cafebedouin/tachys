@@ -106,7 +106,8 @@ instead, which as far as we know is new for Ergo:
 - Accepting a payment by its signed transaction as well as by a box id (most counterparties hand over a transaction
   id; a transaction id alone does not name the coins without a node's word).
 - The peer protocol's codec is the wallet's own (finding 72), held by tests to the vendored one, which is no longer
-  in the program. Still to do: its messages that only the rig uses (box proofs, a carried payment) are written by
+  in the program; four rig recipes pass on it. Still to do: the app's screens on a phone with it (the build is
+  installed; the phone was locked); its messages that only the rig uses (box proofs, a carried payment) are written by
   hand in `lib.rs` with the codec's reader and have no second implementation to be held to; the handshake's
   decoder is as lenient as the vendored one's, which was not compared with the reference node's; and the vendored
   crates could leave the repository once the tests that use them to stand in for a node have a stand-in of their

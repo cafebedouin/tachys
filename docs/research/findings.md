@@ -1562,7 +1562,14 @@ and the new wallet's seed phrase had that word in it (about one wallet in 170). 
 peers in eight groups, 1703 headers linked back to the checkpoint by each; `sync` with each: proofs fetched from
 fourteen and fifteen peers and refused for the reason finding 2 gives; `cargo tests`, 1017 passed; clippy and the
 format check; both phone libraries; the app's 45 tests and its debug build.
-**Not run:** on a phone; on testnet; the rig, so the messages only it uses (a box proof over the peer protocol, a
-carried payment, a wallet serving another) ran in the loopback tests and not between real nodes. The vendored
-codec is the measure here, not the reference node: where the two differ, this one differs with it. The fuzzing was
-minutes, not days.
+**Run afterwards** (the same log): the rig, one recipe at a time with nothing else running. light-wallet,
+light-overlay, offline-payee and store-forward PASS, so the messages only the rig uses (a box proof over the peer
+protocol, a carried payment, a wallet serving another) have crossed between real nodes and wallets through this
+codec. dishonest-payer INCONCLUSIVE twice, as on 2026-11-23: part 1 ran through, and in part 2 the rig's nodes did
+not reorganise. On a Galaxy Note 2 the core, built for the phone and run as a program from adb's shell with a state
+directory of its own, agreed on the mainnet tip from eight peers and linked 1741 headers to the checkpoint in 47
+seconds; the build machine and a public node gave the same tip.
+**Not run:** the app's screens on the phone: the new build is installed over the copy that was there, but the phone
+was at its screen lock, which was not given, so no sync, payment or request was made through the app. Testnet. The
+vendored codec is the measure here, not the reference node: where the two differ, this one differs with it. The
+fuzzing was minutes, not days.

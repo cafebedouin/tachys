@@ -46,3 +46,29 @@ cargo tests: 1017 passed, 0 failed, 7 ignored
   ScreensTest ... "Did not expect any node but found '1' node ... contains 'phone' ... Text = '[5. phone]'"
   (the new wallet's seed phrase had the word "phone" in it; nothing to do with the codec). The test now leaves the
   numbered words out; again: 45 tests, 0 skipped, 0 failed
+
+==== the rig, with the wallet's own codec (release build of 8ee94c9; peeryard rig.sh, ergo-6.0.8.jar and
+     rig/out/ergo-6.0.8-boxproof.jar; one recipe at a time, nothing else running on the machine)
+light-wallet     PASS   (tip sync from both nodes; a payment accepted by receipt over the peer protocol; the same request
+                         to the unpatched node; tachys pays back and finds its change)
+light-overlay    PASS   (a wallet learns the tip from another wallet, with no node in its path)
+offline-payee    PASS   (a payee with no route checks a receipt through a relaying wallet)
+store-forward    PASS   (a payment signed offline, carried by another wallet and submitted)
+dishonest-payer  INCONCLUSIVE, twice: part 1 ran through each time (the receipt of a double-spent payment was never
+                         accepted: state "expected", then ABSENT, balance 0); in part 2
+                         "[rig] HARNESS-FAIL the reorganisation did not happen: A kept its branch", the rig's fault the
+                         roadmap names and the result of 2026-11-23 too; the harness counts nothing of such a run
+
+==== on a phone (Galaxy Note 2, SGH-T889, Android 7.1.2, armeabi-v7a, over adb on the local network)
+./gradlew assembleRelease -PtachysIdSuffix=.test: app-armeabi-v7a-release.apk 3779192 bytes (libtachys_c.so 3769516)
+adb install -r: Success (over the copy already there, its wallets kept)
+the phone was at its lock screen, which is a secure one (dumpsys window policy: secure=true) and was not given:
+  the app was started and never seen; none of its screens was driven
+the core as a program, built for the phone (cargo build --profile phone -p tachys --target armv7-linux-androideabi,
+  3329848 bytes), put in /data/local/tmp and run from adb's shell with a state directory made there; no wallet touched
+  tachys tips --state codec-state --json: exit 0 in 64 s
+    verdict agreed; 8 peers heard, 8 groups, no refusals; tip 1924135 14735453df46dc05...
+    linked 1741 headers from 1922384 (520651 B, 46805 ms); neighbour cost 8 connections, 6 messages, 19567 B
+  the same tip from the build machine a minute later (agreed 1924135 14735453df46dc05) and from a public node's
+    /blocks/at/1924135
+  what was put on the phone was removed afterwards
