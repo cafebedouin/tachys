@@ -72,3 +72,25 @@ the core as a program, built for the phone (cargo build --profile phone -p tachy
   the same tip from the build machine a minute later (agreed 1924135 14735453df46dc05) and from a public node's
     /blocks/at/1924135
   what was put on the phone was removed afterwards
+
+==== the app's screens on the phone, once it had been unlocked (the same Note 2; the copy that installs beside the app,
+     release build of cbdcbfa's tree; mainnet; screens read with uiautomator and driven with adb's taps and text)
+the copy held two wallets from before: "agent2" (0.001000 ERG, 1 box, 10 SigRSV) and a funded one (20.69…… ERG, 3
+boxes, 5 tokens). Addresses, and all but the start of ids, are left out.
+start: "syncing… · tap to sync", then "synced just now"; both cards "proven at height 1924192"
+agent2, Details: "All 2 addresses", Balance 0.001000 ERG, "every box proven against the peers' agreed tip",
+  Pending none, Boxes 1, 1 token (10 SigRSV)
+agent2, Receive: "Main address of 2", the address, "Copy address", "Have a receipt?"
+the same address from the build machine (a read-only wallet in a scratch directory; tips, then
+  wallet status --reconcile): balance 0.001000000 ERG in 1 boxes, proven at height 1924194; token 003bd19d… 10
+Send from the funded wallet: agent2's address, 0.01 ERG; the form read back before Send; Send: dialog
+  "Send from …", "This wallet has a password of its own."; the password, Open:
+  "Sent 0.01 ERG. Fee 0.0011 ERG. Give the payee this receipt (you can find it again under Details):" c64ca943…
+sync, half a minute later: agent2 0.011000 ERG, "proven at height 1924196 · 2 boxes"; the funded wallet 20.684914
+from the build machine: boxes 2, nanoerg 11000000; the receipt c64ca943… is one of them, 10000000 nanoERG,
+  confirmed at 1924196
+Send from agent2: the funded wallet's address, 0.0089 ERG (what is left of the 0.01 after the fee); Send: not the
+  wallet's own prompt but the phone's (com.android.settings/ConfirmLockPassword, titled "Send from agent2"): agent2
+  is guarded by the screen lock, which was not given. Nothing was typed into it; CANCEL:
+  "The phone's screen lock was not given, so the seed phrase stays closed.", the address and amount still in the form
+agent2 still 0.011000 ERG in 2 boxes; pidof org.tachys.wallet.test the same from the first screen to the last
