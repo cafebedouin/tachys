@@ -40,7 +40,10 @@ call this one. Written for one person.
   every occurrence, `cargo update`, run the tests and the four rig recipes, and read its changelog for anything
   touching signing, box selection or the AVL verifier.
 - **The vendored codec** (`vendor/arkadianet-codec/`) is a copy; its `NOTICE.md` records the upstream commit. It is
-  not edited here. To take an upstream fix, copy the files again from a named commit and update the notice.
+  not edited here. To take an upstream fix, copy the files again from a named commit and update the notice. It is
+  no longer in the program: the wallet's own codec is `crates/tachys-net/src/wire.rs`, and the vendored one is what
+  the tests hold it to. A change to `wire.rs` that those tests refuse is a change to what peers are sent or what is
+  taken from them: it wants a reason from the reference node, not from here.
 - **`Cargo.lock` is tracked** and CI builds with `--locked`.
 - **The Android side** pins its plugin, Kotlin and Compose versions in `android/build.gradle.kts` and
   `android/app/build.gradle.kts`. After moving any, build and try the app on the oldest and the newest phone to
@@ -51,7 +54,8 @@ call this one. Written for one person.
 
 `fuzz/` is a crate of its own (not in the workspace: it wants a nightly toolchain and `cargo install cargo-fuzz`). Its
 four targets take the bytes a node or a peer chooses: `box_proof` (the wallet's own reader of a box proof, with no
-`catch_unwind`, held to what the honest proof says), `peer_message` (the vendored codec's decoders), `signed_bytes`
+`catch_unwind`, held to what the honest proof says), `peer_message` (the wallet's own decoders of a peer's messages, beside the vendored codec's: a panic in either is a
+find, and so is the two disagreeing), `signed_bytes`
 (the signing library's transaction, box and signing-request decoders) and `header` (a pushed header and its proof of
 work). From the repository's root:
 

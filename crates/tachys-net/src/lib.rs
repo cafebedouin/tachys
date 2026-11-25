@@ -2,8 +2,10 @@
 //! One connection, one handshake, one request, one answer; everything else the peer sends is ignored.
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use ergo_p2p::connection::Connection;
-use ergo_p2p::framing::MAINNET_MAGIC as DEFAULT_MAGIC;
+pub mod wire;
+
+use crate::wire::Connection;
+use crate::wire::MAINNET_MAGIC as DEFAULT_MAGIC;
 
 /// What every connection is made with: the network's magic, and what the handshake declares about this client.
 #[derive(Clone, Copy)]
@@ -83,15 +85,15 @@ fn mode_features() -> Vec<PeerFeature> {
 fn magic() -> [u8; 4] {
     wire(|w| w.magic)
 }
-use ergo_p2p::handshake::{
+use crate::wire::NipopowProofData;
+use crate::wire::{
     deserialize_handshake_with_consumed, serialize_handshake, Handshake, PeerFeature, PeerSpec,
     Version,
 };
-use ergo_p2p::message::{
+use crate::wire::{
     deserialize_nipopow_proof, serialize_get_nipopow_proof, CODE_GET_NIPOPOW_PROOF,
     CODE_NIPOPOW_PROOF,
 };
-use ergo_p2p::types::NipopowProofData;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -256,11 +258,11 @@ pub async fn fetch_proof_padded(
 
 // ---- tips: what peers push unprompted, and a short header chain from one peer ----
 
-use ergo_p2p::message::{
+use crate::wire::InvData;
+use crate::wire::{
     deserialize_inv, deserialize_modifiers, deserialize_sync_info, serialize_inv,
     serialize_sync_info, SyncInfo, CODE_INV, CODE_MODIFIER, CODE_REQUEST_MODIFIER, CODE_SYNC_INFO,
 };
-use ergo_p2p::types::InvData;
 
 pub const HEADER_TYPE: u8 = 101;
 
@@ -786,8 +788,8 @@ pub async fn fetch_box_proof(
             ids.len()
         ));
     }
-    use ergo_primitives::reader::VlqReader;
-    use ergo_primitives::writer::VlqWriter;
+    use crate::wire::Reader as VlqReader;
+    use crate::wire::Writer as VlqWriter;
     let (_hs, mut conn, t0, connect_ms) = open(addr).await?;
     let mut w = VlqWriter::new();
     w.put_u16(ids.len() as u16);
@@ -924,8 +926,8 @@ pub async fn serve(
     relay: Option<ProofRelay>,
     reload: Option<Reload>,
 ) -> Result<ServeStats, String> {
-    use ergo_p2p::message::serialize_modifiers;
-    use ergo_p2p::types::ModifiersData;
+    use crate::wire::serialize_modifiers;
+    use crate::wire::ModifiersData;
     use std::sync::{Arc, Mutex};
     let listener = tokio::net::TcpListener::bind(listen)
         .await
@@ -1041,7 +1043,7 @@ pub async fn serve(
                     // pass a box-proof request on to our own node and hand the answer back unchanged;
                     // the asker verifies it, so we add nothing to trust, only reach
                     if let Some(relay) = &relay {
-                        let mut r = ergo_primitives::reader::VlqReader::new(&frame.payload);
+                        let mut r = crate::wire::Reader::new(&frame.payload);
                         let Ok(n) = r.get_u16() else { return };
                         if n == 0 || n as usize > MAX_BOX_PROOF_IDS {
                             continue;
@@ -1060,7 +1062,7 @@ pub async fn serve(
                                 newer.extend(hs.drain(..));
                                 *hs = newer;
                             }
-                            let mut w = ergo_primitives::writer::VlqWriter::new();
+                            let mut w = crate::wire::Writer::new();
                             w.put_bytes(&ans.header_id);
                             w.put_u32(ans.proof.len() as u32);
                             w.put_bytes(&ans.proof);
@@ -1177,8 +1179,8 @@ pub async fn submit_tx(
     tx_bytes: Vec<u8>,
     wait: Duration,
 ) -> Result<(bool, Cost), String> {
-    use ergo_p2p::message::{serialize_modifiers, CODE_INV};
-    use ergo_p2p::types::ModifiersData;
+    use crate::wire::ModifiersData;
+    use crate::wire::{serialize_modifiers, CODE_INV};
     let (_hs, mut conn, t0, connect_ms) = open(addr).await?;
     let inv = serialize_inv(&InvData {
         type_id: TX_TYPE,

@@ -1205,7 +1205,11 @@ fn patched_node(
                             time: 1,
                             peer_spec: PeerSpec {
                                 agent_name: "patched-node".into(),
-                                version: tachys_net::PROTOCOL,
+                                version: ergo_p2p::handshake::Version {
+                                    major: tachys_net::PROTOCOL.major,
+                                    minor: tachys_net::PROTOCOL.minor,
+                                    patch: tachys_net::PROTOCOL.patch,
+                                },
                                 node_name: "patched".into(),
                                 declared_address: None,
                                 features: vec![],

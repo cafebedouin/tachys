@@ -7,11 +7,16 @@ publish = false
 license = "CC0-1.0"
 
 [dependencies]
-ergo-p2p = { path = "../../vendor/arkadianet-codec/ergo-p2p" }
-ergo-primitives = { path = "../../vendor/arkadianet-codec/ergo-primitives" }
-tokio = { version = "1", features = ["net", "io-util", "time", "sync"] }
+# the frame's checksum (the first four bytes of Blake2b-256); the signing library brings the same crate
+blake2 = "0.10"
+# `rt`: the serving side starts a task for each peer (the vendored codec used to turn it on for us)
+tokio = { version = "1", features = ["net", "io-util", "time", "sync", "rt"] }
 
 [dev-dependencies]
+# the vendored codec, which the wallet's own (src/wire.rs) took the place of: kept for the tests, which hold the two
+# to each other and use it to stand in for a node
+ergo-p2p = { path = "../../vendor/arkadianet-codec/ergo-p2p" }
+ergo-primitives = { path = "../../vendor/arkadianet-codec/ergo-primitives" }
 tokio = { version = "1", features = ["net", "io-util", "time", "sync", "macros", "rt-multi-thread"] }
 tachys-verify = { path = "../tachys-verify" }
 ergo-ser = { path = "../../vendor/arkadianet-codec/ergo-ser" }

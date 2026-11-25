@@ -13,6 +13,8 @@ same repository at the same commit (`test-vectors/` there) under the same licenc
 and four for `ergo-ser`. Without them six unit tests failed for want of a file; with them
 `cargo test --workspace` passes. The rest of the repository's `test-vectors/` is not copied.
 
-They are here so the proof of concept can speak the Ergo peer protocol from day one. tachys uses only
-framing, the handshake and the NiPoPoW request/response codecs; replacing this with a minimal codec
-of our own is a planned step, measured against the footprint goal.
+They were here so the proof of concept could speak the Ergo peer protocol from day one. Since 2026-11-25 the
+wallet speaks it through a codec of its own (`crates/tachys-net/src/wire.rs`), and nothing here is in the
+program or in the phone's library: these crates are built for the tests only, which hold the wallet's codec to
+this one, byte for byte and both ways (`crates/tachys-net/tests/wire.rs`, the `peer_message` fuzz target), and
+use it to stand in for a node.

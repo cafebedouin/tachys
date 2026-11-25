@@ -212,7 +212,12 @@ fn their_handshake() -> Vec<u8> {
         time: 1,
         peer_spec: PeerSpec {
             agent_name: "other".into(),
-            version: PROTOCOL,
+            // (this peer speaks through the vendored codec, which has a version type of its own)
+            version: ergo_p2p::handshake::Version {
+                major: PROTOCOL.major,
+                minor: PROTOCOL.minor,
+                patch: PROTOCOL.patch,
+            },
             node_name: "other".into(),
             declared_address: None,
             features: vec![],

@@ -12,7 +12,8 @@ members = [
 # the fuzz targets are a workspace of their own (fuzz/Cargo.toml): nightly and cargo-fuzz, which nothing else here needs
 exclude = ["fuzz"]
 
-# Inherited by the vendored codec crates (see vendor/arkadianet-codec/NOTICE.md).
+# Inherited by the vendored codec crates (see vendor/arkadianet-codec/NOTICE.md), which are built for the tests only:
+# the wallet's own codec is crates/tachys-net/src/wire.rs.
 [workspace.package]
 version    = "0.7.0"
 edition    = "2021"

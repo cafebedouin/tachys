@@ -12,6 +12,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 tachys = { path = "../crates/tachys-cli" }
 tachys-verify = { path = "../crates/tachys-verify" }
+tachys-net = { path = "../crates/tachys-net" }
 ergo-p2p = { path = "../vendor/arkadianet-codec/ergo-p2p" }
 ergo-lib = { git = "https://github.com/ergoplatform/sigma-rust", rev = "688511dff3e3436dfdd6bd368e3eeef6f67d59e9", default-features = false, features = ["std", "json"] }
 ergotree-ir = { git = "https://github.com/ergoplatform/sigma-rust", rev = "688511dff3e3436dfdd6bd368e3eeef6f67d59e9" }

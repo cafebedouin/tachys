@@ -1,0 +1,48 @@
+==== what the wallet used of the vendored codec (grep of the four crates' sources, before)
+ergo-p2p (about 14,500 lines): Connection::new_with_buffer, read_message, send; the handshake (serialize,
+  deserialize_with_consumed, Handshake, PeerSpec, PeerFeature, Version); inv, modifiers, sync info, the NiPoPoW
+  request and answer, six message codes; MAINNET_MAGIC
+ergo-primitives (about 2,700 lines): VlqReader, VlqWriter
+ergo-ser (about 22,200 lines): two functions, in tests only
+
+==== size, before and after (same machine, same toolchain 1.98.1)
+cargo build --release -p tachys, stripped:   11484832 B -> 10966928 B   (-517904)
+android/build-core.sh, aarch64 (phone):       6013848 B ->  5883160 B   (-130688)
+android/build-core.sh, armv7 (phone):         3797420 B ->  3769516 B   (-27904)
+cargo tree -p tachys -e normal, crates:           205 -> 197
+  gone: ergo-p2p ergo-primitives ergo-ser hex redb tracing tracing-attributes tracing-core
+cargo tree -p tachys-net -e normal, crates:        40 -> 14
+crates/tachys-net/src/wire.rs: 873 lines as formatted, comments included
+
+==== the two codecs held to each other
+cargo test -p tachys-net --test wire: 8 passed
+  (numbers written and read; frames; handshakes; inv, modifiers, sync info, the proof request and the proof: the same
+   bytes out, the same read back, the same refused, on values and bytes made at random and on valid ones damaged;
+   and messages across a socket between this connection and the vendored one, both ways)
+five faults planted in wire.rs one at a time, and the tests run on each:
+  a length taken up to 32 bits and not 31                      -> 1 test failed
+  a signed number not widened as the JVM widens it             -> 3 failed
+  a mode cut short read as keeping no blocks, not all          -> 1 failed
+  fifty headers of sync info refused, where fifty are allowed  -> none failed; the test never made a message of fifty.
+                                                                  Changed to make them; then 1 failed
+  a frame's checksum not checked                               -> 2 failed
+cargo +nightly fuzz run peer_message (the two decoders side by side, a disagreement a failure), from fuzz/seeds:
+  Done 4894949 runs in 301 second(s); cov 1355; no failure, no artifact
+
+==== on mainnet, the build before (the vendored codec) and the build after, one after the other, fresh state each
+tachys tips --state DIR --json
+  after:  verdict agreed, 8 peers heard in 8 groups, 0 refusals; tip 1924097 d42299954b36...; linked 1703 headers from
+          1922384 (509781 B, 5343 ms); 14.0 s
+  before: verdict agreed, 8 peers heard in 8 groups, 0 refusals; tip 1924097 d42299954b36...; linked 1703 headers from
+          1922384 (509794 B, 5320 ms); 13.9 s
+tachys sync --state DIR --json (asks peers for a NiPoPoW proof; refused by both for the reason finding 2 gives)
+  after:  15 answered with a proof, 0 accepted, 15 rejected [C6TipHeight, C8Recency], 17 gave none; 2452203 B in 60.9 s
+  before: 14 answered with a proof, 0 accepted, 14 rejected [C6TipHeight, C8Recency], 18 gave none; 2289463 B in 61.0 s
+
+==== after
+cargo fmt --check and cargo clippy -D warnings over the four crates: clean
+cargo tests: 1017 passed, 0 failed, 7 ignored
+./gradlew :shared:cleanDesktopTest :shared:desktopTest assembleDebug: first run 45 tests, 1 failed:
+  ScreensTest ... "Did not expect any node but found '1' node ... contains 'phone' ... Text = '[5. phone]'"
+  (the new wallet's seed phrase had the word "phone" in it; nothing to do with the codec). The test now leaves the
+  numbered words out; again: 45 tests, 0 skipped, 0 failed

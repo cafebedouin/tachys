@@ -1522,3 +1522,47 @@ for each result the core gives.
 crates; the shared module's tests, 45, none skipped; the common-code check; the debug app built.
 **Not run:** this build on a phone, nor the app in a window after its split: one test draws a screen, so that the
 screens still work is the compiler's word and that test's. The workflows have not run since they were changed.
+
+## 72. The peer protocol's codec is the wallet's own
+
+The wallet spoke the peer protocol through a vendored copy of a full node's peer stack: about 39,000 lines in three
+crates, of which it used a connection's read and send, the handshake, six kinds of message and the reader and
+writer of whole numbers. That is now `crates/tachys-net/src/wire.rs`, 873 lines, and the vendored crates are built
+for the tests only.
+
+- **What it is.** VLQ and ZigZag numbers as the reference node writes them (a signed number widened as the JVM
+  widens it; a length of at most 31 bits); a message's frame with its four-byte Blake2b checksum; the handshake
+  with its features (mode, session, REST address, local address, and any other kept as it came); inventory,
+  modifiers, sync info in both forms, and the NiPoPoW request and answer. A connection is a socket and a buffer:
+  it keeps no clock, because every read in the client is already made under a time limit, and it holds at most one
+  frame of at most the vendored codec's limit. No room is made on a count a peer gives beyond what the bytes in
+  hand could hold.
+- **What it is not.** It does not use `sigma-ser` for the numbers, as was first thought: that reader wants a seekable
+  stream and bounds a length at 32 bits where the reference node's is 31, and the whole of it here is seventy lines
+  over a slice. It has no tracing, no database of peers, no pool of readers. sigma-rust's own `ergo-p2p` crate was
+  looked at and is a stub (its encoder and its handshake are `todo!()`).
+- **What it is held to.** The vendored codec, by tests (`tests/wire.rs`): the same bytes out for the same thing, the
+  same thing read from the same bytes, and the same bytes refused, on values and bytes made at random and on valid
+  messages damaged a byte at a time; and messages across a socket between the two connections, both ways. Five
+  faults were planted in the new codec to see that the tests notice: four were caught at once, and one (fifty
+  headers of sync info refused) was not, because the test never wrote a message of fifty; it does now, and catches
+  it. The `peer_message` fuzz target runs the two decoders side by side and fails if they disagree.
+- **One place it differs, on purpose:** a frame whose length is over the limit is refused by the frame reader itself;
+  in the vendored codec the connection refused it and the frame reader alone would have waited for the bytes.
+- **Smaller:** the program is 0.52 MB smaller stripped (11.48 to 10.97 MB), the phone's library 0.13 MB (64-bit) and
+  0.03 MB (32-bit); eight crates left the program, `redb` and `tracing` among them. `tachys-net` alone went from
+  forty crates to fourteen.
+
+A screen test failed once on the way, for a reason of its own: it holds that no sentence on a computer says "phone",
+and the new wallet's seed phrase had that word in it (about one wallet in 170). It leaves the numbered words out now.
+
+**Tests:** `tests/wire.rs`, eight (named for what each holds); the `peer_message` fuzz target.
+**Run** (`runs/2026-11-25-own-codec.txt`): the eight; the five planted faults; the fuzz target for five minutes,
+4.9 million inputs, no failure; on mainnet, `tips` with the build before and the build after: the same tip, eight
+peers in eight groups, 1703 headers linked back to the checkpoint by each; `sync` with each: proofs fetched from
+fourteen and fifteen peers and refused for the reason finding 2 gives; `cargo tests`, 1017 passed; clippy and the
+format check; both phone libraries; the app's 45 tests and its debug build.
+**Not run:** on a phone; on testnet; the rig, so the messages only it uses (a box proof over the peer protocol, a
+carried payment, a wallet serving another) ran in the loopback tests and not between real nodes. The vendored
+codec is the measure here, not the reference node: where the two differ, this one differs with it. The fuzzing was
+minutes, not days.

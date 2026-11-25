@@ -105,8 +105,12 @@ instead, which as far as we know is new for Ergo:
   mainnet's limits: a recipe must keep one miner at a steady rate (a network file's `epoch_length` says 16 for it).
 - Accepting a payment by its signed transaction as well as by a box id (most counterparties hand over a transaction
   id; a transaction id alone does not name the coins without a node's word).
-- A codec of our own in place of the vendored one, and the binary measured. (Four of its tests go by the clock and
-  fail on a loaded machine; `cargo tests` and CI leave them out, and CI runs them alone afterwards.)
+- The peer protocol's codec is the wallet's own (finding 72), held by tests to the vendored one, which is no longer
+  in the program. Still to do: its messages that only the rig uses (box proofs, a carried payment) are written by
+  hand in `lib.rs` with the codec's reader and have no second implementation to be held to; the handshake's
+  decoder is as lenient as the vendored one's, which was not compared with the reference node's; and the vendored
+  crates could leave the repository once the tests that use them to stand in for a node have a stand-in of their
+  own. (Four of the vendored tests go by the clock; `cargo tests` and CI leave them out.)
 - The in-process binding with a key. The app now runs the core in its own process (`crates/tachys-c`, finding 64);
   on the Note 2 that has synced, drawn a QR code beside a sync and renamed a wallet, all with a read-only wallet.
   A seed has been sealed and opened this way with a wallet's own password, and a payment made each way on mainnet

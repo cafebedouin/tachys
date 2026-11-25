@@ -2050,6 +2050,7 @@ dependencies = [
 name = "tachys-net"
 version = "0.0.2"
 dependencies = [
+ "blake2",
  "ergo-chain-types",
  "ergo-nipopow",
  "ergo-p2p",

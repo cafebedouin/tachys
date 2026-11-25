@@ -1934,6 +1934,7 @@ dependencies = [
  "libfuzzer-sys",
  "sigma-ser",
  "tachys",
+ "tachys-net",
  "tachys-verify",
 ]
 
@@ -1941,8 +1942,7 @@ dependencies = [
 name = "tachys-net"
 version = "0.0.2"
 dependencies = [
- "ergo-p2p",
- "ergo-primitives",
+ "blake2",
  "tokio",
 ]
 

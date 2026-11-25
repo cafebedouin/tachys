@@ -40,6 +40,8 @@ class ScreensTest {
     }
     private val numbered = Regex("\\d+\\. \\p{L}+")
     private fun words() = screen.onAllNodes(SemanticsMatcher("a numbered word") { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { t -> numbered.matches(t.text) } == true })
+    /** A sentence that names a phone. Not a word of the seed phrase: "phone" is one of the 2048, and a wallet made here has it about once in 170. */
+    private fun saysPhone() = screen.onAllNodes(SemanticsMatcher("says phone, and is not a numbered word") { n -> n.config.getOrNull(SemanticsProperties.Text)?.any { t -> "phone" in t.text && !numbered.matches(t.text) } == true })
     private fun picture(name: String) { File("build/screens").mkdirs(); javax.imageio.ImageIO.write(screen.onRoot().captureToImage().toAwtImage(), "png", File("build/screens/$name.png")) }
 
     @Test fun onAComputerAWalletIsMadeWithAPasswordOfItsOwnAndOpenedOnlyByIt() {
@@ -48,9 +50,9 @@ class ScreensTest {
             screen.setContent { App(core, "", noLock, false) { } }
             // the sentences name the machine they are on
             screen.onNodeWithText("Makes a new key on this computer and shows you its seed phrase to write down.").assertExists()
-            screen.onAllNodes(hasText("phone", substring = true)).assertCountEquals(0)
+            saysPhone().assertCountEquals(0)
             screen.onNodeWithText("New wallet").performClick()
-            screen.onAllNodes(hasText("phone", substring = true)).assertCountEquals(0)
+            saysPhone().assertCountEquals(0)
             // no screen lock to choose here: the password fields are simply there
             screen.onAllNodes(hasText("Guarded by")).assertCountEquals(0)
             screen.onAllNodes(hasText("Screen lock")).assertCountEquals(0)
@@ -70,7 +72,7 @@ class ScreensTest {
             screen.onNodeWithText("Create").performScrollTo().performClick()
             screen.onNodeWithText("Write these words down").assertExists()
             words().assertCountEquals(12)
-            screen.onAllNodes(hasText("phone", substring = true)).assertCountEquals(0)
+            saysPhone().assertCountEquals(0)
             screen.onNodeWithText("I have written them down").performScrollTo().performClick()
             screen.onNodeWithText("on a computer").assertExists()
             picture("wallet-made")
