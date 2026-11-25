@@ -100,4 +100,4 @@ the payment back, made by the maintainer on the phone (the screen lock is theirs
   "5313a970… gone", "c64ca943… gone", "fd8dbb84… 1000000 nanoERG, proven unspent at 1924203 (added)"
   the transaction, as a public node gives it (697f4fb8…, height 1924203): in 5313a970… (0.001 ERG, 10 SigRSV) and
   c64ca943… (0.01 ERG); out 0.0089 ERG with the 10 SigRSV to the funded wallet, 0.001 ERG back to agent2, fee 0.0011
-  (the token went with the payment; what was typed on the phone for it was not seen from here)
+  (the token went with the payment: the maintainer added it on the Send screen, by their word; it was not seen from here)
