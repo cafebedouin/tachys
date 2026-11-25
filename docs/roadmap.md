@@ -94,8 +94,39 @@ instead, which as far as we know is new for Ergo:
   peer protocol; regular syncs that fetch the headers since the stored one in batches, as a first run's linking now
   does (finding 55), instead of only the newest few.
 
+Ideas for this, none started (2026-11-24):
+
+- **Peer lists over the peer protocol** (messages 1 and 2). `--node auto` asks a few well-known nodes' REST ports
+  which peers they know; a peer answers the same question over the protocol the wallet already speaks, and its
+  answer carries each peer's REST address where it publishes one. It would refresh the seed list and find REST
+  candidates without those few nodes. A peer's list is anyone's word: it adds to the seeds and never takes their
+  place, since whoever writes the seed list chooses every peer.
+- **A payment handed over with its proofs.** The payer gives the payee the signed payment, the box proofs for
+  what it spends and the header those are against; the payee checks them against the chain it has verified, before
+  any node has seen the payment. It shows the coins were there at that header, not that they are unspent now
+  (`design.md`: an offline double spend needs funds committed in advance).
+- **Other carriers than a socket.** The same message bodies over a QR code (about 3 KB each, so several for a
+  payment with proofs), NFC, Bluetooth or local Wi-Fi. Two phones face to face then need no address and no route
+  through a NAT. It asks that the codec stay free of socket code, which `wire.rs` is except for `Connection`.
+- **A declared address, for a wallet that serves and is always on.** It is how others would find it. It ties an
+  address on the network to a wallet, and a node told of it will pass it on and call it as it would a node: to be
+  declared to wallets only.
+- **Wallets knowing each other.** A peer feature of its own that says what a wallet serves (headers it has verified,
+  a relayed proof, a carried payment). The reference node leaves out a feature it does not know and keeps the rest of
+  the handshake (checked on the v6.0.8 jar), and ergo-node-rust marks itself a proxy this way. A feature id is shared
+  by every implementation, so it is proposed to the maintainers first, not picked.
+- **Stealth payments.** The proposal (EIP-41, an open pull request on ergoplatform/eips since 2023, not adopted) has
+  the payee scan the chain for its boxes, which a wallet without a node cannot do cheaply. Handed the box and the
+  one-time key directly, it would not need to. This hides who was paid on the chain; it does nothing for the
+  network address above.
+
 ## Smaller things
 
+- The codec against the reference node (v6.0.8 jar, 2026-11-24). Two differences, both inherited from the vendored
+  codec it was held to. The largest frame taken is 8,194,304 bytes where the node's `MaxMessageSize` is 16,388,608:
+  that is the largest `Modifiers` message a node writes, so nothing the wallet asks for is cut off, but it is a
+  choice and not the node's limit. And a mode feature cut short is read with defaults (as a node that keeps every
+  block) where the node drops the feature and keeps the rest of the handshake.
 - A peer that pushes a header heavier than its parent allows is no longer refused as a whole: that header is not
   taken as its tip and the chain under it is judged instead. A warning when a peer pushes such a header would keep the
   signal.
